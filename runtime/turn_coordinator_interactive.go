@@ -40,6 +40,7 @@ type interactiveTurnCoordinator struct {
 	tools                 agent.ToolRegistry
 	currentFaceModel      face.Renderer
 	baseGovernorAwareness prompt.RuntimeAwareness
+	promptOperationState  session.OperationState
 	audit                 *turnAuditRecorder
 }
 
@@ -169,6 +170,8 @@ func (c *interactiveTurnCoordinator) Execute(ctx context.Context, req turn.Gover
 		PromptContext:         c.promptContext,
 		Tools:                 c.tools,
 		BaseGovernorAwareness: c.baseGovernorAwareness,
+		PromptOperationState:  c.promptOperationState,
+		PromptOperationSet:    true,
 		Audit:                 c.audit,
 		RunKind:               runKind,
 		FaceNote:              req.FaceNote,

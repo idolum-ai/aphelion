@@ -40,6 +40,7 @@ type durableGroupTurnCoordinator struct {
 	tools                     agent.ToolRegistry
 	currentFaceModel          face.Renderer
 	baseGovernorAwareness     prompt.RuntimeAwareness
+	promptOperationState      session.OperationState
 	audit                     *turnAuditRecorder
 	allowStream               bool
 	progress                  *toolProgressReporter
@@ -171,6 +172,8 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 		PromptContext:         c.promptContext,
 		Tools:                 c.tools,
 		BaseGovernorAwareness: c.baseGovernorAwareness,
+		PromptOperationState:  c.promptOperationState,
+		PromptOperationSet:    true,
 		Audit:                 c.audit,
 		RunKind:               runKind,
 		FaceNote:              req.FaceNote,

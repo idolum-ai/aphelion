@@ -46,6 +46,7 @@ type interactiveLikeAssembly struct {
 	PromptContext         *workspace.PromptContext
 	HiddenInputs          hiddenInputSet
 	BaseGovernorAwareness prompt.RuntimeAwareness
+	PromptOperationState  session.OperationState
 	Audit                 *turnAuditRecorder
 	Machine               *turn.Machine
 }
@@ -100,6 +101,9 @@ func (r *Runtime) assembleInteractiveLikeTurn(ctx context.Context, input interac
 	hiddenInputs = r.withInteriorSignalState(input.Key, hiddenInputs, now, false)
 	planEvents, _ := r.store.PlanEvents(input.Key, 20)
 	workingObjective, _ := r.store.WorkingObjective(input.Key)
+	operationContext := r.operationPromptContextForTurn(input.Key, input.Msg, sess.OperationState, sess.ContinuationState, now, "prompt_context")
+	contextSession := *sess
+	contextSession.OperationState = operationContext.State
 	baseGovernorAwareness := turn.ApplyContinuationAwareness(
 		turn.ApplyOperationAwareness(
 			turn.ApplyPlanAwarenessWithEvents(
@@ -113,11 +117,14 @@ func (r *Runtime) assembleInteractiveLikeTurn(ctx context.Context, input interac
 				sess.PlanState,
 				planEvents,
 			),
-			sess.OperationState,
+			operationContext.State,
 		),
 		sess.ContinuationState,
 	)
-	baseGovernorAwareness = r.applyEvidenceHydrationAwareness(ctx, baseGovernorAwareness, input.Key, runKind, prepared.LedgerText, sess, now)
+	baseGovernorAwareness = r.applyEvidenceHydrationAwareness(ctx, baseGovernorAwareness, input.Key, runKind, prepared.LedgerText, &contextSession, now)
+	if operationContext.SuppressedLine != "" {
+		baseGovernorAwareness.EvidenceContext = append(baseGovernorAwareness.EvidenceContext, operationContext.SuppressedLine)
+	}
 	baseGovernorAwareness = r.applyReplyModalityAwareness(baseGovernorAwareness, prepared)
 	if useMaterialFloor {
 		baseGovernorAwareness.ArtifactMode = "floor"
@@ -152,6 +159,7 @@ func (r *Runtime) assembleInteractiveLikeTurn(ctx context.Context, input interac
 	out.PromptContext = promptContext
 	out.HiddenInputs = hiddenInputs
 	out.BaseGovernorAwareness = baseGovernorAwareness
+	out.PromptOperationState = operationContext.State
 	out.Audit = newTurnAuditRecorder(input.Key, auditChannel, principalRole, prepared.LedgerText)
 	out.Machine = machine
 	return out, nil

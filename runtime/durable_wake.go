@@ -1367,6 +1367,7 @@ func (r *Runtime) runDurableWakeConversation(
 	promptContext := assembled.PromptContext
 	hiddenInputs := assembled.HiddenInputs
 	baseGovernorAwareness := assembled.BaseGovernorAwareness
+	promptOperationState := assembled.PromptOperationState
 	audit := assembled.Audit
 	machine := assembled.Machine
 	defer r.emitTurnAudit(audit)
@@ -1396,6 +1397,7 @@ func (r *Runtime) runDurableWakeConversation(
 		tools:                     tools,
 		currentFaceModel:          r.currentFaceRenderer(),
 		baseGovernorAwareness:     baseGovernorAwareness,
+		promptOperationState:      promptOperationState,
 		audit:                     audit,
 		allowStream:               false,
 		progress:                  progress,
