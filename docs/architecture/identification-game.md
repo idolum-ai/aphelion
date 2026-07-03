@@ -348,6 +348,15 @@ This gives operators a burst mode for long plans without reintroducing broad
 pre-granting. A user can walk the authority frontier before going offline, but
 the tail remains narrow, step-addressed, and perishable.
 
+Lookahead is metered as an outstanding-frontier budget, not a time cooldown.
+The default budget is five unresolved lookahead-owned approval frontiers per
+admin chat across active plans. When the budget is full, `Next grant` must not
+simulate, publish, approve, execute, or write ledger labels; it should only tell
+the operator to resolve, reject, or let one existing frontier expire. This bound
+is a tail-size invariant: it limits the amount of speculative authority work
+that can trail the operator, while still allowing fast burst identification when
+slots are available.
+
 The first executable implementation makes this a real control-plane loop over
 the current recovery frontier and the next declared operation-phase capability
 need. The button authenticates the private admin callback, resolves an exact
@@ -360,9 +369,12 @@ next action, and then materialize the normal approval card for that exact stored
 contract. It records lookahead observations only after materialization succeeds.
 It does not approve authority and it does not execute the protected operation.
 
-This first implementation is frontier-bound, not yet globally budget-metered.
-It offers one next frontier per button press, but it does not yet enforce a
-cross-plan lookahead counter, cooldown, or allowance ledger.
+This first implementation is frontier-bound and globally budgeted by unresolved
+lookahead handoffs in `next_action_records`. Approval materialization may resolve
+the handoff after the card is opened, so this budget is not a delivered-card
+quota. If Aphelion later needs to cap delivered-but-unanswered approval cards,
+that should be a separate projection/lifecycle invariant rather than a hidden
+change to contract semantics.
 
 This is intentionally narrower than a full Ralph-loop simulator. It identifies
 the next already-discovered authority frontier in the ledger/next-action graph,

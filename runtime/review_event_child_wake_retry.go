@@ -43,6 +43,12 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 	} else if response != "" {
 		return response, nil
 	}
+	now := time.Now().UTC()
+	if response, err := r.lookaheadOutstandingFrontierBudgetResponse(event, now); err != nil {
+		return "", err
+	} else if response != "" {
+		return response, nil
+	}
 	frontier := lookaheadAuthorityFrontierForReviewEvent(event)
 	msg := core.InboundMessage{
 		ChatID:    event.TargetAdminChatID,
@@ -50,7 +56,6 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 		MessageID: callbackReviewEventMessageID(cb),
 		Text:      fmt.Sprintf("review_event:%d:%s", event.ID, core.ReviewEventActionLookaheadNext),
 	}
-	now := time.Now().UTC()
 	action, ok, err := r.nextLookaheadRecoveryApprovalAction(frontier, now)
 	if err != nil {
 		return "", err
@@ -87,6 +92,27 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 		return "", err
 	}
 	return "Next authority approval surfaced. No authority was approved or executed.", nil
+}
+
+func (r *Runtime) lookaheadOutstandingFrontierBudgetResponse(event session.ReviewEvent, now time.Time) (string, error) {
+	if r == nil || r.store == nil {
+		return "", nil
+	}
+	count, err := r.store.OutstandingLookaheadApprovalFrontierCount(event.TargetAdminChatID)
+	if err != nil {
+		return "", err
+	}
+	if count < MaxOutstandingLookaheadApprovalFrontiers {
+		return "", nil
+	}
+	key := session.SessionKey{ChatID: event.TargetAdminChatID, UserID: 0, Scope: telegramDMScopeRef(event.TargetAdminChatID)}
+	r.recordExecutionEvent(key, core.ExecutionEventAuthorityFindingReviewed, "authority_discovery", "lookahead_meter_full", map[string]any{
+		"review_event_id":             event.ID,
+		"target_admin_chat_id":        event.TargetAdminChatID,
+		"outstanding_frontier_count":  count,
+		"outstanding_frontier_budget": MaxOutstandingLookaheadApprovalFrontiers,
+	}, now)
+	return fmt.Sprintf("Next grant is paused: %d unresolved lookahead approvals are already open. Resolve, reject, or let one expire first. No authority was approved or executed.", count), nil
 }
 
 func (r *Runtime) nextLookaheadRecoveryApprovalAction(frontier lookaheadAuthorityFrontier, now time.Time) (session.NextActionRecord, bool, error) {

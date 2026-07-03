@@ -21,6 +21,8 @@ type LookaheadSimulationResult struct {
 	Reason             string
 }
 
+const MaxOutstandingLookaheadApprovalFrontiers = 5
+
 func (r *Runtime) simulateNextLookaheadRecoveryApprovalAction(frontier lookaheadAuthorityFrontier, event session.ReviewEvent, senderID int64, now time.Time) (session.NextActionRecord, LookaheadSimulationResult, bool, error) {
 	result := LookaheadSimulationResult{Reason: "no_simulatable_phase"}
 	if r == nil || r.store == nil {

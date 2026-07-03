@@ -354,6 +354,168 @@ func TestLookaheadSimulationSkipsCoveredPhaseGrant(t *testing.T) {
 	}
 }
 
+func TestReviewEventLookaheadMeterBlocksAtOutstandingCap(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	rt := &Runtime{store: store}
+	adminChatID := int64(1001)
+	now := time.Date(2026, 7, 3, 14, 0, 0, 0, time.UTC)
+	for i := 0; i < MaxOutstandingLookaheadApprovalFrontiers; i++ {
+		seedOutstandingLookaheadApprovalFrontier(t, store, session.SessionKey{
+			ChatID: adminChatID,
+			Scope:  session.TelegramThreadScopeRef(adminChatID, int64(i+1)),
+		}, "full-meter", i, now.Add(time.Duration(i)*time.Second))
+	}
+	before, err := store.OutstandingLookaheadApprovalFrontierCount(adminChatID)
+	if err != nil {
+		t.Fatalf("OutstandingLookaheadApprovalFrontierCount(before) err = %v", err)
+	}
+	if before != MaxOutstandingLookaheadApprovalFrontiers {
+		t.Fatalf("outstanding before = %d, want cap", before)
+	}
+	event := session.ReviewEvent{
+		ID:                301,
+		SourceSessionID:   "telegram_dm:1001",
+		TargetSessionID:   "telegram_dm:1001",
+		TargetAdminChatID: adminChatID,
+		Status:            "delivered",
+		DeliveryMessageID: 301,
+	}
+	text, err := rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-lookahead-meter-full",
+		From:    &telegram.User{ID: adminChatID},
+		Message: &telegram.Message{MessageID: 301, Chat: &telegram.Chat{ID: adminChatID}},
+		Data:    core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionLookaheadNext),
+	}, event, core.ReviewEventActionLookaheadNext)
+	if err != nil {
+		t.Fatalf("HandleReviewEventAction(meter full) err = %v", err)
+	}
+	if !strings.Contains(text, "Next grant is paused") || !strings.Contains(text, "No authority was approved or executed") {
+		t.Fatalf("lookahead text = %q, want paused non-executing meter response", text)
+	}
+	after, err := store.OutstandingLookaheadApprovalFrontierCount(adminChatID)
+	if err != nil {
+		t.Fatalf("OutstandingLookaheadApprovalFrontierCount(after) err = %v", err)
+	}
+	if after != before {
+		t.Fatalf("outstanding after = %d, want unchanged %d", after, before)
+	}
+	projections, err := store.IdentificationLedgerEntries(session.IdentificationLedgerQuery{
+		PlanID:      session.IdentificationPlanIDForSession("telegram_dm:1001"),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   "telegram_dm:1001",
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 0 {
+		t.Fatalf("ledger projections = %#v, want no lookahead ledger write while meter is full", projections)
+	}
+	events, err := store.ExecutionEventsBySession(session.SessionKey{ChatID: adminChatID, Scope: telegramDMScopeRef(adminChatID)}, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	foundMeterFull := false
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventAuthorityFindingReviewed && event.Status == "lookahead_meter_full" {
+			foundMeterFull = true
+		}
+	}
+	if !foundMeterFull {
+		t.Fatalf("events = %#v, want lookahead_meter_full event", events)
+	}
+}
+
+func TestReviewEventLookaheadMeterSlotFreeingAndAdminScope(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	rt := &Runtime{store: store}
+	adminA := int64(1001)
+	adminB := int64(1002)
+	now := time.Date(2026, 7, 3, 14, 30, 0, 0, time.UTC)
+	var seeded []seededLookaheadFrontier
+	for i := 0; i < MaxOutstandingLookaheadApprovalFrontiers; i++ {
+		seeded = append(seeded, seedOutstandingLookaheadApprovalFrontier(t, store, session.SessionKey{
+			ChatID: adminA,
+			Scope:  session.TelegramThreadScopeRef(adminA, int64(i+1)),
+		}, "scope-meter", i, now.Add(time.Duration(i)*time.Second)))
+	}
+	seedLookaheadOperationPhase(t, store, session.SessionKey{ChatID: adminB, Scope: telegramDMScopeRef(adminB)}, "op-admin-b", "phase-admin-b")
+	text, err := rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-lookahead-admin-b",
+		From:    &telegram.User{ID: adminB},
+		Message: &telegram.Message{MessageID: 401, Chat: &telegram.Chat{ID: adminB}},
+		Data:    core.EncodeReviewEventCallbackData(401, core.ReviewEventActionLookaheadNext),
+	}, session.ReviewEvent{
+		ID:                401,
+		SourceSessionID:   session.SessionIDForKey(session.SessionKey{ChatID: adminB, Scope: telegramDMScopeRef(adminB)}),
+		TargetSessionID:   session.SessionIDForKey(session.SessionKey{ChatID: adminB, Scope: telegramDMScopeRef(adminB)}),
+		TargetAdminChatID: adminB,
+		Status:            "delivered",
+		DeliveryMessageID: 401,
+	}, core.ReviewEventActionLookaheadNext)
+	if err != nil {
+		t.Fatalf("HandleReviewEventAction(admin B) err = %v", err)
+	}
+	if strings.Contains(text, "Next grant is paused") {
+		t.Fatalf("admin B lookahead text = %q, want admin A cap not to apply", text)
+	}
+	countB, err := store.OutstandingLookaheadApprovalFrontierCount(adminB)
+	if err != nil {
+		t.Fatalf("OutstandingLookaheadApprovalFrontierCount(admin B) err = %v", err)
+	}
+	if countB != 1 {
+		t.Fatalf("admin B outstanding = %d, want one newly simulated frontier", countB)
+	}
+	if err := store.ResolveNextAction(session.NextActionResolutionInput{
+		Key:        seeded[0].Key,
+		RecordID:   seeded[0].Record.RecordID,
+		Owner:      "test",
+		Reason:     "test_resolved",
+		ResolvedAt: now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("ResolveNextAction(seed) err = %v", err)
+	}
+	seedLookaheadOperationPhase(t, store, session.SessionKey{ChatID: adminA, Scope: telegramDMScopeRef(adminA)}, "op-admin-a", "phase-admin-a")
+	text, err = rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-lookahead-admin-a-after-free",
+		From:    &telegram.User{ID: adminA},
+		Message: &telegram.Message{MessageID: 402, Chat: &telegram.Chat{ID: adminA}},
+		Data:    core.EncodeReviewEventCallbackData(402, core.ReviewEventActionLookaheadNext),
+	}, session.ReviewEvent{
+		ID:                402,
+		SourceSessionID:   session.SessionIDForKey(session.SessionKey{ChatID: adminA, Scope: telegramDMScopeRef(adminA)}),
+		TargetSessionID:   session.SessionIDForKey(session.SessionKey{ChatID: adminA, Scope: telegramDMScopeRef(adminA)}),
+		TargetAdminChatID: adminA,
+		Status:            "delivered",
+		DeliveryMessageID: 402,
+	}, core.ReviewEventActionLookaheadNext)
+	if err != nil {
+		t.Fatalf("HandleReviewEventAction(admin A after free) err = %v", err)
+	}
+	if strings.Contains(text, "Next grant is paused") {
+		t.Fatalf("admin A lookahead text = %q, want freed slot to allow one new frontier", text)
+	}
+	countA, err := store.OutstandingLookaheadApprovalFrontierCount(adminA)
+	if err != nil {
+		t.Fatalf("OutstandingLookaheadApprovalFrontierCount(admin A) err = %v", err)
+	}
+	if countA != MaxOutstandingLookaheadApprovalFrontiers {
+		t.Fatalf("admin A outstanding = %d, want cap refilled after one slot freed", countA)
+	}
+}
+
 func TestReviewEventLookaheadSimulationMaterializationFailureDoesNotLeaveProposedToken(t *testing.T) {
 	t.Parallel()
 
@@ -1309,5 +1471,69 @@ func TestReviewEventLookaheadRejectsMismatchedAdminWithoutLedgerMutation(t *test
 	}
 	if len(projections) != 0 {
 		t.Fatalf("ledger entries = %#v, want no mutation for unauthorized callback", projections)
+	}
+}
+
+type seededLookaheadFrontier struct {
+	Key    session.SessionKey
+	Record session.NextActionRecord
+}
+
+func seedOutstandingLookaheadApprovalFrontier(t *testing.T, store *session.SQLiteStore, key session.SessionKey, prefix string, index int, at time.Time) seededLookaheadFrontier {
+	t.Helper()
+	operationKind := "authority_bundle_request"
+	if index%2 == 1 {
+		operationKind = "continuation_lease_request"
+	}
+	record, err := store.RecordNextAction(session.NextActionInput{
+		RecordID:           prefix + "-lookahead-next-" + strings.ReplaceAll(time.Unix(int64(index), 0).UTC().Format("150405"), ":", "") + "-" + operationKind,
+		Key:                key,
+		Owner:              "lookahead",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        operationKind,
+		SubjectRef:         prefix + "-subject-" + operationKind + "-" + strings.ReplaceAll(time.Unix(int64(index), 0).UTC().Format(time.RFC3339), ":", "-"),
+		NextAction:         "review the metered lookahead frontier",
+		RequiredAuthority:  "authority_bundle",
+		ResourceBlocker:    "authority_bundle_approval",
+		RetryPolicy:        "manual_review",
+		OperationKind:      operationKind,
+		OperationTool:      "request_approval",
+		OperationInputJSON: `{"action":"request_authority_bundle","contract_id":"authbundle-meter-seed"}`,
+		OperatorProjection: "Metered lookahead frontier",
+		CreatedAt:          at,
+	})
+	if err != nil {
+		t.Fatalf("RecordNextAction(seed %d) err = %v", index, err)
+	}
+	return seededLookaheadFrontier{Key: key, Record: record}
+}
+
+func seedLookaheadOperationPhase(t *testing.T, store *session.SQLiteStore, key session.SessionKey, opID string, phaseID string) {
+	t.Helper()
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        opID,
+		Objective: "Continue the next bounded operation phase.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             opID + "-plan",
+			Goal:           "Exercise metered lookahead.",
+			CurrentPhaseID: phaseID,
+			Phases: []session.OperationPhase{{
+				ID:      phaseID,
+				Summary: "Open one bounded follow-up issue.",
+				Status:  session.PlanStatusPending,
+				RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+					Kind:           session.CapabilityKindExternalAccount,
+					TargetResource: "github:idolum-ai/aphelion",
+					GrantedTo:      "telegram:" + strings.TrimPrefix(session.SessionIDForKey(key), "telegram_dm:"),
+					AllowedActions: []string{"github_issue_create"},
+					Contract:       `{"bounded_effect":"Open one issue only."}`,
+					Constraints:    `{"repository":"idolum-ai/aphelion"}`,
+				}},
+			}},
+		},
+		UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(%s) err = %v", opID, err)
 	}
 }
