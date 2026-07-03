@@ -35,8 +35,12 @@ type AuthorityDiscoveryLoadoutSlot struct {
 }
 
 type AuthorityDiscoveryResolutionCandidate struct {
-	Kind string
-	Ref  string
+	CandidateID string
+	Kind        string
+	Ref         string
+	Action      string
+	State       AuthorityDiscoveryTokenState
+	Reason      string
 }
 
 type AuthorityDiscoveryMenuToken struct {
@@ -127,10 +131,13 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 			token.Properties[observation.Property] = append(token.Properties[observation.Property], observation.Value)
 		}
 		if entry.LabelRef != "" {
-			token.ResolutionCandidates = append(token.ResolutionCandidates, AuthorityDiscoveryResolutionCandidate{
-				Kind: authorityDiscoveryCandidateKind(entry.LabelRef),
-				Ref:  entry.LabelRef,
-			})
+			token.ResolutionCandidates = append(token.ResolutionCandidates, authorityDiscoveryResolutionCandidate(
+				authorityDiscoveryCandidateKind(entry.LabelRef),
+				entry.LabelRef,
+				"materialize_or_use_exact_authority",
+				token.State,
+				"ledger label resolves to an exact stored authority contract or grant",
+			))
 		}
 		menu.Tokens = append(menu.Tokens, token)
 	}
@@ -165,10 +172,13 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 			ExpiresAt: slot.ExpiresAt,
 		}
 		if token.LabelRef != "" {
-			token.ResolutionCandidates = append(token.ResolutionCandidates, AuthorityDiscoveryResolutionCandidate{
-				Kind: authorityDiscoveryCandidateKind(token.LabelRef),
-				Ref:  token.LabelRef,
-			})
+			token.ResolutionCandidates = append(token.ResolutionCandidates, authorityDiscoveryResolutionCandidate(
+				authorityDiscoveryCandidateKind(token.LabelRef),
+				token.LabelRef,
+				"use_loadout_authority",
+				token.State,
+				"bounded preselected loadout authority",
+			))
 		}
 		menu.Tokens = append(menu.Tokens, token)
 		loadoutSlots++
@@ -485,5 +495,25 @@ func authorityDiscoveryCandidateKind(ref string) string {
 		return "capability_grant"
 	default:
 		return "authority_ref"
+	}
+}
+
+func authorityDiscoveryResolutionCandidate(kind, ref, action string, state AuthorityDiscoveryTokenState, reason string) AuthorityDiscoveryResolutionCandidate {
+	kind = strings.TrimSpace(kind)
+	ref = strings.TrimSpace(ref)
+	action = strings.TrimSpace(action)
+	reason = strings.TrimSpace(reason)
+	seed := strings.Join([]string{kind, ref, action, string(state), reason}, "\x00")
+	id := ""
+	if strings.TrimSpace(seed) != "" {
+		id = "resolution:" + session.EffectAttemptCommandHash(seed)[7:23]
+	}
+	return AuthorityDiscoveryResolutionCandidate{
+		CandidateID: id,
+		Kind:        kind,
+		Ref:         ref,
+		Action:      action,
+		State:       state,
+		Reason:      reason,
 	}
 }

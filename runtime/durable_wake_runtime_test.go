@@ -388,6 +388,26 @@ func TestDurableWakeChildOutcomePrefersStructuredResult(t *testing.T) {
 	}
 }
 
+func TestDurableWakeChildOutcomePrefersTypedTurnResultOverProjection(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{}
+	agent := core.DurableAgent{AgentID: "child-typed-outcome", ChannelKind: "external_channel"}
+	summary := strings.Join([]string{
+		"Projection text says the child finished.",
+		"REVIEW_STATUS: completed",
+	}, "\n")
+	result := &turn.Result{Turn: &core.TurnResult{ChildTaskResult: &core.ChildTaskResultContract{
+		Status:      "blocked",
+		BlockerKind: "external_transient",
+	}}}
+
+	outcome := rt.compileDurableWakeChildOutcome(agent, summary, result)
+	if outcome.Status != session.ChildTaskResultBlocked || outcome.BlockerKind != "external_transient" || !outcome.Typed {
+		t.Fatalf("compileDurableWakeChildOutcome() = %#v, want typed blocked/external_transient", outcome)
+	}
+}
+
 func TestDurableWakeChildOutcomeQualificationDoesNotReparseSummaryStatus(t *testing.T) {
 	t.Parallel()
 

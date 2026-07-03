@@ -90,6 +90,11 @@ func TestCompileAuthorityDiscoveryMenuScoresFrontierAndLoadout(t *testing.T) {
 	if len(frontier.ResolutionCandidates) != 1 || frontier.ResolutionCandidates[0].Kind != "continuation_recovery_contract" {
 		t.Fatalf("frontier candidates = %#v, want continuation recovery contract", frontier.ResolutionCandidates)
 	}
+	if frontier.ResolutionCandidates[0].CandidateID == "" ||
+		frontier.ResolutionCandidates[0].Action != "materialize_or_use_exact_authority" ||
+		frontier.ResolutionCandidates[0].State != AuthorityDiscoveryTokenOneApprovalAway {
+		t.Fatalf("frontier candidate = %#v, want stable exact-authority candidate metadata", frontier.ResolutionCandidates[0])
+	}
 	metrics := ScoreAuthorityDiscoveryMenu(menu)
 	if metrics.Interruptions != 2 {
 		t.Fatalf("interruptions = %d, want frontier plus unverified loadout", metrics.Interruptions)
@@ -298,7 +303,7 @@ func TestLookaheadSimulationSkipsCoveredPhaseGrant(t *testing.T) {
 
 	_, store, _, _ := buildRuntimeFixtures(t)
 	rt := &Runtime{store: store}
-	now := time.Date(2026, 7, 3, 12, 30, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
 		GrantID:        "grant-covered-search",
 		GrantedBy:      "telegram:1001",

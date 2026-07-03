@@ -56,26 +56,17 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 		MessageID: callbackReviewEventMessageID(cb),
 		Text:      fmt.Sprintf("review_event:%d:%s", event.ID, core.ReviewEventActionLookaheadNext),
 	}
-	action, ok, err := r.nextLookaheadRecoveryApprovalAction(frontier, now)
+	action, simulated, ok, err := r.selectNextLookaheadAuthorityFrontier(frontier, event, callbackReviewEventSenderID(cb), now)
 	if err != nil {
 		return "", err
 	}
 	if !ok {
-		var simulated LookaheadSimulationResult
-		if strings.TrimSpace(frontier.RecordID) == "" {
-			action, simulated, ok, err = r.simulateNextLookaheadRecoveryApprovalAction(frontier, event, callbackReviewEventSenderID(cb), now)
-			if err != nil {
-				return "", err
-			}
+		if simulated.Reason != "" {
+			r.recordLookaheadNoFrontierWithReason(event, frontier, simulated.Reason, now)
+		} else {
+			r.recordLookaheadNoFrontier(event, frontier, now)
 		}
-		if !ok {
-			if simulated.Reason != "" {
-				r.recordLookaheadNoFrontierWithReason(event, frontier, simulated.Reason, now)
-			} else {
-				r.recordLookaheadNoFrontier(event, frontier, now)
-			}
-			return "No unresolved authority frontier is available. No authority was approved or executed.", nil
-		}
+		return "No unresolved authority frontier is available. No authority was approved or executed.", nil
 	}
 	key := sessionKeyForNextActionRecord(action)
 	materialized, handled, err := r.materializeRecoveryApprovalNextActionLocked(ctx, key, msg, action, now)

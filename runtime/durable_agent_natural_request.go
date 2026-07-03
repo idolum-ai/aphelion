@@ -17,6 +17,22 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
+type durableAgentNaturalMenuTokenKind string
+
+const (
+	durableAgentNaturalTokenBehaviorUpdate durableAgentNaturalMenuTokenKind = "durable_child_behavior_update"
+	durableAgentNaturalTokenReportRequest  durableAgentNaturalMenuTokenKind = "durable_child_report_request"
+)
+
+type durableAgentNaturalMenuToken struct {
+	TokenID       string
+	AgentID       string
+	Kind          durableAgentNaturalMenuTokenKind
+	Notes         string
+	Score         int
+	AuthorityMenu AuthorityDiscoveryMenu
+}
+
 func (r *Runtime) maybeHandleNaturalDurableAgentRequest(ctx context.Context, key session.SessionKey, actor principal.Principal, msg core.InboundMessage, tools agent.ToolRegistry) (bool, *core.TurnResult, error) {
 	if r == nil || r.store == nil || tools == nil {
 		return false, nil, nil
@@ -32,20 +48,80 @@ func (r *Runtime) maybeHandleNaturalDurableAgentRequest(ctx context.Context, key
 	if text == "" {
 		return false, nil, nil
 	}
+	if naturalDurableAgentTypedRecoverySurface(text) {
+		return false, nil, nil
+	}
 	agentRow, ok, err := r.resolveNaturalDurableAgentMention(text)
 	if err != nil || !ok {
 		return false, nil, err
 	}
-	switch {
-	case durableAgentNaturalBehaviorDirective(text):
-		result, err := r.applyNaturalDurableAgentBehaviorDirective(ctx, tools, *agentRow, text)
+	token, ok := r.selectNaturalDurableAgentMenuToken(key, *agentRow, text)
+	if !ok {
+		return false, nil, nil
+	}
+	switch token.Kind {
+	case durableAgentNaturalTokenBehaviorUpdate:
+		result, err := r.applyNaturalDurableAgentBehaviorDirective(ctx, tools, *agentRow, token.Notes)
 		return true, result, err
-	case durableAgentNaturalRecommendationRequest(text):
-		result, err := r.runNaturalDurableAgentRecommendationRequest(ctx, key, msg, tools, *agentRow, text)
+	case durableAgentNaturalTokenReportRequest:
+		result, err := r.runNaturalDurableAgentRecommendationRequest(ctx, key, msg, tools, *agentRow, token.Notes)
 		return true, result, err
 	default:
 		return false, nil, nil
 	}
+}
+
+func (r *Runtime) selectNaturalDurableAgentMenuToken(key session.SessionKey, agentRow core.DurableAgent, text string) (durableAgentNaturalMenuToken, bool) {
+	tokens := r.compileNaturalDurableAgentMenu(key, agentRow, text)
+	if len(tokens) == 0 {
+		return durableAgentNaturalMenuToken{}, false
+	}
+	sort.SliceStable(tokens, func(i, j int) bool {
+		if tokens[i].Score == tokens[j].Score {
+			return tokens[i].TokenID < tokens[j].TokenID
+		}
+		return tokens[i].Score > tokens[j].Score
+	})
+	if len(tokens) > 1 && tokens[0].Score == tokens[1].Score {
+		return durableAgentNaturalMenuToken{}, false
+	}
+	return tokens[0], true
+}
+
+func (r *Runtime) compileNaturalDurableAgentMenu(key session.SessionKey, agentRow core.DurableAgent, text string) []durableAgentNaturalMenuToken {
+	agentID := strings.TrimSpace(agentRow.AgentID)
+	text = strings.TrimSpace(text)
+	if agentID == "" || text == "" {
+		return nil
+	}
+	authorityMenu := AuthorityDiscoveryMenu{}
+	if r != nil && r.store != nil {
+		if menu, err := r.BuildAuthorityDiscoveryMenu(AuthorityDiscoveryMenuBuildInput{Key: key, Now: time.Now().UTC(), Limit: 50}); err == nil {
+			authorityMenu = menu
+		}
+	}
+	var tokens []durableAgentNaturalMenuToken
+	if score := durableAgentNaturalBehaviorTokenScore(text); score > 0 {
+		tokens = append(tokens, durableAgentNaturalMenuToken{
+			TokenID:       "durable_child:" + agentID + ":behavior_update",
+			AgentID:       agentID,
+			Kind:          durableAgentNaturalTokenBehaviorUpdate,
+			Notes:         text,
+			Score:         score,
+			AuthorityMenu: authorityMenu,
+		})
+	}
+	if score := durableAgentNaturalReportTokenScore(text); score > 0 {
+		tokens = append(tokens, durableAgentNaturalMenuToken{
+			TokenID:       "durable_child:" + agentID + ":report_request",
+			AgentID:       agentID,
+			Kind:          durableAgentNaturalTokenReportRequest,
+			Notes:         text,
+			Score:         score,
+			AuthorityMenu: authorityMenu,
+		})
+	}
+	return tokens
 }
 
 func (r *Runtime) resolveNaturalDurableAgentMention(text string) (*core.DurableAgent, bool, error) {
@@ -138,6 +214,44 @@ func durableAgentNaturalRecommendationRequest(text string) bool {
 		strings.Contains(value, "which") ||
 		strings.Contains(value, "recommend") ||
 		strings.Contains(value, "suggest")
+}
+
+func naturalDurableAgentTypedRecoverySurface(text string) bool {
+	value := strings.ToLower(strings.TrimSpace(text))
+	return strings.Contains(value, "recovery_contract") ||
+		strings.Contains(value, "recovery_operation_kind") ||
+		strings.Contains(value, session.NextActionOperationKindDurableChildRecovery)
+}
+
+func durableAgentNaturalBehaviorTokenScore(text string) int {
+	if durableAgentNaturalBehaviorDirective(text) {
+		return 100
+	}
+	value := strings.ToLower(text)
+	if naturalDurableAgentPhraseAny(value, "remember", "use", "profile", "preference", "rule") &&
+		naturalDurableAgentPhraseAny(value, "always", "whenever", "anytime", "automatically", "behavior") {
+		return 70
+	}
+	return 0
+}
+
+func durableAgentNaturalReportTokenScore(text string) int {
+	if durableAgentNaturalBehaviorDirective(text) {
+		return 0
+	}
+	if durableAgentNaturalRecommendationRequest(text) {
+		return 100
+	}
+	value := strings.ToLower(text)
+	tokenSet := naturalDurableAgentTokenSet(value)
+	switch {
+	case naturalDurableAgentHasAnyToken(tokenSet, "finish", "complete", "continue", "resume", "setup", "blocked", "status", "check", "run", "process", "triage", "report"):
+		return 80
+	case naturalDurableAgentHasAnyToken(tokenSet, "help", "jobs", "job", "opportunity", "opportunities", "unread", "recommend"):
+		return 70
+	default:
+		return 0
+	}
 }
 
 func (r *Runtime) applyNaturalDurableAgentBehaviorDirective(ctx context.Context, tools agent.ToolRegistry, agentRow core.DurableAgent, text string) (*core.TurnResult, error) {
@@ -317,6 +431,14 @@ func naturalDurableAgentHasAnyToken(tokens map[string]struct{}, values ...string
 		}
 	}
 	return false
+}
+
+func naturalDurableAgentTokenSet(text string) map[string]struct{} {
+	tokens := map[string]struct{}{}
+	for _, token := range naturalDurableAgentTokens(text) {
+		tokens[token] = struct{}{}
+	}
+	return tokens
 }
 
 func naturalDurableAgentTokensContainAll(tokenSet map[string]struct{}, tokens []string) bool {

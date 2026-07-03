@@ -19,12 +19,34 @@ type LookaheadSimulationResult struct {
 	BundleID           string
 	NextActionRecordID string
 	Reason             string
+	Source             string
 }
 
 const MaxOutstandingLookaheadApprovalFrontiers = 5
 
+func (r *Runtime) selectNextLookaheadAuthorityFrontier(frontier lookaheadAuthorityFrontier, event session.ReviewEvent, senderID int64, now time.Time) (session.NextActionRecord, LookaheadSimulationResult, bool, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	action, ok, err := r.nextLookaheadRecoveryApprovalAction(frontier, now)
+	if err != nil || ok {
+		result := LookaheadSimulationResult{
+			Found:              ok,
+			Key:                sessionKeyForNextActionRecord(action),
+			NextActionRecordID: strings.TrimSpace(action.RecordID),
+			Reason:             "existing_recovery_approval_frontier",
+			Source:             "next_action_records",
+		}
+		return action, result, ok, err
+	}
+	if strings.TrimSpace(frontier.RecordID) != "" {
+		return session.NextActionRecord{}, LookaheadSimulationResult{Reason: "exact_frontier_not_materializable", Source: "next_action_records"}, false, nil
+	}
+	return r.simulateNextLookaheadRecoveryApprovalAction(frontier, event, senderID, now)
+}
+
 func (r *Runtime) simulateNextLookaheadRecoveryApprovalAction(frontier lookaheadAuthorityFrontier, event session.ReviewEvent, senderID int64, now time.Time) (session.NextActionRecord, LookaheadSimulationResult, bool, error) {
-	result := LookaheadSimulationResult{Reason: "no_simulatable_phase"}
+	result := LookaheadSimulationResult{Reason: "no_simulatable_phase", Source: "operation_phase_plan"}
 	if r == nil || r.store == nil {
 		return session.NextActionRecord{}, result, false, nil
 	}
@@ -69,6 +91,7 @@ func (r *Runtime) simulateNextLookaheadRecoveryApprovalAction(frontier lookahead
 		BundleID:           strings.TrimSpace(bundle.BundleID),
 		NextActionRecordID: strings.TrimSpace(action.RecordID),
 		Reason:             "operation_phase_required_capability",
+		Source:             "operation_phase_plan",
 	}
 	return action, result, true, nil
 }

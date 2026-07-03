@@ -434,17 +434,22 @@ parallel approval model.
 
 The first executable slice adds the identification ledger, collision
 publication, a pure menu projection, a store-backed live-authority menu join,
-redacted authority archetype helpers, and a non-executing `Next grant` control
-that surfaces the next real contract-backed approval frontier or simulates the
-next operation-phase capability collision. The architecture still lacks:
+redacted authority archetype helpers, stable resolution-candidate metadata, an
+initial menu-token route for natural durable-child requests, a typed child result
+contract at the durable wake boundary, allow-list parent-to-child context
+construction, and a non-executing `Next grant` control that surfaces the next
+real contract-backed approval frontier or simulates the next operation-phase
+capability collision. The architecture still lacks:
 
 - first-class plan objects and plan-version reshuffle triggers;
 - a deeper lookahead simulator for plan steps beyond `OperationPhasePlan`
   capability requirements;
-- resolution sets for repair choices;
-- typed child result objects at the parent boundary;
-- allow-list child context construction;
-- a replacement for phrase-heavy durable-agent natural request routing.
+- fully rendered multi-option resolution-set cards where selecting candidate A
+  can never materialize candidate B;
+- child adapters that emit typed result contracts natively, rather than relying
+  on the `APHELION_CHILD_RESULT` text transport compatibility path;
+- full persona routing through compiled menu tokens across all governed task
+  families, not only the initial durable-child natural-request lane.
 
 These are not all one PR. They are the frontier this draft names.
 
@@ -467,14 +472,21 @@ Initial implementation slice:
   query projection.
 - `session/identification_ledger_schema.go`: v88 ledger migration.
 - `runtime/authority_discovery_menu.go`: deterministic menu and local metrics
-  projection, plus the store-backed live-authority join.
+  projection, stable resolution-candidate metadata, and the store-backed
+  live-authority join.
 - `core/review_event_callback.go` and
   `internal/telegramdecision/telegram_decisions_review.go`: `Next grant`
   callback token and confirmation-card projection.
 - `runtime/review_event_child_wake_retry.go`: private-admin `Next grant`
   handling over the current contract-backed recovery frontier.
 - `runtime/authority_discovery_lookahead.go`: first non-executing lookahead
-  simulator for operation-phase required capability grants.
+  frontier selector over unresolved recovery handoffs plus operation-phase
+  required capability grants.
+- `runtime/durable_agent_natural_request.go`: initial durable-child
+  menu-token routing, with mention resolution kept as routing context and typed
+  recovery envelopes excluded from natural handling.
+- `runtime/durable_wake.go`: typed child result contract preference and
+  allow-list child context value boundary.
 - `session/authority_archetype.go`: redacted authority archetype projection for
   deriving reusable examples from stored contracts without exposing live values.
 
@@ -489,15 +501,6 @@ Likely extensions:
 - `internal/telegramdecision/telegram_decisions_review.go`: render
   resolution-set cards.
 - `tool/request_approval_*`: render bundle-backed multi-option approvals.
-
-Likely replacements:
-
-- `runtime/durable_agent_natural_request.go`: move from phrase heuristics to
-  menu-token resolution.
-- `runtime/durable_wake.go`: retire status derived from summary text; commit
-  typed child result status first, projection second.
-- `runtime/durable_wake.go`: move parent-to-child turn context from deny-list
-  stripping to allow-list construction.
 
 ## Test Model
 
