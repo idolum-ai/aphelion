@@ -548,7 +548,7 @@ func shellCommandStringArg(tokens []shellToken) string {
 
 func readOnlyInspectionCommand(cmd string, args []shellToken) bool {
 	switch cmd {
-	case "rg", "grep", "egrep", "fgrep", "cat", "nl", "head", "tail", "less", "more", "wc", "pwd", "ls":
+	case "cd", "rg", "grep", "egrep", "fgrep", "cat", "nl", "head", "tail", "less", "more", "wc", "pwd", "ls":
 		return true
 	case "sed":
 		return !shellTokensContain(args, "-i") && !shellTokensContainPrefix(args, "-i")

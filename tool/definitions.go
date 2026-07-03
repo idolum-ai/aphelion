@@ -144,19 +144,29 @@ func (r *Registry) externalToolDefinitions(manifests []ExternalToolManifest) []a
 		manifest = NormalizeExternalToolManifest(manifest)
 		defs = append(defs, agent.ToolDef{
 			Name:        manifest.Name,
-			Description: fmt.Sprintf("External tool owned by %s.", firstNonEmpty(manifest.Owner, "unknown owner")),
+			Description: externalToolDefinitionDescription(manifest),
 			Parameters:  manifest.IO.InputSchema,
 		})
 	}
 	return defs
 }
 
+func externalToolDefinitionDescription(manifest ExternalToolManifest) string {
+	manifest = NormalizeExternalToolManifest(manifest)
+	description := strings.TrimSpace(manifest.Description)
+	owner := firstNonEmpty(manifest.Owner, "unknown owner")
+	if description == "" {
+		return fmt.Sprintf("External tool owned by %s.", owner)
+	}
+	return fmt.Sprintf("%s. External tool owned by %s.", strings.TrimRight(description, "."), owner)
+}
+
 func (r *Registry) Definitions() []agent.ToolDef {
-	defs := []agent.ToolDef{
-		{
-			Name:        "exec",
-			Description: "Run a shell command in the configured workspace. Use this for git, file inspection, builds, tests, and repository edits. Repository-history changes such as git commit require explicit proposal approval.",
-			Parameters: json.RawMessage(`{
+	defs := nativeFileToolDefinitions()
+	defs = append(defs, agent.ToolDef{
+		Name:        "exec",
+		Description: "Run a shell command in the configured workspace. Prefer read_file, list_dir, and search for ordinary file inspection; use exec for git operations, validation, builds, tests, repository edits, or shell logic native tools cannot express. Repository-history changes such as git commit require explicit proposal approval.",
+		Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"command": {"type": "string", "description": "Shell command to run with bash -lc"},
@@ -165,9 +175,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 				},
 				"required": ["command"]
 			}`),
-		},
-	}
-	defs = append(defs, nativeFileToolDefinitions()...)
+	})
 	defs = append(defs, []agent.ToolDef{
 		{
 			Name:        "memory",

@@ -1722,8 +1722,10 @@ func TestDefinitionsIncludeNativeFileTools(t *testing.T) {
 
 	defs := NewRegistry(t.TempDir(), 2*time.Second).Definitions()
 	names := make(map[string]agent.ToolDef, len(defs))
-	for _, def := range defs {
+	positions := make(map[string]int, len(defs))
+	for i, def := range defs {
 		names[def.Name] = def
+		positions[def.Name] = i
 	}
 	for _, name := range []string{"read_file", "write_file", "list_dir", "search", "fetch_url"} {
 		if _, ok := names[name]; !ok {
@@ -1731,10 +1733,24 @@ func TestDefinitionsIncludeNativeFileTools(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"read_file", "list_dir", "search"} {
+		if positions[name] > positions["exec"] {
+			t.Fatalf("Definitions() orders %s after exec; native inspection tools should be visible before shell escape", name)
+		}
+	}
+	for _, name := range []string{"read_file", "list_dir", "search"} {
 		desc := strings.ToLower(names[name].Description)
 		if !strings.Contains(desc, "parallel-safe") || !strings.Contains(desc, "together in one response") {
 			t.Fatalf("%s description = %q, want parallel-safe batch affordance", name, names[name].Description)
 		}
+	}
+	execDesc := strings.ToLower(names["exec"].Description)
+	for _, want := range []string{"prefer read_file", "list_dir", "search"} {
+		if !strings.Contains(execDesc, want) {
+			t.Fatalf("exec description = %q, want native inspection guidance %q", names["exec"].Description, want)
+		}
+	}
+	if strings.Contains(execDesc, "use this for git, file inspection") {
+		t.Fatalf("exec description = %q, should not prefer shell for ordinary file inspection", names["exec"].Description)
 	}
 }
 

@@ -361,7 +361,7 @@ func classifySegment(segment string) Effect {
 	switch cmd {
 	case "eval", "source":
 		return Effect{Kind: KindUnknown, Reason: cmd + " dynamic shell execution", Command: cmd, SideEffects: true}
-	case "set", "printf", "echo", "true", "false":
+	case "cd", "set", "printf", "echo", "true", "false":
 		return Effect{Kind: KindReadOnlyInspection, Reason: cmd + " shell builtin", Command: cmd}
 	case "test":
 		if target := testFileMetadataTarget(args); target != "" {

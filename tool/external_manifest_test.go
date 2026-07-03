@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,6 +19,7 @@ func TestLoadExternalToolManifestRoundTrip(t *testing.T) {
 	raw := `{
 		"name": "browse_page",
 		"owner": "child-alpha",
+		"description": "Fetch a governed browser summary for one URL.",
 		"version": "0.1.0",
 		"execution": {
 			"mode": "container",
@@ -54,7 +56,7 @@ func TestLoadExternalToolManifestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadExternalToolManifest() err = %v", err)
 	}
-	if manifest.Name != "browse_page" || manifest.Owner != "child-alpha" {
+	if manifest.Name != "browse_page" || manifest.Owner != "child-alpha" || manifest.Description != "Fetch a governed browser summary for one URL." {
 		t.Fatalf("manifest = %#v, want normalized name/owner", manifest)
 	}
 	if manifest.Execution.Mode != "container" || manifest.Execution.Entry == "" {
@@ -80,8 +82,34 @@ func TestBundledBrowsePagePilotManifestLoads(t *testing.T) {
 	if manifest.Name != "browse_page" || manifest.Owner != "child-alpha" || manifest.Execution.Mode != "process" {
 		t.Fatalf("bundled manifest = %#v, want child-owned process browse_page pilot", manifest)
 	}
+	if manifest.Description == "" || !strings.Contains(manifest.Description, "page summary") {
+		t.Fatalf("bundled manifest description = %q, want provider-visible affordance text", manifest.Description)
+	}
 	if manifest.Constraints.Network != "none" || len(manifest.Install.Command) == 0 || len(manifest.Probe.Command) == 0 {
 		t.Fatalf("bundled manifest constraints/install/probe = %#v/%#v/%#v, want deterministic governed fixture", manifest.Constraints, manifest.Install, manifest.Probe)
+	}
+}
+
+func TestExternalToolManifestHashIncludesDescription(t *testing.T) {
+	t.Parallel()
+
+	base := ExternalToolManifest{
+		Name:      "browse_page",
+		Owner:     "child-alpha",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		IO:        ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object"}`)},
+	}
+	withoutDescription, err := externalToolManifestHash(base)
+	if err != nil {
+		t.Fatalf("externalToolManifestHash(base) err = %v", err)
+	}
+	base.Description = "Fetch a single governed page summary from a URL."
+	withDescription, err := externalToolManifestHash(base)
+	if err != nil {
+		t.Fatalf("externalToolManifestHash(description) err = %v", err)
+	}
+	if withoutDescription == withDescription {
+		t.Fatalf("manifest hash did not change after provider-visible description change: %s", withDescription)
 	}
 }
 

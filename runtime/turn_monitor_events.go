@@ -308,6 +308,16 @@ func (m *turnMonitor) recordExecEffectAttempt(ctx context.Context, name string, 
 	if boundary, ok := commandeffect.BoundaryForCommand(rawCommand); ok {
 		boundaryKind = string(boundary.Kind)
 	}
+	effectKind := workPayloadString(effect, "kind")
+	effectReason := workPayloadString(effect, "reason")
+	if session.NormalizeEffectAttemptStatus(status) != session.EffectAttemptStatusAttempted {
+		// ToolStarted records the classifier's provisional view. The tool's
+		// pre-dispatch authority path may then replace it with the actual
+		// dispatch plan. Outcome updates must not reclassify that record.
+		effectKind = ""
+		effectReason = ""
+		boundaryKind = ""
+	}
 	subject := effectAttemptSubjectJSON(rawCommand)
 	completedAt := time.Time{}
 	if session.NormalizeEffectAttemptStatus(status) != session.EffectAttemptStatusAttempted {
@@ -320,8 +330,8 @@ func (m *turnMonitor) recordExecEffectAttempt(ctx context.Context, name string, 
 		Executor:     "turn",
 		Tool:         strings.TrimSpace(name),
 		Command:      command,
-		EffectKind:   workPayloadString(effect, "kind"),
-		EffectReason: workPayloadString(effect, "reason"),
+		EffectKind:   effectKind,
+		EffectReason: effectReason,
 		BoundaryKind: boundaryKind,
 		SubjectJSON:  subject,
 		Status:       status,

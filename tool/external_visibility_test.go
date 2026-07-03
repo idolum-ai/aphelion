@@ -28,10 +28,11 @@ func TestDefinitionsForPrincipalFiltersExternalToolByGrant(t *testing.T) {
 		t.Fatalf("WriteFile(run.sh) err = %v", err)
 	}
 	manifest := ExternalToolManifest{
-		Name:      "browse_page",
-		Owner:     "child-alpha",
-		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
-		IO:        ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}}}`)},
+		Name:        "browse_page",
+		Owner:       "child-alpha",
+		Description: "Fetch a single governed page summary from a URL.",
+		Execution:   ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		IO:          ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}}}`)},
 	}
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest})
 	if err != nil {
@@ -54,6 +55,9 @@ func TestDefinitionsForPrincipalFiltersExternalToolByGrant(t *testing.T) {
 	granted := registry.DefinitionsForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"})
 	if !toolDefExists(granted, "browse_page") {
 		t.Fatalf("DefinitionsForPrincipal(granted) missing browse_page: %#v", granted)
+	}
+	if def, ok := toolDefByName(granted, "browse_page"); !ok || !strings.Contains(def.Description, "Fetch a single governed page summary") {
+		t.Fatalf("browse_page definition = %#v, want manifest affordance text", def)
 	}
 	hidden := registry.DefinitionsForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "other-agent"})
 	if toolDefExists(hidden, "browse_page") {
@@ -127,7 +131,7 @@ func TestManifestForPrincipalIncludesOnlyGrantedExternalTools(t *testing.T) {
 	grantToolInvoke(t, store, "browse_page", "child-alpha")
 
 	visible := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"})
-	if !strings.Contains(visible, "- browse_page: external tool owned by child-alpha") {
+	if !strings.Contains(visible, "- browse_page: External tool owned by child-alpha") {
 		t.Fatalf("visible manifest = %q, want granted external tool", visible)
 	}
 	if !strings.Contains(visible, "executable: false") {

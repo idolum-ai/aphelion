@@ -90,7 +90,7 @@ func RenderManifest(defs []agent.ToolDef, external []ExternalToolManifest, execu
 	}
 	for _, manifest := range external {
 		manifest = NormalizeExternalToolManifest(manifest)
-		description := fmt.Sprintf("external tool owned by %s", firstNonEmpty(strings.TrimSpace(manifest.Owner), "(unknown owner)"))
+		description := strings.TrimSuffix(externalToolDefinitionDescription(manifest), ".")
 		lines = append(lines, fmt.Sprintf("- %s: %s", manifest.Name, description))
 		params := summarizeParameters(manifest.IO.InputSchema)
 		if len(params) == 0 {

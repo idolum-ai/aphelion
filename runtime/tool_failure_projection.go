@@ -172,13 +172,46 @@ func classifyProjectedToolFailure(err error, output string) projectedToolFailure
 	}
 	lower := strings.ToLower(strings.TrimSpace(output + "\n" + errorString(err)))
 	switch {
-	case strings.Contains(lower, "authority") || strings.Contains(lower, "approval") || strings.Contains(lower, "grant") || strings.Contains(lower, "permission") || strings.Contains(lower, "denied"):
+	case looksLikeAuthorityFailureText(lower):
 		return projectedToolFailureSignals{FailureClass: "authority_rejected", RetryPolicy: "ask_for_grant"}
 	case strings.Contains(lower, "deadline") || strings.Contains(lower, "timeout") || strings.Contains(lower, "timed out"):
 		return projectedToolFailureSignals{FailureClass: "timeout", RetryPolicy: "retry_once", Retryable: true, DeadlineExceeded: true}
 	default:
 		return projectedToolFailureSignals{FailureClass: "tool_error", RetryPolicy: "reformulate"}
 	}
+}
+
+func looksLikeAuthorityFailureText(lower string) bool {
+	lower = strings.TrimSpace(lower)
+	if lower == "" {
+		return false
+	}
+	for _, phrase := range []string{
+		"authority required",
+		"requires authority",
+		"missing authority",
+		"authority rejected",
+		"authority denied",
+		"approval required",
+		"requires approval",
+		"requires an approved proposal",
+		"requires explicit approval",
+		"approval denied",
+		"not approved",
+		"missing capability grant",
+		"missing grant",
+		"requires active capability grant",
+		"requires an active capability grant",
+		"capability grant is required",
+		"permission denied",
+		"access denied",
+		"operation not permitted",
+	} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func safeToolFailureSummary(failureClass string, protectedRef string) string {
