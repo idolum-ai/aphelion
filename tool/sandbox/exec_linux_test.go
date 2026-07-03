@@ -151,24 +151,28 @@ func TestRunnerRunCancelsProcessGroup(t *testing.T) {
 	}
 	runner := NewRunner()
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, err := runner.Run(ctx, ExecRequest{
-		Scope:   scope,
-		Command: "sleep 30 & echo $! > " + sandboxShellQuote(pidFile) + "; wait",
-		Workdir: scope.WorkingRoot,
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Run() err = %v, want deadline exceeded", err)
-	}
-	raw, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatalf("ReadFile(child pid) err = %v", err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || pid <= 0 {
-		t.Fatalf("child pid %q parse err=%v", strings.TrimSpace(string(raw)), err)
+	runErr := make(chan error, 1)
+	go func() {
+		_, err := runner.Run(ctx, ExecRequest{
+			Scope:   scope,
+			Command: "sleep 30 & echo $! > " + sandboxShellQuote(pidFile) + "; wait",
+			Workdir: scope.WorkingRoot,
+		})
+		runErr <- err
+	}()
+
+	pid := waitForSandboxPIDFile(t, pidFile, runErr)
+	cancel()
+	select {
+	case err := <-runErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() err = %v, want canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not return after context cancellation")
 	}
 	childGone := false
 	t.Cleanup(func() {
@@ -185,6 +189,36 @@ func TestRunnerRunCancelsProcessGroup(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("child process pid=%d still exists after runner cancellation", pid)
+}
+
+func waitForSandboxPIDFile(t *testing.T, pidFile string, runErr <-chan error) int {
+	t.Helper()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case err := <-runErr:
+			t.Fatalf("Run() returned before child pid was recorded: %v", err)
+		case <-deadline.C:
+			t.Fatalf("timed out waiting for child pid file %s", pidFile)
+		case <-ticker.C:
+			raw, err := os.ReadFile(pidFile)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				t.Fatalf("ReadFile(child pid) err = %v", err)
+			}
+			pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if err != nil || pid <= 0 {
+				t.Fatalf("child pid %q parse err=%v", strings.TrimSpace(string(raw)), err)
+			}
+			return pid
+		}
+	}
 }
 
 func TestRunnerPlanForApprovedIncludesBubblewrapAndChdir(t *testing.T) {
