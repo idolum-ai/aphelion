@@ -421,23 +421,7 @@ func (s *SQLiteStore) OpenNextActionsBySessionIDOperation(sessionID string, stat
 }
 
 func (s *SQLiteStore) OutstandingLookaheadApprovalFrontierCount(adminChatID int64) (int, error) {
-	if s == nil || s.db == nil || adminChatID == 0 {
-		return 0, nil
-	}
-	var count int
-	if err := s.db.QueryRow(`
-		SELECT COUNT(*)
-		FROM next_action_records
-		WHERE chat_id = ?
-			AND owner = 'lookahead'
-			AND resolved_at IS NULL
-			AND state NOT IN (?, ?, ?)
-			AND operation_tool = 'request_approval'
-			AND operation_kind IN ('continuation_lease_request', 'authority_bundle_request')
-	`, adminChatID, string(NextActionSuperseded), string(NextActionCancelled), string(NextActionTerminal)).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count outstanding lookahead approval frontiers: %w", err)
-	}
-	return count, nil
+	return s.OutstandingLookaheadApprovalFrontierCountAt(adminChatID, time.Now().UTC())
 }
 
 func (s *SQLiteStore) NextActionByRecordID(recordID string) (NextActionRecord, bool, error) {

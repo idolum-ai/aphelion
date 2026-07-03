@@ -138,7 +138,9 @@ Identification may be partial. A run can learn approval class, resource shape,
 retryability, timeout behavior, and bundle compatibility at different times.
 Those labels should preserve provenance instead of overwriting a scalar
 "method"; current labels are projections over typed observations and live
-authority state.
+authority state. Operator interactions that advance discovery, such as approval
+clicks or `Next grant` taps, should be recorded with actor provenance rather
+than treated as invisible UI side effects.
 
 Bounded preemption is allowed when it is explicit. A long-running plan may start
 with a small fixed loadout of named, scoped, expiring authority bundles, but that

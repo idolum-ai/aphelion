@@ -113,11 +113,17 @@ nearby context, model prose, or prior cards.
 Lookahead is not execution authority. Its first implementation is a
 frontier-bound, non-executing transition that surfaces the next already-recorded
 contract-backed authority frontier through the same approval family used by
-ordinary fail-closed recovery. A later Ralph-loop implementation may add a
-metered allowance ledger and speculative plan simulation, but any approval
-produced by lookahead must still be bound to session, plan version, step, expiry,
-and exact resource/action terms. If those terms stop matching, the approval is
-stale tail and must be expired or invalidated before use.
+ordinary fail-closed recovery. It also carries a durable metered allowance
+ledger: one `Next grant` tap can reserve one unresolved frontier for the target
+admin, source/target session, review event, surfaced next action, and
+identification-ledger entry. When no already-recorded frontier exists, the
+runtime may simulate the active `OperationPhasePlan` forward through declared
+unmet capability requirements and compile that phase frontier into one
+authority-bundle approval card. The bundle, not the lookahead tap, is the
+authority object. Any approval produced by lookahead must still be bound to
+session, plan version, step, expiry, and exact resource/action terms. If those
+terms stop matching, the approval is stale tail and must be expired or
+invalidated before use.
 
 Context may select durable run authority, but it may not manufacture authority.
 Durable state remains canonical.

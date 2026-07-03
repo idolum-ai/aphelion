@@ -132,6 +132,9 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 	if err := r.markAuthorityDiscoveryContinuationRecoveryContractStatus(key, state, session.IdentificationLedgerStatusApproved, now); err != nil {
 		return session.ContinuationState{}, err
 	}
+	if err := r.recordAuthorityDiscoveryOperatorObservationForLabel(key, state.ContinuationLease.RecoveryContractID, fmt.Sprintf("telegram:%d", approverID), "approve_continuation", now); err != nil {
+		return session.ContinuationState{}, err
+	}
 	if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusApproved); err != nil {
 		return session.ContinuationState{}, fmt.Errorf("sync approved operation proposal status: %w", err)
 	}

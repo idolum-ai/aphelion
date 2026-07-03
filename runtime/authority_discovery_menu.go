@@ -92,7 +92,7 @@ type AuthorityDiscoveryTrace struct {
 func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityDiscoveryMenu {
 	now := input.Now.UTC()
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Unix(0, 0).UTC()
 	}
 	planVersion := strings.TrimSpace(input.PlanVersion)
 	if planVersion == "" {
@@ -119,7 +119,7 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 			StepRef:    entry.StepRef,
 			ShapeHash:  entry.ShapeHash,
 			LabelRef:   entry.LabelRef,
-			State:      authorityDiscoveryStateForEntry(entry, now, input.LiveAuthorityRefs[entry.LabelRef]),
+			State:      authorityDiscoveryStateForEntry(entry, now, authorityDiscoveryInputLabelLive(input.LiveAuthorityRefs, entry.LabelRef)),
 			Properties: map[session.IdentificationObservationProperty][]string{},
 			ExpiresAt:  entry.ExpiresAt,
 		}
@@ -154,7 +154,7 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 			continue
 		}
 		state := AuthorityDiscoveryTokenOneApprovalAway
-		live := slot.LiveAuthority || input.LiveAuthorityRefs[strings.TrimSpace(slot.LabelRef)]
+		live := slot.LiveAuthority || authorityDiscoveryInputLabelLive(input.LiveAuthorityRefs, slot.LabelRef)
 		if !slot.ExpiresAt.IsZero() && !slot.ExpiresAt.After(now) {
 			state = AuthorityDiscoveryTokenExpired
 		} else if live {
@@ -190,6 +190,14 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 		return menu.Tokens[i].StepRef < menu.Tokens[j].StepRef
 	})
 	return menu
+}
+
+func authorityDiscoveryInputLabelLive(liveRefs map[string]bool, labelRef string) bool {
+	labelRef = strings.TrimSpace(labelRef)
+	if labelRef == "" || liveRefs == nil {
+		return false
+	}
+	return liveRefs[labelRef]
 }
 
 func ScoreAuthorityDiscoveryMenu(menu AuthorityDiscoveryMenu) AuthorityDiscoveryTraceMetrics {
@@ -284,7 +292,7 @@ func (r *Runtime) BuildAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuBuildI
 	}
 	now := input.Now
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = r.authorityDiscoveryNow()
 	}
 	liveRefs := map[string]bool{}
 	for _, projection := range entries {
@@ -326,7 +334,7 @@ func (r *Runtime) authorityDiscoveryLabelLive(key session.SessionKey, sessionID 
 		return false, nil
 	}
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = r.authorityDiscoveryNow()
 	}
 	switch authorityDiscoveryCandidateKind(labelRef) {
 	case "capability_grant":

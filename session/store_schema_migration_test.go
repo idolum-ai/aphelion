@@ -2660,6 +2660,77 @@ func TestMigratesSchemaV87ToV88IdentificationLedger(t *testing.T) {
 	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "occurrence_count")
 }
 
+func TestMigratesSchemaV88ToV89LookaheadAllowancesAndActorProvenance(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v88-identification-ledger.db")
+	seed, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(seed current schema) err = %v", err)
+	}
+	for _, stmt := range []string{
+		`DROP TABLE IF EXISTS authority_lookahead_allowances`,
+		`DROP TABLE IF EXISTS identification_ledger_observations`,
+		`CREATE TABLE identification_ledger_observations (
+			observation_id TEXT PRIMARY KEY,
+			entry_id TEXT NOT NULL,
+			method TEXT NOT NULL DEFAULT '' CHECK(method IN ('collision', 'static', 'lookahead', 'operator')),
+			property TEXT NOT NULL DEFAULT '' CHECK(property IN ('approval_class', 'tool', 'resource', 'retryability', 'bundle_fit', 'contract')),
+			value TEXT NOT NULL DEFAULT '',
+			evidence_ref TEXT NOT NULL DEFAULT '',
+			observed_at TEXT NOT NULL DEFAULT '',
+			last_observed_at TEXT NOT NULL DEFAULT '',
+			occurrence_count INTEGER NOT NULL DEFAULT 1,
+			expires_at TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY(entry_id) REFERENCES identification_ledger_entries(entry_id) ON DELETE CASCADE
+		)`,
+		`DELETE FROM identification_ledger_entries`,
+		`INSERT INTO identification_ledger_entries(
+			entry_id, plan_id, plan_version, session_id, step_ref, shape_hash, label_ref, status, created_at, updated_at
+		) VALUES (
+			'ident:v88-entry', 'plan:v88', 'current', 'telegram_dm:1001', 'step:v88', 'shape:v88', 'crc-v88', 'proposed', '2026-07-03T00:00:00Z', '2026-07-03T00:00:00Z'
+		)`,
+		`INSERT INTO identification_ledger_observations(
+			observation_id, entry_id, method, property, value, evidence_ref, observed_at, last_observed_at, occurrence_count
+		) VALUES (
+			'idobs:v88-observation', 'ident:v88-entry', 'lookahead', 'contract', 'crc-v88', 'review_event:42', '2026-07-03T00:00:00Z', '2026-07-03T00:00:00Z', 2
+		)`,
+		`DELETE FROM schema_version`,
+		fmt.Sprintf(`INSERT INTO schema_version(version) VALUES (%d)`, schemaVersion88),
+	} {
+		if _, err := seed.db.Exec(stmt); err != nil {
+			t.Fatalf("seed v88 fixture statement %q: %v", stmt, err)
+		}
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v88) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteTable(t, store.db, "authority_lookahead_allowances")
+	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "actor_kind")
+	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "actor_principal")
+	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "actor_action")
+
+	var actorKind, actorPrincipal, actorAction string
+	var occurrenceCount int
+	if err := store.db.QueryRow(`
+		SELECT actor_kind, actor_principal, actor_action, occurrence_count
+		FROM identification_ledger_observations
+		WHERE observation_id = 'idobs:v88-observation'
+	`).Scan(&actorKind, &actorPrincipal, &actorAction, &occurrenceCount); err != nil {
+		t.Fatalf("query migrated v88 observation: %v", err)
+	}
+	if actorKind != "" || actorPrincipal != "" || actorAction != "" || occurrenceCount != 2 {
+		t.Fatalf("migrated actor fields kind=%q principal=%q action=%q count=%d, want empty actor fields and preserved count", actorKind, actorPrincipal, actorAction, occurrenceCount)
+	}
+}
+
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {
 	t.Helper()
 	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)

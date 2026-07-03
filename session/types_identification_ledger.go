@@ -39,13 +39,14 @@ const (
 type IdentificationObservationProperty string
 
 const (
-	IdentificationPropertyApprovalClass IdentificationObservationProperty = "approval_class"
-	IdentificationPropertyResource      IdentificationObservationProperty = "resource"
-	IdentificationPropertyTimeout       IdentificationObservationProperty = "timeout"
-	IdentificationPropertyRetryability  IdentificationObservationProperty = "retryability"
-	IdentificationPropertyBundleFit     IdentificationObservationProperty = "bundle_fit"
-	IdentificationPropertyContract      IdentificationObservationProperty = "contract"
-	IdentificationPropertyTool          IdentificationObservationProperty = "tool"
+	IdentificationPropertyApprovalClass  IdentificationObservationProperty = "approval_class"
+	IdentificationPropertyResource       IdentificationObservationProperty = "resource"
+	IdentificationPropertyTimeout        IdentificationObservationProperty = "timeout"
+	IdentificationPropertyRetryability   IdentificationObservationProperty = "retryability"
+	IdentificationPropertyBundleFit      IdentificationObservationProperty = "bundle_fit"
+	IdentificationPropertyContract       IdentificationObservationProperty = "contract"
+	IdentificationPropertyOperatorAction IdentificationObservationProperty = "operator_action"
+	IdentificationPropertyTool           IdentificationObservationProperty = "tool"
 )
 
 type IdentificationLedgerEntry struct {
@@ -69,6 +70,9 @@ type IdentificationLedgerObservation struct {
 	Property        IdentificationObservationProperty
 	Value           string
 	EvidenceRef     string
+	ActorKind       string
+	ActorPrincipal  string
+	ActorAction     string
 	ExpiresAt       time.Time
 	ObservedAt      time.Time
 	LastObservedAt  time.Time
@@ -96,6 +100,9 @@ type IdentificationLedgerObservationInput struct {
 	Property        IdentificationObservationProperty
 	Value           string
 	EvidenceRef     string
+	ActorKind       string
+	ActorPrincipal  string
+	ActorAction     string
 	ExpiresAt       time.Time
 	ObservedAt      time.Time
 	LastObservedAt  time.Time
@@ -158,6 +165,7 @@ func NormalizeIdentificationObservationProperty(property IdentificationObservati
 		IdentificationPropertyRetryability,
 		IdentificationPropertyBundleFit,
 		IdentificationPropertyContract,
+		IdentificationPropertyOperatorAction,
 		IdentificationPropertyTool:
 		return IdentificationObservationProperty(normalizeEnumValue(string(property)))
 	default:
@@ -207,6 +215,9 @@ func NormalizeIdentificationLedgerObservationInput(input IdentificationLedgerObs
 	input.Property = NormalizeIdentificationObservationProperty(input.Property)
 	input.Value = strings.TrimSpace(input.Value)
 	input.EvidenceRef = strings.TrimSpace(input.EvidenceRef)
+	input.ActorKind = normalizeEnumValue(input.ActorKind)
+	input.ActorPrincipal = strings.TrimSpace(input.ActorPrincipal)
+	input.ActorAction = normalizeEnumValue(input.ActorAction)
 	if !input.ExpiresAt.IsZero() {
 		input.ExpiresAt = input.ExpiresAt.UTC()
 	}
@@ -223,7 +234,7 @@ func NormalizeIdentificationLedgerObservationInput(input IdentificationLedgerObs
 		input.OccurrenceCount = 1
 	}
 	if input.ObservationID == "" {
-		input.ObservationID = IdentificationLedgerObservationID(input.EntryID, input.Method, input.Property, input.Value, input.EvidenceRef)
+		input.ObservationID = IdentificationLedgerObservationIDWithActor(input.EntryID, input.Method, input.Property, input.Value, input.EvidenceRef, input.ActorKind, input.ActorPrincipal, input.ActorAction)
 	}
 	return input
 }
@@ -253,6 +264,9 @@ func NormalizeIdentificationLedgerObservation(obs IdentificationLedgerObservatio
 		Property:        obs.Property,
 		Value:           obs.Value,
 		EvidenceRef:     obs.EvidenceRef,
+		ActorKind:       obs.ActorKind,
+		ActorPrincipal:  obs.ActorPrincipal,
+		ActorAction:     obs.ActorAction,
 		ExpiresAt:       obs.ExpiresAt,
 		ObservedAt:      obs.ObservedAt,
 		LastObservedAt:  obs.LastObservedAt,
@@ -366,7 +380,7 @@ func ValidateIdentificationLedgerObservationInput(input IdentificationLedgerObse
 	if input.ObservationID == "" {
 		return fmt.Errorf("identification ledger observation requires observation_id")
 	}
-	if want := IdentificationLedgerObservationID(input.EntryID, input.Method, input.Property, input.Value, input.EvidenceRef); input.ObservationID != want {
+	if want := IdentificationLedgerObservationIDWithActor(input.EntryID, input.Method, input.Property, input.Value, input.EvidenceRef, input.ActorKind, input.ActorPrincipal, input.ActorAction); input.ObservationID != want {
 		return fmt.Errorf("identification ledger observation_id mismatch")
 	}
 	return nil
@@ -424,6 +438,7 @@ func identificationObservationPropertyKnown(raw string) bool {
 		IdentificationPropertyRetryability,
 		IdentificationPropertyBundleFit,
 		IdentificationPropertyContract,
+		IdentificationPropertyOperatorAction,
 		IdentificationPropertyTool:
 		return true
 	default:
@@ -444,12 +459,19 @@ func IdentificationLedgerEntryID(planID string, planVersion string, sessionID st
 }
 
 func IdentificationLedgerObservationID(entryID string, method IdentificationObservationMethod, property IdentificationObservationProperty, value string, evidenceRef string) string {
+	return IdentificationLedgerObservationIDWithActor(entryID, method, property, value, evidenceRef, "", "", "")
+}
+
+func IdentificationLedgerObservationIDWithActor(entryID string, method IdentificationObservationMethod, property IdentificationObservationProperty, value string, evidenceRef string, actorKind string, actorPrincipal string, actorAction string) string {
 	seed := strings.Join([]string{
 		strings.TrimSpace(entryID),
 		string(NormalizeIdentificationObservationMethod(method)),
 		string(NormalizeIdentificationObservationProperty(property)),
 		strings.TrimSpace(value),
 		strings.TrimSpace(evidenceRef),
+		normalizeEnumValue(actorKind),
+		strings.TrimSpace(actorPrincipal),
+		normalizeEnumValue(actorAction),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(seed))
 	return "idobs:" + hex.EncodeToString(sum[:16])

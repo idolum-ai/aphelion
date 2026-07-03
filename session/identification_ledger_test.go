@@ -88,6 +88,53 @@ func TestIdentificationLedgerPreservesGraduatedObservationHistory(t *testing.T) 
 	}
 }
 
+func TestIdentificationLedgerObservationPreservesOperatorProvenance(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:review-next-grant",
+		ShapeHash:   "sha256:lookahead-shape",
+		Status:      IdentificationLedgerStatusPartial,
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(entryInput, IdentificationLedgerObservationInput{
+		Method:         IdentificationObservationOperator,
+		Property:       IdentificationPropertyOperatorAction,
+		Value:          "lookahead_next",
+		EvidenceRef:    "review_event:42",
+		ActorKind:      "operator",
+		ActorPrincipal: "telegram:1001",
+		ActorAction:    "lookahead_next",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(operator) err = %v", err)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 1 || len(projections[0].Observations) != 1 {
+		t.Fatalf("projections = %#v, want one operator observation", projections)
+	}
+	obs := projections[0].Observations[0]
+	if obs.Property != IdentificationPropertyOperatorAction ||
+		obs.ActorKind != "operator" ||
+		obs.ActorPrincipal != "telegram:1001" ||
+		obs.ActorAction != "lookahead_next" {
+		t.Fatalf("operator observation = %#v, want actor provenance preserved", obs)
+	}
+	if !strings.Contains(obs.ObservationID, "idobs:") {
+		t.Fatalf("observation id = %q, want deterministic id", obs.ObservationID)
+	}
+}
+
 func TestIdentificationLedgerImplicitObservationDoesNotDowngradeLifecycleStatus(t *testing.T) {
 	t.Parallel()
 

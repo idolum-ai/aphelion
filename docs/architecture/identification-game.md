@@ -152,6 +152,10 @@ type IdentificationLedgerObservation struct {
     EvidenceRef string
     ExpiresAt   time.Time
 
+    ActorKind      string
+    ActorPrincipal string
+    ActorAction    string
+
     ObservedAt time.Time
 }
 ```
@@ -324,6 +328,10 @@ Operator identification is the scroll of identify. A review card asks the human
 to approve, reject, narrow, or choose among a resolution set.
 
 The card must render a typed record. It may not invent authority from prose.
+Operator actions that mutate the discovery frontier, such as `Next grant` taps
+and approval clicks, should be recorded as observations with actor provenance.
+The ledger must be able to say not only "this shape was learned," but which
+operator action advanced the frontier.
 
 ### Lookahead
 
@@ -338,9 +346,10 @@ allowance and produce the next proposed card.
 
 Hard constraints:
 
-1. One press identifies at most one next collision.
+1. One press spends one durable lookahead allowance.
 2. Lookahead authority is not execution authority.
-3. Speculative approvals are bound to session, plan version, and step.
+3. A lookahead press may compile a clustered frontier into one authority bundle
+   card, but not competing pending continuations.
 4. Speculative approvals expire or invalidate when the bound step or plan
    version stops matching.
 
@@ -348,39 +357,42 @@ This gives operators a burst mode for long plans without reintroducing broad
 pre-granting. A user can walk the authority frontier before going offline, but
 the tail remains narrow, step-addressed, and perishable.
 
-Lookahead is metered as an outstanding-frontier budget, not a time cooldown.
-The default budget is five unresolved lookahead-owned approval frontiers per
-admin chat across active plans. When the budget is full, `Next grant` must not
-simulate, publish, approve, execute, or write ledger labels; it should only tell
-the operator to resolve, reject, or let one existing frontier expire. This bound
-is a tail-size invariant: it limits the amount of speculative authority work
-that can trail the operator, while still allowing fast burst identification when
-slots are available.
+Lookahead is metered as an outstanding-frontier budget, not a time cooldown. The
+default budget is five unresolved lookahead allowances per admin chat across
+active plans. Each allowance is a durable row bound to the admin, source/target
+session, review event, surfaced next action, and identification-ledger entry.
+When the budget is full, `Next grant` must not simulate, publish, approve,
+execute, or write ledger labels; it should only tell the operator to resolve,
+reject, or let one existing frontier expire. Allowances are released when their
+ledger entry becomes approved or terminal, and otherwise expire. This bound is a
+tail-size invariant: it limits the amount of speculative authority work that can
+trail the operator, while still allowing fast burst identification when slots
+are available.
 
 The first executable implementation makes this a real control-plane loop over
-the current recovery frontier and the next declared operation-phase capability
-need. The button authenticates the private admin callback, resolves an exact
-frontier when the review event names one, otherwise scans the review event's
-source session for unresolved contract-backed `request_approval` next actions.
-If none exists, it can simulate the active `OperationPhasePlan` forward to the
-next pending or in-progress phase with unmet `RequiredCapabilityGrants`,
-transactionally publish an authority-bundle contract plus a `request_approval`
-next action, and then materialize the normal approval card for that exact stored
-contract. It records lookahead observations only after materialization succeeds.
-It does not approve authority and it does not execute the protected operation.
+the current recovery frontier and a bounded deterministic simulation of the
+active `OperationPhasePlan`. The button authenticates the private admin
+callback, resolves an exact frontier when the review event names one, otherwise
+scans the review event's source session for unresolved contract-backed
+`request_approval` next actions. If none exists, it simulates forward through
+pending or in-progress phases with unmet `RequiredCapabilityGrants`, compiles
+the discovered phase frontier into one authority-bundle contract, records a
+`request_approval` next action, reserves one lookahead allowance, materializes
+the normal approval card for that exact stored contract, and records ledger
+observations only after materialization succeeds. It does not approve authority
+and it does not execute the protected operation.
 
-This first implementation is frontier-bound and globally budgeted by unresolved
-lookahead handoffs in `next_action_records`. Approval materialization may resolve
-the handoff after the card is opened, so this budget is not a delivered-card
-quota. If Aphelion later needs to cap delivered-but-unanswered approval cards,
-that should be a separate projection/lifecycle invariant rather than a hidden
-change to contract semantics.
+The bundle is the important shape. The runtime should not open several
+simultaneous pending continuations from one lookahead press; that would create
+approval-state competition. A deep frontier should batch into one narrow,
+step-bound, expiring authority bundle whose components name the simulated
+phases and whose required grants carry the exact action/resource constraints.
 
-This is intentionally narrower than a full Ralph-loop simulator. It identifies
-the next already-discovered authority frontier in the ledger/next-action graph,
-or the next declared operation-phase capability collision. Future simulation can
-cover richer step grammars, manifests, and resolution sets, but it must produce
-the same kind of stored contract and next action before projection.
+This simulator is intentionally still narrower than a complete Ralph-loop
+interpreter. It covers already-discovered recovery frontiers and declared
+operation-phase capability requirements. Future simulation can cover richer
+step grammars, manifests, and resolution sets, but it must produce the same kind
+of stored contract and next action before projection.
 
 ## Resolution Sets
 
@@ -433,16 +445,18 @@ parallel approval model.
 ## Current Gaps
 
 The first executable slice adds the identification ledger, collision
-publication, a pure menu projection, a store-backed live-authority menu join,
+publication, operator-provenance observations, a durable lookahead allowance
+ledger, a pure menu projection, a store-backed live-authority menu join,
 redacted authority archetype helpers, stable resolution-candidate metadata, an
 initial menu-token route for natural durable-child requests, a typed child result
 contract at the durable wake boundary, allow-list parent-to-child context
 construction, and a non-executing `Next grant` control that surfaces the next
-real contract-backed approval frontier or simulates the next operation-phase
-capability collision. The architecture still lacks:
+real contract-backed approval frontier or simulates a clustered operation-phase
+capability frontier into one authority-bundle approval card. The architecture
+still lacks:
 
 - first-class plan objects and plan-version reshuffle triggers;
-- a deeper lookahead simulator for plan steps beyond `OperationPhasePlan`
+- lookahead simulation for plan steps beyond `OperationPhasePlan`
   capability requirements;
 - fully rendered multi-option resolution-set cards where selecting candidate A
   can never materialize candidate B;
@@ -470,7 +484,11 @@ Initial implementation slice:
   signatures.
 - `session/store_identification_ledger.go`: append-only observation history and
   query projection.
-- `session/identification_ledger_schema.go`: v88 ledger migration.
+- `session/identification_ledger_schema.go`: v88 ledger migration and v89 actor
+  provenance plus lookahead allowance migration.
+- `session/types_lookahead_allowance.go` and
+  `session/store_lookahead_allowances.go`: durable unresolved-frontier budget
+  for `Next grant`.
 - `runtime/authority_discovery_menu.go`: deterministic menu and local metrics
   projection, stable resolution-candidate metadata, and the store-backed
   live-authority join.
@@ -480,8 +498,8 @@ Initial implementation slice:
 - `runtime/review_event_child_wake_retry.go`: private-admin `Next grant`
   handling over the current contract-backed recovery frontier.
 - `runtime/authority_discovery_lookahead.go`: first non-executing lookahead
-  frontier selector over unresolved recovery handoffs plus operation-phase
-  required capability grants.
+  frontier selector over unresolved recovery handoffs plus clustered
+  operation-phase required capability grants.
 - `runtime/durable_agent_natural_request.go`: initial durable-child
   menu-token routing, with mention resolution kept as routing context and typed
   recovery envelopes excluded from natural handling.

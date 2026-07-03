@@ -91,41 +91,42 @@ type Runtime struct {
 	activeTurnMu             sync.Mutex
 	activeTurnCancels        map[int64]*activeTurnRun
 
-	scopeResolver          *sandbox.Resolver
-	durableGroupChild      durableGroupChildExecutor
-	durableWakeChild       durableWakeChildExecutor
-	durableWakeAdapters    []durableWakeIngressAdapter
-	constitutionGate       TurnConstitutionGate
-	turnAuditSink          func(TurnAudit)
-	interactiveDMAssembler interactiveDMTurnAssembler
-	maintenanceAssembler   maintenanceTurnAssembler
-	operationalAlertMu     sync.Mutex
-	operationalAlerts      map[string]operationalAlertState
-	operationalAlertClock  func() time.Time
-	operationalAlertWindow time.Duration
-	sessionMu              sync.Mutex
-	sessionLocks           map[string]*sessionLock
-	promptStableCache      *promptStableContextCache
-	statusReadableMu       sync.Mutex
-	statusReadableProvider agent.Provider
-	statusReadableReady    bool
-	tailnetBackend         tailnet.Backend
-	tailnetParentStatus    func() core.TailnetParentStatus
-	modelProviderMu        sync.Mutex
-	modelProviderCache     map[string]agent.Provider
-	streamControlMu        sync.Mutex
-	streamControls         map[string]activeStreamControl
-	streamControlSeq       atomic.Uint64
-	faceModelsMu           sync.Mutex
-	recipeMu               sync.Mutex
-	recipeFileMu           sync.Mutex
-	recipePath             string
-	recipeState            runtimeRecipeState
-	shuttingDown           atomic.Bool
-	startupRecoveryWG      sync.WaitGroup
-	backgroundLoopsWG      sync.WaitGroup
-	modelProviderSF        singleflight.Group
-	buildProviderHook      func(*config.Config, core.ModelSlotConfig) (agent.Provider, error)
+	scopeResolver           *sandbox.Resolver
+	durableGroupChild       durableGroupChildExecutor
+	durableWakeChild        durableWakeChildExecutor
+	durableWakeAdapters     []durableWakeIngressAdapter
+	constitutionGate        TurnConstitutionGate
+	turnAuditSink           func(TurnAudit)
+	interactiveDMAssembler  interactiveDMTurnAssembler
+	maintenanceAssembler    maintenanceTurnAssembler
+	operationalAlertMu      sync.Mutex
+	operationalAlerts       map[string]operationalAlertState
+	operationalAlertClock   func() time.Time
+	operationalAlertWindow  time.Duration
+	authorityDiscoveryClock func() time.Time
+	sessionMu               sync.Mutex
+	sessionLocks            map[string]*sessionLock
+	promptStableCache       *promptStableContextCache
+	statusReadableMu        sync.Mutex
+	statusReadableProvider  agent.Provider
+	statusReadableReady     bool
+	tailnetBackend          tailnet.Backend
+	tailnetParentStatus     func() core.TailnetParentStatus
+	modelProviderMu         sync.Mutex
+	modelProviderCache      map[string]agent.Provider
+	streamControlMu         sync.Mutex
+	streamControls          map[string]activeStreamControl
+	streamControlSeq        atomic.Uint64
+	faceModelsMu            sync.Mutex
+	recipeMu                sync.Mutex
+	recipeFileMu            sync.Mutex
+	recipePath              string
+	recipeState             runtimeRecipeState
+	shuttingDown            atomic.Bool
+	startupRecoveryWG       sync.WaitGroup
+	backgroundLoopsWG       sync.WaitGroup
+	modelProviderSF         singleflight.Group
+	buildProviderHook       func(*config.Config, core.ModelSlotConfig) (agent.Provider, error)
 }
 
 func (r *Runtime) ConfigureVoice(cfg config.VoiceConfig, transcriber media.TranscriptionProvider, synth voice.Synthesizer) {
@@ -439,16 +440,17 @@ func NewWithInterpretationService(
 			newCodexWorkExecutor(cfg.Work.Codex),
 			nativeWorkExecutor{},
 		}),
-		durableGroupChild:      newSandboxDurableGroupChildExecutor(cfg, store),
-		durableWakeChild:       newSandboxDurableWakeChildExecutor(cfg, store),
-		durableWakeAdapters:    defaultDurableWakeIngressAdapters(),
-		constitutionGate:       DefaultTurnConstitutionGate(),
-		operationalAlerts:      make(map[string]operationalAlertState),
-		operationalAlertClock:  time.Now,
-		operationalAlertWindow: 10 * time.Minute,
-		sessionLocks:           make(map[string]*sessionLock),
-		promptStableCache:      newPromptStableContextCache(),
-		activeTurnCancels:      make(map[int64]*activeTurnRun),
+		durableGroupChild:       newSandboxDurableGroupChildExecutor(cfg, store),
+		durableWakeChild:        newSandboxDurableWakeChildExecutor(cfg, store),
+		durableWakeAdapters:     defaultDurableWakeIngressAdapters(),
+		constitutionGate:        DefaultTurnConstitutionGate(),
+		operationalAlerts:       make(map[string]operationalAlertState),
+		operationalAlertClock:   time.Now,
+		operationalAlertWindow:  10 * time.Minute,
+		authorityDiscoveryClock: time.Now,
+		sessionLocks:            make(map[string]*sessionLock),
+		promptStableCache:       newPromptStableContextCache(),
+		activeTurnCancels:       make(map[int64]*activeTurnRun),
 	}
 	if rt.workExecutor != nil {
 		if native, ok := rt.workExecutor.executors["native"].(nativeWorkExecutor); ok {
