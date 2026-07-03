@@ -144,7 +144,7 @@ func TestClassifyUnknownSegmentStaysConservativeAgainstLowRiskLaterSegments(t *t
 func TestPlanCommandReadOnlyInspectionCanStartWithCd(t *testing.T) {
 	t.Parallel()
 
-	command := `cd /home/sadasant_gmail_com/.aphelion/workspace/worktrees/aphelion-approval-materialization-diagnosis && sed -n '1,260p' runtime/continuation_approval.go && sed -n '1,260p' runtime/continuation_materialize.go && sed -n '2120,2215p' runtime/request_approval_runtime_test.go`
+	command := `cd /workspace/aphelion && sed -n '1,260p' runtime/continuation_approval.go && sed -n '1,260p' runtime/continuation_materialize.go && sed -n '2120,2215p' runtime/request_approval_runtime_test.go`
 	plan := PlanCommand(command)
 	if plan.Dynamic || plan.MultipleAuthorities {
 		t.Fatalf("PlanCommand(live inspection) = %#v, want bounded read-only plan", plan)
