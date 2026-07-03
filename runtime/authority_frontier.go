@@ -98,6 +98,21 @@ func (r *Runtime) expireLookaheadAllowancesWithSilence(adminChatID int64, now ti
 	return nil
 }
 
+func (r *Runtime) sweepExpiredLookaheadAllowancesWithSilence(now time.Time) error {
+	if r == nil || r.store == nil || r.cfg == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = r.authorityDiscoveryNow()
+	}
+	for _, adminChatID := range uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs) {
+		if err := r.expireLookaheadAllowancesWithSilence(adminChatID, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Runtime) recordLookaheadSilenceObservation(key session.SessionKey, allowance session.LookaheadAllowance, now time.Time) error {
 	if r == nil || r.store == nil || strings.TrimSpace(allowance.EntryID) == "" {
 		return nil

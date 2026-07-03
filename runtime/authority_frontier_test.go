@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -220,6 +221,70 @@ func TestAuthorityFrontierStatusStampsExpiredUnreviewedSilence(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("observations = %#v, want expired_unreviewed silence actor", projection.Observations)
+	}
+}
+
+func TestAuthorityFrontierSweepStampsSleepingOperatorSilence(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	now := time.Date(2026, 7, 3, 14, 30, 0, 0, time.UTC)
+	entry, err := store.RecordIdentificationLedgerEntry(session.IdentificationLedgerEntryInput{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		StepRef:     "step:sleeping-operator-sweep",
+		ShapeHash:   "shape:sweep",
+		LabelRef:    "authbundle-sweep",
+		Status:      session.IdentificationLedgerStatusProposed,
+		ExpiresAt:   now.Add(-time.Minute),
+		CreatedAt:   now.Add(-time.Hour),
+		UpdatedAt:   now.Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry() err = %v", err)
+	}
+	allowance, reserved, err := store.ReserveLookaheadAllowance(1001, 302, session.SessionIDForKey(key), session.SessionIDForKey(key), MaxOutstandingLookaheadApprovalFrontiers, now.Add(-time.Hour), now.Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("ReserveLookaheadAllowance() err = %v", err)
+	}
+	if !reserved {
+		t.Fatal("ReserveLookaheadAllowance() reserved = false")
+	}
+	if err := store.BindLookaheadAllowance(allowance.AllowanceID, "next:sweep", entry.EntryID, now.Add(-59*time.Minute)); err != nil {
+		t.Fatalf("BindLookaheadAllowance() err = %v", err)
+	}
+
+	rt := &Runtime{
+		store: store,
+		cfg: &config.Config{Principals: config.PrincipalsConfig{
+			Telegram: config.TelegramPrincipalsConfig{AdminUserIDs: []int64{1001}},
+		}},
+		authorityDiscoveryClock: func() time.Time { return now },
+	}
+	if err := rt.sweepExpiredLookaheadAllowancesWithSilence(now); err != nil {
+		t.Fatalf("sweepExpiredLookaheadAllowancesWithSilence() err = %v", err)
+	}
+	projection := authorityFrontierLedgerProjectionByEntryID(t, store, key, entry.EntryID)
+	if projection.Entry.Status != session.IdentificationLedgerStatusExpired {
+		t.Fatalf("entry status = %q, want expired after background sweep", projection.Entry.Status)
+	}
+	found := false
+	for _, observation := range projection.Observations {
+		if observation.ActorKind == "operator_absence" &&
+			observation.ActorPrincipal == "silence" &&
+			observation.ActorAction == "expired_unreviewed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("observations = %#v, want background sweep to stamp operator silence", projection.Observations)
 	}
 }
 

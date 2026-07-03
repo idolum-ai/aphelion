@@ -131,6 +131,9 @@ func (r *Runtime) simulateLookaheadRecoveryApprovalActions(frontier lookaheadAut
 			return nil, result, err
 		}
 		if !executable {
+			if err := r.retireLookaheadPublishedAction(key, action, "lookahead_not_executable", now); err != nil {
+				return nil, result, err
+			}
 			result.Reason = "no_materializable_simulated_phase_cluster"
 			return nil, result, nil
 		}
@@ -161,6 +164,9 @@ func (r *Runtime) simulateLookaheadRecoveryApprovalActions(frontier lookaheadAut
 			return nil, result, err
 		}
 		if !executable {
+			if err := r.retireLookaheadPublishedAction(key, action, "lookahead_not_executable", now); err != nil {
+				return nil, result, err
+			}
 			continue
 		}
 		simulated := LookaheadSimulationResult{
@@ -182,6 +188,19 @@ func (r *Runtime) simulateLookaheadRecoveryApprovalActions(frontier lookaheadAut
 		return nil, result, nil
 	}
 	return selections, selections[0].Simulation, nil
+}
+
+func (r *Runtime) retireLookaheadPublishedAction(key session.SessionKey, action session.NextActionRecord, reason string, now time.Time) error {
+	if r == nil || r.store == nil || strings.TrimSpace(action.RecordID) == "" {
+		return nil
+	}
+	return r.store.ResolveNextAction(session.NextActionResolutionInput{
+		Key:        key,
+		RecordID:   action.RecordID,
+		Owner:      "lookahead",
+		Reason:     reason,
+		ResolvedAt: now,
+	})
 }
 
 func (r *Runtime) nextLookaheadPhaseCapabilityCollision(opState session.OperationState, now time.Time) (session.OperationPhase, []session.CapabilityGrantSpec, bool, error) {
@@ -293,7 +312,7 @@ func (r *Runtime) publishLookaheadPhaseAuthorityBundleCluster(key session.Sessio
 		StopConditions:           lookaheadPhaseClusterStopConditions(phases),
 		RequiredCapabilityGrants: grants,
 		Components:               components,
-		ExpiresAt:                now.Add(30 * time.Minute),
+		ExpiresAt:                now.Add(session.DefaultLookaheadAllowanceTTL),
 		CreatedAt:                now,
 	})
 	if err != nil {
@@ -353,7 +372,7 @@ func (r *Runtime) publishLookaheadPhaseAuthorityBundle(key session.SessionKey, o
 			Subject:    "operation",
 			SubjectRef: strings.TrimSpace(opState.ID),
 		}},
-		ExpiresAt: now.Add(30 * time.Minute),
+		ExpiresAt: now.Add(session.DefaultLookaheadAllowanceTTL),
 		CreatedAt: now,
 	})
 	if err != nil {

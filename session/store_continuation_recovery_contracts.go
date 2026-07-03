@@ -80,7 +80,7 @@ func recordContinuationRecoveryIdentificationTx(tx *sql.Tx, contract Continuatio
 		return nil
 	}
 	planID := IdentificationPlanIDForSession(contract.SessionID)
-	stepRef, err := continuationRecoveryIdentificationStepRefTx(tx, planID, IdentificationDefaultPlanVersion, contract.SessionID, contract.SubjectRef, shapeHash, record)
+	stepRef, err := continuationRecoveryIdentificationStepRefTx(tx, planID, IdentificationDefaultPlanVersion, contract.SessionID, contract.SubjectRef, shapeHash, contract.ContractID, record)
 	if err != nil {
 		return err
 	}
@@ -138,7 +138,7 @@ func recordContinuationRecoveryIdentificationTx(tx *sql.Tx, contract Continuatio
 	return nil
 }
 
-func continuationRecoveryIdentificationStepRefTx(tx *sql.Tx, planID string, planVersion string, sessionID string, baseStepRef string, shapeHash string, record NextActionRecord) (string, error) {
+func continuationRecoveryIdentificationStepRefTx(tx *sql.Tx, planID string, planVersion string, sessionID string, baseStepRef string, shapeHash string, labelRef string, record NextActionRecord) (string, error) {
 	baseStepRef = strings.TrimSpace(baseStepRef)
 	if baseStepRef == "" {
 		baseStepRef = "continuation_recovery"
@@ -148,14 +148,22 @@ func continuationRecoveryIdentificationStepRefTx(tx *sql.Tx, planID string, plan
 	if err != nil || !ok {
 		return baseStepRef, err
 	}
-	if existing.Status == IdentificationLedgerStatusApproved || identificationLedgerEntryTerminalStatus(existing.Status) {
-		collisionID := strings.TrimSpace(record.RecordID)
-		if collisionID == "" {
-			collisionID = fmt.Sprintf("%d", record.CreatedAt.UTC().UnixNano())
-		}
-		return baseStepRef + "#collision:" + collisionID, nil
+	existingLabel := strings.TrimSpace(existing.LabelRef)
+	nextLabel := strings.TrimSpace(labelRef)
+	if existing.Status == IdentificationLedgerStatusApproved ||
+		identificationLedgerEntryTerminalStatus(existing.Status) ||
+		(existingLabel != "" && nextLabel != "" && existingLabel != nextLabel) {
+		return generatedContinuationRecoveryIdentificationStepRef(baseStepRef, record), nil
 	}
 	return baseStepRef, nil
+}
+
+func generatedContinuationRecoveryIdentificationStepRef(baseStepRef string, record NextActionRecord) string {
+	collisionID := strings.TrimSpace(record.RecordID)
+	if collisionID == "" {
+		collisionID = fmt.Sprintf("%d", record.CreatedAt.UTC().UnixNano())
+	}
+	return strings.TrimSpace(baseStepRef) + "#collision:" + collisionID
 }
 
 func upsertContinuationRecoveryContractTx(tx *sql.Tx, input ContinuationRecoveryContract) (ContinuationRecoveryContract, error) {

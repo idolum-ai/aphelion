@@ -21,7 +21,7 @@ func (s *SQLiteStore) ReserveLookaheadAllowance(adminChatID int64, reviewEventID
 	}
 	now = now.UTC()
 	if expiresAt.IsZero() {
-		expiresAt = now.Add(30 * time.Minute)
+		expiresAt = now.Add(DefaultLookaheadAllowanceTTL)
 	}
 	allowanceID, err := NewLookaheadAllowanceID()
 	if err != nil {

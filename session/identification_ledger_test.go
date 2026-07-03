@@ -231,6 +231,78 @@ func TestIdentificationLedgerImplicitObservationDoesNotDowngradeLifecycleStatus(
 	}
 }
 
+func TestIdentificationLedgerRejectsScalarLabelRewrite(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:review-next-grant",
+		ShapeHash:   "sha256:review-shape",
+		LabelRef:    "authbundle-first",
+		Status:      IdentificationLedgerStatusProposed,
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(entryInput); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(first) err = %v", err)
+	}
+	rewrite := entryInput
+	rewrite.LabelRef = "authbundle-second"
+	if _, err := store.RecordIdentificationLedgerEntry(rewrite); err == nil || !strings.Contains(err.Error(), "cannot rewrite label_ref") {
+		t.Fatalf("RecordIdentificationLedgerEntry(rewrite) err = %v, want label rewrite rejection", err)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 1 || projections[0].Entry.LabelRef != "authbundle-first" {
+		t.Fatalf("projections = %#v, want original label preserved", projections)
+	}
+}
+
+func TestIdentificationLedgerCanQueryUnidentifiedStatus(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	base := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		ShapeHash:   "sha256:shape",
+	}
+	unidentified := base
+	unidentified.StepRef = "step:unknown"
+	unidentified.Status = IdentificationLedgerStatusUnidentified
+	if _, err := store.RecordIdentificationLedgerEntry(unidentified); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(unidentified) err = %v", err)
+	}
+	partial := base
+	partial.StepRef = "step:partial"
+	partial.Status = IdentificationLedgerStatusPartial
+	if _, err := store.RecordIdentificationLedgerEntry(partial); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(partial) err = %v", err)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      base.PlanID,
+		PlanVersion: base.PlanVersion,
+		SessionID:   base.SessionID,
+		Status:      IdentificationLedgerStatusUnidentified,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries(unidentified) err = %v", err)
+	}
+	if len(projections) != 1 || projections[0].Entry.Status != IdentificationLedgerStatusUnidentified {
+		t.Fatalf("unidentified projections = %#v, want only unidentified entry", projections)
+	}
+}
+
 func TestIdentificationLedgerExpiryExtensionRequiresExplicitLifecycleStatus(t *testing.T) {
 	t.Parallel()
 
@@ -517,7 +589,7 @@ func TestContinuationRecoveryPublicationRecordsIdentificationLedgerCollision(t *
 	}
 }
 
-func TestContinuationRecoveryPublicationCoalescesSameShapeAcrossRequestInstances(t *testing.T) {
+func TestContinuationRecoveryPublicationSplitsSameShapeAcrossDifferentContracts(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSQLiteStore(t)
@@ -579,15 +651,34 @@ func TestContinuationRecoveryPublicationCoalescesSameShapeAcrossRequestInstances
 	if err != nil {
 		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
 	}
-	if len(projections) != 1 {
-		t.Fatalf("entries = %#v, want one reusable shape entry", projections)
+	if len(projections) != 2 {
+		t.Fatalf("entries = %#v, want one generated entry per exact contract", projections)
 	}
-	contractObservations := projections[0].Properties[IdentificationPropertyContract]
-	if len(contractObservations) != 2 {
-		t.Fatalf("contract observations = %#v, want both request instances under one shape", contractObservations)
+	shapeHash := AuthorityShapeHashForContinuationRecoveryContract(contracts[0])
+	found := map[string]IdentificationLedgerProjection{}
+	for _, projection := range projections {
+		if projection.Entry.ShapeHash != shapeHash {
+			t.Fatalf("entry shape hash = %q, want reusable shape %q", projection.Entry.ShapeHash, shapeHash)
+		}
+		if projection.Entry.ShapeHash == contracts[0].ContractHash || projection.Entry.ShapeHash == contracts[1].ContractHash {
+			t.Fatalf("entry shape hash %q should not equal either instance contract hash", projection.Entry.ShapeHash)
+		}
+		found[projection.Entry.LabelRef] = projection
 	}
-	if projections[0].Entry.ShapeHash == contracts[0].ContractHash || projections[0].Entry.ShapeHash == contracts[1].ContractHash {
-		t.Fatalf("entry shape hash %q should not equal either instance contract hash", projections[0].Entry.ShapeHash)
+	for i, contract := range contracts {
+		projection, ok := found[contract.ContractID]
+		if !ok {
+			t.Fatalf("entries = %#v, want label %s", projections, contract.ContractID)
+		}
+		if i == 0 && projection.Entry.StepRef != subjectRef {
+			t.Fatalf("first step_ref = %q, want base subject ref", projection.Entry.StepRef)
+		}
+		if i == 1 && !strings.HasPrefix(projection.Entry.StepRef, subjectRef+"#collision:") {
+			t.Fatalf("second step_ref = %q, want generated collision step", projection.Entry.StepRef)
+		}
+		if got := len(projection.Properties[IdentificationPropertyContract]); got != 1 {
+			t.Fatalf("contract observations for %s = %d, want one exact contract observation", contract.ContractID, got)
+		}
 	}
 }
 

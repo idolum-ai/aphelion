@@ -1053,6 +1053,15 @@ func TestReviewEventLookaheadSimulationMaterializationFailureDoesNotLeavePropose
 			t.Fatalf("ledger projections = %#v, want no proposed simulated token without materialized card", projections)
 		}
 	}
+	open, err := store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	for _, action := range open {
+		if action.Owner == "lookahead" && action.OperationKind == "authority_bundle_request" {
+			t.Fatalf("open next actions = %#v, want simulated lookahead action retired after materialization failure", open)
+		}
+	}
 }
 
 func TestLookaheadAuthorityFrontierSplitsSameStepDifferentAuthorityBundles(t *testing.T) {

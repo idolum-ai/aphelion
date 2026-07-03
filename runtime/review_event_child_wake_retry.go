@@ -52,7 +52,7 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 	} else if response != "" {
 		return response, nil
 	}
-	allowance, reserved, err := r.store.ReserveLookaheadAllowance(event.TargetAdminChatID, event.ID, event.SourceSessionID, event.TargetSessionID, MaxOutstandingLookaheadApprovalFrontiers, now, now.Add(30*time.Minute))
+	allowance, reserved, err := r.store.ReserveLookaheadAllowance(event.TargetAdminChatID, event.ID, event.SourceSessionID, event.TargetSessionID, MaxOutstandingLookaheadApprovalFrontiers, now, now.Add(session.DefaultLookaheadAllowanceTTL))
 	if err != nil {
 		return "", err
 	}
@@ -116,12 +116,18 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 		return "", err
 	}
 	if handled && !materialized {
+		if err := r.retireLookaheadPublishedAction(key, action, "lookahead_not_materialized", now); err != nil {
+			return "", err
+		}
 		if err := r.releaseLookaheadAllowanceOrRecord(key, allowance.AllowanceID, "stale_or_unhandled", now); err != nil {
 			return "", err
 		}
 		return "Next authority frontier is no longer materializable. No authority was approved or executed.", nil
 	}
 	if !materialized {
+		if err := r.retireLookaheadPublishedAction(key, action, "lookahead_not_materialized", now); err != nil {
+			return "", err
+		}
 		if err := r.releaseLookaheadAllowanceOrRecord(key, allowance.AllowanceID, "not_materialized", now); err != nil {
 			return "", err
 		}

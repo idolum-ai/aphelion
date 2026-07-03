@@ -25,12 +25,12 @@ const (
 )
 
 type durableAgentNaturalMenuToken struct {
-	TokenID       string
-	AgentID       string
-	Kind          durableAgentNaturalMenuTokenKind
-	Notes         string
-	Score         int
-	AuthorityMenu AuthorityDiscoveryMenu
+	TokenID        string
+	AgentID        string
+	Kind           durableAgentNaturalMenuTokenKind
+	Notes          string
+	Score          int
+	AuthorityState AuthorityDiscoveryTokenState
 }
 
 func (r *Runtime) maybeHandleNaturalDurableAgentRequest(ctx context.Context, key session.SessionKey, actor principal.Principal, msg core.InboundMessage, tools agent.ToolRegistry) (bool, *core.TurnResult, error) {
@@ -55,7 +55,10 @@ func (r *Runtime) maybeHandleNaturalDurableAgentRequest(ctx context.Context, key
 	if err != nil || !ok {
 		return false, nil, err
 	}
-	token, ok := r.selectNaturalDurableAgentMenuToken(key, *agentRow, text)
+	token, ok, err := r.selectNaturalDurableAgentMenuToken(key, *agentRow, text)
+	if err != nil {
+		return false, nil, err
+	}
 	if !ok {
 		return false, nil, nil
 	}
@@ -71,10 +74,13 @@ func (r *Runtime) maybeHandleNaturalDurableAgentRequest(ctx context.Context, key
 	}
 }
 
-func (r *Runtime) selectNaturalDurableAgentMenuToken(key session.SessionKey, agentRow core.DurableAgent, text string) (durableAgentNaturalMenuToken, bool) {
-	tokens := r.compileNaturalDurableAgentMenu(key, agentRow, text)
+func (r *Runtime) selectNaturalDurableAgentMenuToken(key session.SessionKey, agentRow core.DurableAgent, text string) (durableAgentNaturalMenuToken, bool, error) {
+	tokens, err := r.compileNaturalDurableAgentMenu(key, agentRow, text)
+	if err != nil {
+		return durableAgentNaturalMenuToken{}, false, err
+	}
 	if len(tokens) == 0 {
-		return durableAgentNaturalMenuToken{}, false
+		return durableAgentNaturalMenuToken{}, false, nil
 	}
 	sort.SliceStable(tokens, func(i, j int) bool {
 		if tokens[i].Score == tokens[j].Score {
@@ -83,45 +89,100 @@ func (r *Runtime) selectNaturalDurableAgentMenuToken(key session.SessionKey, age
 		return tokens[i].Score > tokens[j].Score
 	})
 	if len(tokens) > 1 && tokens[0].Score == tokens[1].Score {
-		return durableAgentNaturalMenuToken{}, false
+		return durableAgentNaturalMenuToken{}, false, nil
 	}
-	return tokens[0], true
+	return tokens[0], true, nil
 }
 
-func (r *Runtime) compileNaturalDurableAgentMenu(key session.SessionKey, agentRow core.DurableAgent, text string) []durableAgentNaturalMenuToken {
+func (r *Runtime) compileNaturalDurableAgentMenu(key session.SessionKey, agentRow core.DurableAgent, text string) ([]durableAgentNaturalMenuToken, error) {
 	agentID := strings.TrimSpace(agentRow.AgentID)
 	text = strings.TrimSpace(text)
 	if agentID == "" || text == "" {
-		return nil
-	}
-	authorityMenu := AuthorityDiscoveryMenu{}
-	if r != nil && r.store != nil {
-		if menu, err := r.BuildAuthorityDiscoveryMenu(AuthorityDiscoveryMenuBuildInput{Key: key, Now: time.Now().UTC(), Limit: 50}); err == nil {
-			authorityMenu = menu
-		}
+		return nil, nil
 	}
 	var tokens []durableAgentNaturalMenuToken
 	if score := durableAgentNaturalBehaviorTokenScore(text); score > 0 {
 		tokens = append(tokens, durableAgentNaturalMenuToken{
-			TokenID:       "durable_child:" + agentID + ":behavior_update",
-			AgentID:       agentID,
-			Kind:          durableAgentNaturalTokenBehaviorUpdate,
-			Notes:         text,
-			Score:         score,
-			AuthorityMenu: authorityMenu,
+			TokenID: "durable_child:" + agentID + ":behavior_update",
+			AgentID: agentID,
+			Kind:    durableAgentNaturalTokenBehaviorUpdate,
+			Notes:   text,
+			Score:   score,
 		})
 	}
 	if score := durableAgentNaturalReportTokenScore(text); score > 0 {
+		authorityState, err := r.naturalDurableAgentWakeAuthorityState(key, agentID)
+		if err != nil {
+			return nil, err
+		}
 		tokens = append(tokens, durableAgentNaturalMenuToken{
-			TokenID:       "durable_child:" + agentID + ":report_request",
-			AgentID:       agentID,
-			Kind:          durableAgentNaturalTokenReportRequest,
-			Notes:         text,
-			Score:         score,
-			AuthorityMenu: authorityMenu,
+			TokenID:        "durable_child:" + agentID + ":report_request",
+			AgentID:        agentID,
+			Kind:           durableAgentNaturalTokenReportRequest,
+			Notes:          text,
+			Score:          score + naturalDurableAgentAuthorityScoreDelta(authorityState),
+			AuthorityState: authorityState,
 		})
 	}
-	return tokens
+	return tokens, nil
+}
+
+func (r *Runtime) naturalDurableAgentWakeAuthorityState(key session.SessionKey, agentID string) (AuthorityDiscoveryTokenState, error) {
+	if r == nil || r.store == nil {
+		return AuthorityDiscoveryTokenUnknown, nil
+	}
+	menu, err := r.BuildAuthorityDiscoveryMenu(AuthorityDiscoveryMenuBuildInput{Key: key, Now: time.Now().UTC(), Limit: 50})
+	if err != nil {
+		return AuthorityDiscoveryTokenUnknown, err
+	}
+	wakeShape := session.AuthorityShapeHash(session.AuthorityShapeInput{
+		Tool:          "durable_agent",
+		Action:        "wake_once",
+		LeaseClass:    session.ContinuationLeaseClassChildWake,
+		ResourceClass: "durable_agent",
+	})
+	wantResource := "durable_agent:" + strings.TrimSpace(agentID)
+	best := AuthorityDiscoveryTokenUnknown
+	for _, token := range menu.Tokens {
+		if strings.TrimSpace(token.ShapeHash) != wakeShape {
+			continue
+		}
+		resources := token.Properties[session.IdentificationPropertyResource]
+		if len(resources) > 0 && !stringSliceContains(resources, wantResource) {
+			continue
+		}
+		best = bestAuthorityDiscoveryTokenState(best, token.State)
+	}
+	return best, nil
+}
+
+func naturalDurableAgentAuthorityScoreDelta(state AuthorityDiscoveryTokenState) int {
+	switch state {
+	case AuthorityDiscoveryTokenExecutable:
+		return 5
+	case AuthorityDiscoveryTokenOneApprovalAway, AuthorityDiscoveryTokenPartial:
+		return 2
+	case AuthorityDiscoveryTokenExpired, AuthorityDiscoveryTokenInvalid, AuthorityDiscoveryTokenSpent:
+		return -10
+	default:
+		return 0
+	}
+}
+
+func bestAuthorityDiscoveryTokenState(current AuthorityDiscoveryTokenState, next AuthorityDiscoveryTokenState) AuthorityDiscoveryTokenState {
+	rank := map[AuthorityDiscoveryTokenState]int{
+		AuthorityDiscoveryTokenUnknown:         0,
+		AuthorityDiscoveryTokenInvalid:         1,
+		AuthorityDiscoveryTokenExpired:         1,
+		AuthorityDiscoveryTokenSpent:           1,
+		AuthorityDiscoveryTokenPartial:         2,
+		AuthorityDiscoveryTokenOneApprovalAway: 3,
+		AuthorityDiscoveryTokenExecutable:      4,
+	}
+	if rank[next] > rank[current] {
+		return next
+	}
+	return current
 }
 
 func (r *Runtime) resolveNaturalDurableAgentMention(text string) (*core.DurableAgent, bool, error) {

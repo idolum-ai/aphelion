@@ -123,7 +123,7 @@ func (s *SQLiteStore) IdentificationLedgerEntries(query IdentificationLedgerQuer
 		where = append(where, "label_ref = ?")
 		args = append(args, query.LabelRef)
 	}
-	if query.Status != "" && query.Status != IdentificationLedgerStatusUnidentified {
+	if query.Status != "" {
 		where = append(where, "status = ?")
 		args = append(args, string(query.Status))
 	}
@@ -215,7 +215,10 @@ func recordIdentificationLedgerEntryTx(tx *sql.Tx, input IdentificationLedgerEnt
 		if updatedAt.Before(existing.UpdatedAt) {
 			updatedAt = existing.UpdatedAt
 		}
-		labelRef := firstNonEmptyStore(input.LabelRef, existing.LabelRef)
+		labelRef, err := identificationLedgerMergedLabelRef(existing, input)
+		if err != nil {
+			return IdentificationLedgerEntry{}, err
+		}
 		status := existing.Status
 		if statusExplicit {
 			status = input.Status
@@ -358,6 +361,19 @@ func identificationObservationMergedExpiry(existing time.Time, requested time.Ti
 
 func identificationLedgerEntryStatusExplicit(input IdentificationLedgerEntryInput) bool {
 	return strings.TrimSpace(string(input.Status)) != ""
+}
+
+func identificationLedgerMergedLabelRef(existing IdentificationLedgerEntry, input IdentificationLedgerEntryInput) (string, error) {
+	existingLabel := strings.TrimSpace(existing.LabelRef)
+	inputLabel := strings.TrimSpace(input.LabelRef)
+	switch {
+	case existingLabel == "":
+		return inputLabel, nil
+	case inputLabel == "" || inputLabel == existingLabel:
+		return existingLabel, nil
+	default:
+		return "", fmt.Errorf("identification ledger entry %s cannot rewrite label_ref from %q to %q", existing.EntryID, existingLabel, inputLabel)
+	}
 }
 
 func identificationLedgerEntryMergedExpiry(existing IdentificationLedgerEntry, input IdentificationLedgerEntryInput, statusExplicit bool) (time.Time, error) {

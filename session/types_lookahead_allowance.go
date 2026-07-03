@@ -20,6 +20,8 @@ const (
 	LookaheadAllowanceExpired  LookaheadAllowanceStatus = "expired"
 )
 
+const DefaultLookaheadAllowanceTTL = 30 * time.Minute
+
 type LookaheadAllowance struct {
 	AllowanceID        string
 	AdminChatID        int64
