@@ -149,7 +149,9 @@ be discovered by typed collision, static analysis, operator review, or
 frontier-bound lookahead. Lookahead should be metered by unresolved speculative
 frontiers, not by hidden trust in model restraint; a full meter should stop
 projection before it publishes another candidate, and should never approve or
-execute authority.
+execute authority. The meter itself should be a typed operator projection, not a
+private runtime counter, so the operator can inspect what speculative authority
+is trailing a long plan.
 
 Unknown edge cases are expected. The answer is not to pretend every phrase can
 be exhaustively matched; the answer is to preserve enough structure, evidence,

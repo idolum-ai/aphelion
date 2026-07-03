@@ -261,6 +261,9 @@ func (c telegramCommandControl) TailnetSurfaces(senderID int64) ([]core.TailnetS
 func (c telegramCommandControl) TailnetGrantBindings(senderID int64) ([]core.TailnetGrantBindingStatus, error) {
 	return c.controlFacade().TailnetGrantBindings(senderID)
 }
+func (c telegramCommandControl) AuthorityFrontierStatus(ctx context.Context, senderID int64) (core.AuthorityFrontierStatusSnapshot, error) {
+	return c.controlFacade().AuthorityFrontierStatus(ctx, senderID)
+}
 func (c telegramCommandControl) RevokeTailnetSurface(ctx context.Context, senderID int64, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error) {
 	return c.controlFacade().RevokeTailnetSurface(ctx, senderID, surfaceID, reason)
 }

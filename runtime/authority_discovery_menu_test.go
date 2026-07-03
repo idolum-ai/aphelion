@@ -297,6 +297,7 @@ func TestReviewEventLookaheadSimulatesNextPhaseCapabilityGrant(t *testing.T) {
 	if !found {
 		t.Fatalf("ledger projections = %#v, want simulated operation-phase lookahead entry", projections)
 	}
+	assertLookaheadLabelsWithoutApprovalHaveNoExecutionEvents(t, store, key)
 }
 
 func TestReviewEventLookaheadSimulatesBoundedPhaseFrontierCluster(t *testing.T) {
@@ -429,6 +430,159 @@ func TestReviewEventLookaheadSimulatesBoundedPhaseFrontierCluster(t *testing.T) 
 	}
 	if proposed != 1 || operatorObservations != 1 {
 		t.Fatalf("proposed=%d operatorObservations=%d projections=%#v, want one clustered ledgered lookahead approval with operator provenance", proposed, operatorObservations, projections)
+	}
+}
+
+func TestAuthorityDiscoverySacrificeDemoAuditsApprovalExecutionAndRelease(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	now := time.Date(2099, 7, 3, 14, 0, 0, 0, time.UTC)
+	rt.authorityDiscoveryClock = func() time.Time { return now }
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-sacrifice-demo",
+		Objective: "Demonstrate a bounded local irreversible effect without external IO.",
+		Status:    session.OperationStatusBlocked,
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "plan-sacrifice-demo",
+			Goal:           "Show the whole identification frontier theorem.",
+			CurrentPhaseID: "phase-sacrifice",
+			Phases: []session.OperationPhase{{
+				ID:             "phase-sacrifice",
+				Summary:        "Commit one fake local irreversible effect record.",
+				Status:         session.PlanStatusPending,
+				AllowedActions: []string{"fake_irreversible_effect"},
+				ValidationPlan: []string{"record exactly one fake effect attempt and stop"},
+				RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+					Kind:           session.CapabilityKindGenericDelegation,
+					TargetResource: "workspace:/tmp/aphelion-sacrifice-demo",
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"fake_irreversible_effect"},
+					Contract:       `{"bounded_effect":"Record one fake local irreversible effect only."}`,
+					Constraints:    `{"path":"/tmp/aphelion-sacrifice-demo","fake":true}`,
+				}},
+			}},
+		},
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	event := session.ReviewEvent{
+		ID:                193,
+		SourceSessionID:   session.SessionIDForKey(key),
+		TargetSessionID:   session.SessionIDForKey(key),
+		TargetAdminChatID: 1001,
+		Status:            "delivered",
+		DeliveryMessageID: 193,
+	}
+	text, err := rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-lookahead-sacrifice-demo",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 193, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionLookaheadNext),
+	}, event, core.ReviewEventActionLookaheadNext)
+	if err != nil {
+		t.Fatalf("HandleReviewEventAction(sacrifice lookahead) err = %v", err)
+	}
+	if !strings.Contains(text, "approval surfaced") || !strings.Contains(text, "No authority was approved or executed") {
+		t.Fatalf("lookahead text = %q, want surfaced non-executing approval", text)
+	}
+	assertLookaheadLabelsWithoutApprovalHaveNoExecutionEvents(t, store, key)
+	beforeApproval, err := rt.AuthorityFrontierStatus(context.Background(), 1001)
+	if err != nil {
+		t.Fatalf("AuthorityFrontierStatus(before approval) err = %v", err)
+	}
+	if beforeApproval.Used != 1 || beforeApproval.Open != 1 {
+		t.Fatalf("frontier before approval = %#v, want one open slot", beforeApproval)
+	}
+	entry := singleLookaheadLedgerEntry(t, store, key)
+	labelRef := entry.LabelRef
+	if labelRef == "" {
+		t.Fatalf("lookahead entry = %#v, want label ref", entry)
+	}
+
+	approvedAt := now.Add(time.Minute)
+	if err := rt.recordAuthorityDiscoveryOperatorObservationForLabel(key, labelRef, "telegram:1001", "approve_continuation", approvedAt); err != nil {
+		t.Fatalf("recordAuthorityDiscoveryOperatorObservationForLabel() err = %v", err)
+	}
+	if err := rt.markAuthorityDiscoveryLabelStatus(key, labelRef, session.IdentificationLedgerStatusApproved, now.Add(30*time.Minute), approvedAt); err != nil {
+		t.Fatalf("markAuthorityDiscoveryLabelStatus(approved) err = %v", err)
+	}
+	afterApproval, err := rt.AuthorityFrontierStatus(context.Background(), 1001)
+	if err != nil {
+		t.Fatalf("AuthorityFrontierStatus(after approval) err = %v", err)
+	}
+	if afterApproval.Used != 0 || afterApproval.Empty != MaxOutstandingLookaheadApprovalFrontiers {
+		t.Fatalf("frontier after approval = %#v, want released meter", afterApproval)
+	}
+
+	executedAt := now.Add(2 * time.Minute)
+	if _, err := store.AppendExecutionEvent(key, session.ExecutionEventInput{
+		EventType:   core.ExecutionEventWorkExecutorStarted,
+		Stage:       "work",
+		Status:      "started",
+		PayloadJSON: fmt.Sprintf(`{"label_ref":%q,"effect":"fake_irreversible_effect"}`, labelRef),
+		CreatedAt:   executedAt,
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvent(work started) err = %v", err)
+	}
+	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+		Key:                 key,
+		TurnRunID:           501,
+		OperationID:         "op-sacrifice-demo",
+		PhaseID:             "phase-sacrifice",
+		WorkMode:            "fake_irreversible",
+		Executor:            "test",
+		Tool:                "effect_attempt",
+		Command:             "record fake irreversible effect",
+		EffectKind:          "fake_irreversible_effect",
+		EffectReason:        "sacrifice demo",
+		BoundaryKind:        "approved_authority_bundle",
+		AuthorizationReason: labelRef,
+		SubjectJSON:         fmt.Sprintf(`{"label_ref":%q}`, labelRef),
+		Status:              session.EffectAttemptStatusExecuted,
+		EvidenceRefs:        []string{"authority_label:" + labelRef},
+		StartedAt:           executedAt,
+		CompletedAt:         executedAt,
+		UpdatedAt:           executedAt,
+	}); err != nil {
+		t.Fatalf("UpsertEffectAttempt() err = %v", err)
+	}
+	if err := rt.markAuthorityDiscoveryLabelStatus(key, labelRef, session.IdentificationLedgerStatusConsumed, time.Time{}, now.Add(3*time.Minute)); err != nil {
+		t.Fatalf("markAuthorityDiscoveryLabelStatus(consumed) err = %v", err)
+	}
+	projection := ledgerProjectionForLabel(t, store, key, labelRef)
+	if projection.Entry.Status != session.IdentificationLedgerStatusConsumed {
+		t.Fatalf("ledger status = %q, want consumed", projection.Entry.Status)
+	}
+	assertLedgerProjectionHasOperatorAction(t, projection, "telegram:1001", string(core.ReviewEventActionLookaheadNext))
+	assertLedgerProjectionHasOperatorAction(t, projection, "telegram:1001", "approve_continuation")
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !executionEventsContainLabel(events, core.ExecutionEventWorkExecutorStarted, labelRef) {
+		t.Fatalf("events = %#v, want work executor event tied to label %s", events, labelRef)
 	}
 }
 
@@ -1738,4 +1892,148 @@ func seedLookaheadOperationPhase(t *testing.T, store *session.SQLiteStore, key s
 	}); err != nil {
 		t.Fatalf("UpdateOperationState(%s) err = %v", opID, err)
 	}
+}
+
+func assertLookaheadLabelsWithoutApprovalHaveNoExecutionEvents(t *testing.T, store *session.SQLiteStore, key session.SessionKey) {
+	t.Helper()
+	projections, err := store.IdentificationLedgerEntries(session.IdentificationLedgerQuery{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		Limit:       100,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	var unapprovedLookaheadLabels []string
+	for _, projection := range projections {
+		if strings.TrimSpace(projection.Entry.LabelRef) == "" || !ledgerProjectionHasLookaheadObservation(projection) {
+			continue
+		}
+		if ledgerProjectionHasApprovalObservation(projection) {
+			continue
+		}
+		unapprovedLookaheadLabels = append(unapprovedLookaheadLabels, projection.Entry.LabelRef)
+	}
+	if len(unapprovedLookaheadLabels) == 0 {
+		t.Fatal("no unapproved lookahead labels found for fail-closed assertion")
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	for _, event := range events {
+		if !authorityDiscoveryExecutionBearingEvent(event.EventType) {
+			continue
+		}
+		for _, labelRef := range unapprovedLookaheadLabels {
+			if strings.Contains(event.PayloadJSON, labelRef) {
+				t.Fatalf("execution-bearing event references unapproved lookahead label = %#v label=%s", event, labelRef)
+			}
+		}
+	}
+}
+
+func ledgerProjectionHasLookaheadObservation(projection session.IdentificationLedgerProjection) bool {
+	for _, observation := range projection.Observations {
+		if observation.Method == session.IdentificationObservationLookahead {
+			return true
+		}
+	}
+	return false
+}
+
+func ledgerProjectionHasApprovalObservation(projection session.IdentificationLedgerProjection) bool {
+	for _, observation := range projection.Observations {
+		if observation.Property != session.IdentificationPropertyOperatorAction {
+			continue
+		}
+		if strings.Contains(strings.ToLower(strings.TrimSpace(observation.ActorAction)), "approve") ||
+			strings.Contains(strings.ToLower(strings.TrimSpace(observation.Value)), "approve") {
+			return true
+		}
+	}
+	return false
+}
+
+func authorityDiscoveryExecutionBearingEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case core.ExecutionEventContinuationApproved,
+		core.ExecutionEventContinuationConsumed,
+		core.ExecutionEventToolStarted,
+		core.ExecutionEventToolBatchStarted,
+		core.ExecutionEventWorkExecutorStarted,
+		core.ExecutionEventWorkExecutorSucceeded,
+		core.ExecutionEventAutoApprovalUsed,
+		core.ExecutionEventDurableWakeStarted,
+		core.ExecutionEventCapabilityInvocation:
+		return true
+	default:
+		return false
+	}
+}
+
+func singleLookaheadLedgerEntry(t *testing.T, store *session.SQLiteStore, key session.SessionKey) session.IdentificationLedgerEntry {
+	t.Helper()
+	projections, err := store.IdentificationLedgerEntries(session.IdentificationLedgerQuery{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		Limit:       100,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	var matches []session.IdentificationLedgerEntry
+	for _, projection := range projections {
+		if ledgerProjectionHasLookaheadObservation(projection) {
+			matches = append(matches, projection.Entry)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("lookahead entries = %#v, want exactly one", matches)
+	}
+	return matches[0]
+}
+
+func ledgerProjectionForLabel(t *testing.T, store *session.SQLiteStore, key session.SessionKey, labelRef string) session.IdentificationLedgerProjection {
+	t.Helper()
+	projections, err := store.IdentificationLedgerEntries(session.IdentificationLedgerQuery{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		LabelRef:    labelRef,
+		Limit:       100,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries(label) err = %v", err)
+	}
+	for _, projection := range projections {
+		if projection.Entry.LabelRef == labelRef {
+			return projection
+		}
+	}
+	t.Fatalf("no ledger projection found for label %s in %#v", labelRef, projections)
+	return session.IdentificationLedgerProjection{}
+}
+
+func assertLedgerProjectionHasOperatorAction(t *testing.T, projection session.IdentificationLedgerProjection, actorPrincipal string, actorAction string) {
+	t.Helper()
+	for _, observation := range projection.Observations {
+		if observation.Property == session.IdentificationPropertyOperatorAction &&
+			observation.ActorPrincipal == actorPrincipal &&
+			observation.ActorAction == actorAction {
+			return
+		}
+	}
+	t.Fatalf("projection observations = %#v, want operator action %s by %s", projection.Observations, actorAction, actorPrincipal)
+}
+
+func executionEventsContainLabel(events []session.ExecutionEvent, eventType string, labelRef string) bool {
+	for _, event := range events {
+		if event.EventType == eventType && strings.Contains(event.PayloadJSON, labelRef) {
+			return true
+		}
+	}
+	return false
 }

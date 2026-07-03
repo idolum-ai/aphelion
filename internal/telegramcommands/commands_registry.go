@@ -16,6 +16,7 @@ var defaultTelegramCommands = []telegram.BotCommand{
 	{Command: "health", Description: "Show status, trace, and diagnosis controls"},
 	{Command: "tailnet", Description: "Show tailnet status and controls"},
 	{Command: "agents", Description: "Inspect durable agents and lifecycle controls"},
+	{Command: "frontier", Description: "Show speculative authority frontier slots"},
 	{Command: "context", Description: "Show read-only context and Ask Me"},
 	{Command: "memory", Description: "Show read-only memory state"},
 	{Command: "thread", Description: "Start a side thread from a message"},

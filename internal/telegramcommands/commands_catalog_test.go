@@ -137,6 +137,21 @@ func TestDefaultTelegramCommandsIncludeAgents(t *testing.T) {
 	}
 }
 
+func TestDefaultTelegramCommandsIncludeFrontier(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, cmd := range defaultTelegramCommands {
+		if cmd.Command == "frontier" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("defaultTelegramCommands = %#v, want /frontier command entry", defaultTelegramCommands)
+	}
+}
+
 func TestDefaultTelegramCommandsIncludeHealth(t *testing.T) {
 	t.Parallel()
 

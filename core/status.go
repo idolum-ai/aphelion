@@ -80,6 +80,35 @@ type AuthorityStatusSnapshot struct {
 	TruncatedCapabilitySet bool
 }
 
+type AuthorityFrontierStatusSnapshot struct {
+	GeneratedAt time.Time
+	AdminChatID int64
+	Budget      int
+	Used        int
+	Reserved    int
+	Open        int
+	Expired     int
+	Empty       int
+	Slots       []AuthorityFrontierSlot
+}
+
+type AuthorityFrontierSlot struct {
+	Index              int
+	Status             string
+	AllowanceID        string
+	ReviewEventID      int64
+	SourceSessionID    string
+	TargetSessionID    string
+	NextActionRecordID string
+	EntryID            string
+	Reason             string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	ExpiresAt          time.Time
+	ReleasedAt         time.Time
+	TTLSeconds         int64
+}
+
 type ExecutionEventSummary struct {
 	SessionID string
 	ChatID    int64

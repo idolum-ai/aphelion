@@ -133,6 +133,42 @@ func (s *SQLiteStore) OutstandingLookaheadApprovalFrontierCountAt(adminChatID in
 	return outstandingLookaheadAllowanceCountTx(s.db, adminChatID, now.UTC())
 }
 
+func (s *SQLiteStore) LookaheadAllowancesForAdmin(adminChatID int64, limit int) ([]LookaheadAllowance, error) {
+	if s == nil || s.db == nil || adminChatID == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`
+		SELECT
+			allowance_id, admin_chat_id, review_event_id, source_session_id, target_session_id,
+			status, next_action_record_id, entry_id, reason,
+			created_at, updated_at, expires_at, released_at
+		FROM authority_lookahead_allowances
+		WHERE admin_chat_id = ?
+			AND status IN (?, ?)
+		ORDER BY created_at ASC, allowance_id ASC
+		LIMIT ?
+	`, adminChatID, string(LookaheadAllowanceReserved), string(LookaheadAllowanceOpen), limit)
+	if err != nil {
+		return nil, fmt.Errorf("query lookahead allowances for admin: %w", err)
+	}
+	defer rows.Close()
+	records := make([]LookaheadAllowance, 0, limit)
+	for rows.Next() {
+		record, err := scanLookaheadAllowance(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate lookahead allowances for admin: %w", err)
+	}
+	return records, nil
+}
+
 func insertLookaheadAllowanceTx(tx *sql.Tx, input LookaheadAllowanceInput) (LookaheadAllowance, error) {
 	input = NormalizeLookaheadAllowanceInput(input)
 	if err := ValidateLookaheadAllowanceInput(input); err != nil {
@@ -151,6 +187,50 @@ func insertLookaheadAllowanceTx(tx *sql.Tx, input LookaheadAllowanceInput) (Look
 		return LookaheadAllowance{}, fmt.Errorf("insert lookahead allowance %s: %w", input.AllowanceID, err)
 	}
 	return LookaheadAllowance(input), nil
+}
+
+func scanLookaheadAllowance(scanner interface{ Scan(dest ...any) error }) (LookaheadAllowance, error) {
+	var (
+		record        LookaheadAllowance
+		expiresAtRaw  sql.NullString
+		releasedAtRaw sql.NullString
+		createdAtRaw  string
+		updatedAtRaw  string
+		statusRaw     string
+	)
+	if err := scanner.Scan(
+		&record.AllowanceID, &record.AdminChatID, &record.ReviewEventID, &record.SourceSessionID, &record.TargetSessionID,
+		&statusRaw, &record.NextActionRecordID, &record.EntryID, &record.Reason,
+		&createdAtRaw, &updatedAtRaw, &expiresAtRaw, &releasedAtRaw,
+	); err != nil {
+		return LookaheadAllowance{}, fmt.Errorf("scan lookahead allowance: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(createdAtRaw)
+	if err != nil {
+		return LookaheadAllowance{}, fmt.Errorf("parse lookahead allowance created_at: %w", err)
+	}
+	updatedAt, err := parseSQLiteTime(updatedAtRaw)
+	if err != nil {
+		return LookaheadAllowance{}, fmt.Errorf("parse lookahead allowance updated_at: %w", err)
+	}
+	record.Status = NormalizeLookaheadAllowanceStatus(LookaheadAllowanceStatus(statusRaw))
+	record.CreatedAt = createdAt
+	record.UpdatedAt = updatedAt
+	if raw := strings.TrimSpace(nullToString(expiresAtRaw)); raw != "" {
+		expiresAt, err := parseSQLiteTime(raw)
+		if err != nil {
+			return LookaheadAllowance{}, fmt.Errorf("parse lookahead allowance expires_at: %w", err)
+		}
+		record.ExpiresAt = expiresAt
+	}
+	if raw := strings.TrimSpace(nullToString(releasedAtRaw)); raw != "" {
+		releasedAt, err := parseSQLiteTime(raw)
+		if err != nil {
+			return LookaheadAllowance{}, fmt.Errorf("parse lookahead allowance released_at: %w", err)
+		}
+		record.ReleasedAt = releasedAt
+	}
+	return NormalizeLookaheadAllowance(record), nil
 }
 
 func bindLookaheadAllowanceTx(tx *sql.Tx, allowanceID string, nextActionRecordID string, entryID string, now time.Time) error {

@@ -125,6 +125,12 @@ session, plan version, step, expiry, and exact resource/action terms. If those
 terms stop matching, the approval is stale tail and must be expired or
 invalidated before use.
 
+Lookahead allowances are single-principal in this implementation. The private
+admin callback records which principal spent the allowance; it does not model a
+quorum, shared audience, or delegated committee. If Aphelion needs plural
+approval later, that must become an explicit contract family with its own
+reservation, revocation, and satisfaction rules.
+
 Context may select durable run authority, but it may not manufacture authority.
 Durable state remains canonical.
 

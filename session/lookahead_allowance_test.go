@@ -83,3 +83,53 @@ func TestBindLookaheadAllowanceOrReleaseOnFailureFreesSlot(t *testing.T) {
 		t.Fatal("ReserveLookaheadAllowance(after release) reserved = false, leaked slot")
 	}
 }
+
+func TestLookaheadAllowancesForAdminProjectsUnresolvedRows(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	now := time.Date(2026, 7, 3, 12, 20, 0, 0, time.UTC)
+	open, reserved, err := store.ReserveLookaheadAllowance(5555, 101, "session:source", "session:target", 5, now, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ReserveLookaheadAllowance(open) err = %v", err)
+	}
+	if !reserved {
+		t.Fatal("ReserveLookaheadAllowance(open) reserved = false")
+	}
+	if err := store.BindLookaheadAllowance(open.AllowanceID, "next-action:open", "ident:open", now.Add(time.Second)); err != nil {
+		t.Fatalf("BindLookaheadAllowance() err = %v", err)
+	}
+	expired, reserved, err := store.ReserveLookaheadAllowance(5555, 102, "session:source", "session:target", 5, now.Add(2*time.Second), now.Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("ReserveLookaheadAllowance(expired) err = %v", err)
+	}
+	if !reserved {
+		t.Fatal("ReserveLookaheadAllowance(expired) reserved = false")
+	}
+	released, reserved, err := store.ReserveLookaheadAllowance(5555, 103, "session:source", "session:target", 5, now.Add(3*time.Second), now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ReserveLookaheadAllowance(released) err = %v", err)
+	}
+	if !reserved {
+		t.Fatal("ReserveLookaheadAllowance(released) reserved = false")
+	}
+	if err := store.ReleaseLookaheadAllowance(released.AllowanceID, "test_release", now.Add(4*time.Second)); err != nil {
+		t.Fatalf("ReleaseLookaheadAllowance() err = %v", err)
+	}
+
+	records, err := store.LookaheadAllowancesForAdmin(5555, 10)
+	if err != nil {
+		t.Fatalf("LookaheadAllowancesForAdmin() err = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("records = %#v, want open plus expired unresolved rows", records)
+	}
+	if records[0].AllowanceID != open.AllowanceID || records[0].Status != LookaheadAllowanceOpen {
+		t.Fatalf("records[0] = %#v, want bound open allowance", records[0])
+	}
+	if records[1].AllowanceID != expired.AllowanceID || records[1].Status != LookaheadAllowanceReserved {
+		t.Fatalf("records[1] = %#v, want unresolved expired allowance", records[1])
+	}
+}

@@ -187,7 +187,7 @@ func (r *Runtime) lookaheadOutstandingFrontierBudgetResponse(event session.Revie
 		"outstanding_frontier_count":  count,
 		"outstanding_frontier_budget": MaxOutstandingLookaheadApprovalFrontiers,
 	}, now)
-	return fmt.Sprintf("Next grant is paused: %d unresolved lookahead approvals are already open. Resolve, reject, or let one expire first. No authority was approved or executed.", count), nil
+	return fmt.Sprintf("Next grant is paused: %d unresolved lookahead approvals are already open. Use /frontier to inspect the five-slot meter, then resolve, reject, or let one expire first. No authority was approved or executed.", count), nil
 }
 
 func (r *Runtime) nextLookaheadRecoveryApprovalAction(frontier lookaheadAuthorityFrontier, now time.Time) (session.NextActionRecord, bool, error) {

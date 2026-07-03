@@ -326,7 +326,7 @@ func (r *Runtime) publishLookaheadPhaseAuthorityBundleCluster(key session.Sessio
 
 func (r *Runtime) publishLookaheadPhaseAuthorityBundle(key session.SessionKey, opState session.OperationState, phase session.OperationPhase, grants []session.CapabilityGrantSpec, principal string, now time.Time) (session.AuthorityBundleContract, session.NextActionRecord, error) {
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = r.authorityDiscoveryNow()
 	}
 	opState = session.NormalizeOperationState(opState)
 	phase = normalizeSingleOperationPhase(phase)

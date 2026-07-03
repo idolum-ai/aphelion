@@ -369,6 +369,12 @@ tail-size invariant: it limits the amount of speculative authority work that can
 trail the operator, while still allowing fast burst identification when slots
 are available.
 
+The meter must be inspectable without SQLite archaeology. The operator-facing
+frontier view is a projection of the allowance ledger: five slots, each showing
+empty, reserved, open, or expired state, the bound review event, next action or
+ledger entry, and its TTL. It is not an approval surface and must say so
+plainly: viewing the frontier approves and executes nothing.
+
 The first executable implementation makes this a real control-plane loop over
 the current recovery frontier and a bounded deterministic simulation of the
 active `OperationPhasePlan`. The button authenticates the private admin
@@ -393,6 +399,13 @@ interpreter. It covers already-discovered recovery frontiers and declared
 operation-phase capability requirements. Future simulation can cover richer
 step grammars, manifests, and resolution sets, but it must produce the same kind
 of stored contract and next action before projection.
+
+This first slice is intentionally single-principal. A `Next grant` spend belongs
+to the admin principal that received the private review event. Plural authority
+is a different contract: allowances would need per-principal reservation,
+quorum/unanimity semantics, and revocation when one principal leaves. It should
+not be smuggled into this schema by treating one `ActorPrincipal` string as a
+committee.
 
 ## Resolution Sets
 
