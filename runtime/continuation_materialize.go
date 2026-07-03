@@ -802,7 +802,7 @@ func (r *Runtime) recoveryApprovalContinuationContractExecutable(key session.Ses
 	}
 	contract, ok, err := r.store.ContinuationRecoveryContract(contractID)
 	if err != nil {
-		return false, true, nil
+		return false, false, err
 	}
 	if !ok {
 		return false, true, nil

@@ -60,9 +60,6 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 		return "No unresolved authority frontier is available. No authority was approved or executed.", nil
 	}
 	key := sessionKeyForNextActionRecord(action)
-	if err := r.recordLookaheadAuthorityFrontier(event, key, action, now); err != nil {
-		return "", err
-	}
 	materialized, handled, err := r.materializeRecoveryApprovalNextActionLocked(ctx, key, msg, action, now)
 	if err != nil {
 		return "", err
@@ -71,7 +68,10 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 		return "Next authority frontier is no longer materializable. No authority was approved or executed.", nil
 	}
 	if !materialized {
-		return "Next authority frontier recorded, but no approval card was materialized. No authority was approved or executed.", nil
+		return "Next authority frontier could not be materialized. No authority was approved or executed.", nil
+	}
+	if err := r.recordLookaheadAuthorityFrontier(event, key, action, now); err != nil {
+		return "", err
 	}
 	return "Next authority approval surfaced. No authority was approved or executed.", nil
 }
@@ -86,7 +86,14 @@ func (r *Runtime) nextLookaheadRecoveryApprovalAction(frontier lookaheadAuthorit
 		if err != nil {
 			return session.NextActionRecord{}, false, err
 		}
-		if !matches || !r.lookaheadRecoveryApprovalActionExecutable(action, now) {
+		if !matches {
+			return session.NextActionRecord{}, false, nil
+		}
+		executable, err := r.lookaheadRecoveryApprovalActionExecutable(action, now)
+		if err != nil {
+			return session.NextActionRecord{}, false, err
+		}
+		if !executable {
 			return session.NextActionRecord{}, false, nil
 		}
 		return action, true, nil
@@ -118,7 +125,10 @@ func (r *Runtime) nextLookaheadRecoveryApprovalAction(frontier lookaheadAuthorit
 		if !matches {
 			continue
 		}
-		executable := r.lookaheadRecoveryApprovalActionExecutable(action, now)
+		executable, err := r.lookaheadRecoveryApprovalActionExecutable(action, now)
+		if err != nil {
+			return session.NextActionRecord{}, false, err
+		}
 		if executable {
 			return action, true, nil
 		}
@@ -126,24 +136,30 @@ func (r *Runtime) nextLookaheadRecoveryApprovalAction(frontier lookaheadAuthorit
 	return session.NextActionRecord{}, false, nil
 }
 
-func (r *Runtime) lookaheadRecoveryApprovalActionExecutable(action session.NextActionRecord, now time.Time) bool {
+func (r *Runtime) lookaheadRecoveryApprovalActionExecutable(action session.NextActionRecord, now time.Time) (bool, error) {
 	if !action.ResolvedAt.IsZero() {
-		return false
+		return false, nil
 	}
 	consumable, invalid := recoveryApprovalNextActionConsumable(action)
 	if invalid || !consumable {
-		return false
+		return false, nil
 	}
 	key := sessionKeyForNextActionRecord(action)
 	switch strings.TrimSpace(action.OperationKind) {
 	case "continuation_lease_request":
 		executable, invalid, err := r.recoveryApprovalContinuationContractExecutable(key, action)
-		return err == nil && executable && !invalid
+		if err != nil {
+			return false, err
+		}
+		return executable && !invalid, nil
 	case "authority_bundle_request":
 		executable, invalid, _, err := r.recoveryApprovalAuthorityBundleExecutable(key, action, now)
-		return err == nil && executable && !invalid
+		if err != nil {
+			return false, err
+		}
+		return executable && !invalid, nil
 	default:
-		return false
+		return false, nil
 	}
 }
 

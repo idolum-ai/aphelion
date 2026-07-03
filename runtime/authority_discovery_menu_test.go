@@ -242,6 +242,187 @@ func TestBuildAuthorityDiscoveryMenuRequiresExactLiveAuthority(t *testing.T) {
 	}
 }
 
+func TestAuthorityDiscoveryLifecyclePromotesApprovedContinuationAndSplitsRepeatCollision(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 2003, UserID: 0, Scope: telegramDMScopeRef(2003)}
+	sessionID := session.SessionIDForKey(key)
+	now := time.Date(2026, 7, 2, 12, 15, 0, 0, time.UTC)
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-authority-discovery-lifecycle",
+		Status:    session.OperationStatusActive,
+		PhasePlan: session.OperationPhasePlan{ID: "plan-authority-discovery-lifecycle", Goal: "Recover child wake"},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	subjectRef := session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake", "durable_agent", "wake_once", "")
+	contractA, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   "authority-discovery-lifecycle-a",
+		SessionID:           sessionID,
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          subjectRef,
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "idolum-email"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "idolum-email",
+		GrantID:             "grant-idolum-email-wake",
+		GrantTargetResource: "durable_agent:idolum-email:wake_once",
+		CreatedAt:           now,
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(A) err = %v", err)
+	}
+	_, actionA, err := store.RecordContinuationRecoveryContractNextAction(contractA, session.NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contractA.SubjectRef,
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: session.ContinuationRecoveryContractProjectionInput(contractA.ContractID),
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordContinuationRecoveryContractNextAction(A) err = %v", err)
+	}
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "show approval", MessageID: 1},
+		"show approval",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want recovery approval card")
+	}
+	approved, err := rt.ApproveContinuationForKey(key, 1001)
+	if err != nil {
+		t.Fatalf("ApproveContinuationForKey() err = %v", err)
+	}
+	if approved.Status != session.ContinuationStatusApproved || approved.ContinuationLease.Status != session.ContinuationLeaseStatusActive {
+		t.Fatalf("approved continuation = %#v, want active continuation", approved)
+	}
+	menu, err := rt.BuildAuthorityDiscoveryMenu(AuthorityDiscoveryMenuBuildInput{Key: key, Now: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("BuildAuthorityDiscoveryMenu(approved) err = %v", err)
+	}
+	foundExecutable := false
+	for _, token := range menu.Tokens {
+		if token.LabelRef == contractA.ContractID && token.State == AuthorityDiscoveryTokenExecutable {
+			foundExecutable = true
+		}
+	}
+	if !foundExecutable {
+		t.Fatalf("tokens = %#v, want approved exact contract to be executable", menu.Tokens)
+	}
+	_, reservation, _, _, err := rt.reserveApprovedContinuationTurn(key)
+	if err != nil {
+		t.Fatalf("reserveApprovedContinuationTurn() err = %v", err)
+	}
+	if reservation == nil {
+		t.Fatal("reservation = nil, want consumed approved continuation")
+	}
+	menu, err = rt.BuildAuthorityDiscoveryMenu(AuthorityDiscoveryMenuBuildInput{Key: key, Now: now.Add(2 * time.Minute)})
+	if err != nil {
+		t.Fatalf("BuildAuthorityDiscoveryMenu(consumed) err = %v", err)
+	}
+	foundSpent := false
+	for _, token := range menu.Tokens {
+		if token.LabelRef == contractA.ContractID && token.State == AuthorityDiscoveryTokenSpent {
+			foundSpent = true
+		}
+	}
+	if !foundSpent {
+		t.Fatalf("tokens = %#v, want consumed exact contract to be spent", menu.Tokens)
+	}
+	contractB, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   "authority-discovery-lifecycle-b",
+		SessionID:           sessionID,
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          subjectRef,
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "idolum-email"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "idolum-email",
+		GrantID:             "grant-idolum-email-wake",
+		GrantTargetResource: "durable_agent:idolum-email:wake_once",
+		CreatedAt:           now.Add(3 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(B) err = %v", err)
+	}
+	_, actionB, err := store.RecordContinuationRecoveryContractNextAction(contractB, session.NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contractB.SubjectRef,
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: session.ContinuationRecoveryContractProjectionInput(contractB.ContractID),
+		CreatedAt:          now.Add(3 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("RecordContinuationRecoveryContractNextAction(B) err = %v", err)
+	}
+	projections, err := store.IdentificationLedgerEntries(session.IdentificationLedgerQuery{
+		PlanID:      session.IdentificationPlanIDForSession(sessionID),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   sessionID,
+		LabelRef:    contractB.ContractID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries(contractB) err = %v", err)
+	}
+	foundGenerated := false
+	for _, projection := range projections {
+		if projection.Entry.LabelRef == contractB.ContractID &&
+			strings.HasPrefix(projection.Entry.StepRef, subjectRef+"#collision:") &&
+			strings.Contains(projection.Entry.StepRef, actionB.RecordID) {
+			foundGenerated = true
+		}
+	}
+	if !foundGenerated {
+		t.Fatalf("contractB projections = %#v, want new collision generation after consumed base; first action was %s", projections, actionA.RecordID)
+	}
+}
+
 func TestBuildAuthorityDiscoveryMenuDoesNotTreatShapeMismatchedGrantAsExecutable(t *testing.T) {
 	t.Parallel()
 
@@ -324,6 +505,83 @@ func TestBuildAuthorityDiscoveryMenuDoesNotTreatShapeMismatchedGrantAsExecutable
 	}
 	if !foundExecutable {
 		t.Fatalf("tokens = %#v, want shape-matched active grant executable", menu.Tokens)
+	}
+}
+
+func TestAuthorityDiscoveryAuthorityBundleLivenessChecksEveryGrantSpecAction(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	rt := &Runtime{store: store}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	now := time.Date(2026, 7, 2, 12, 45, 0, 0, time.UTC)
+	grant, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-github-second-action",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github:idolum-ai/aphelion",
+		AllowedActions: []string{"pull_requests_write"},
+		Status:         session.CapabilityGrantStatusActive,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		GrantedAt:      now,
+		ExpiresAt:      now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	bundle, err := session.CompileAuthorityBundleContract(session.AuthorityBundleContractInput{
+		RequestInstanceID: "bundle-second-action-live",
+		SessionID:         session.SessionIDForKey(key),
+		Principal:         "telegram:1001",
+		Summary:           "Use one bounded GitHub grant.",
+		AllowedActions:    []string{"contents_write", "pull_requests_write"},
+		ForbiddenActions:  []string{"deploy", "merge"},
+		StopConditions:    []string{"stop after metadata update"},
+		RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+			GrantID:        grant.GrantID,
+			Kind:           session.CapabilityKindExternalAccount,
+			TargetResource: "github:idolum-ai/aphelion",
+			GrantedTo:      "telegram:1001",
+			AllowedActions: []string{"contents_write", "pull_requests_write"},
+		}},
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("CompileAuthorityBundleContract() err = %v", err)
+	}
+	bundle, err = store.UpsertAuthorityBundleContract(bundle)
+	if err != nil {
+		t.Fatalf("UpsertAuthorityBundleContract() err = %v", err)
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(session.IdentificationLedgerEntryInput{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		StepRef:     "step:github-pr",
+		ShapeHash: session.AuthorityShapeHash(session.AuthorityShapeInput{
+			Tool:          "request_approval",
+			Action:        "authority_bundle_request",
+			ResourceClass: "authority_bundle",
+		}),
+		LabelRef:  bundle.BundleID,
+		Status:    session.IdentificationLedgerStatusApproved,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry() err = %v", err)
+	}
+	menu, err := rt.BuildAuthorityDiscoveryMenu(AuthorityDiscoveryMenuBuildInput{Key: key, Now: now})
+	if err != nil {
+		t.Fatalf("BuildAuthorityDiscoveryMenu() err = %v", err)
+	}
+	if len(menu.Tokens) != 1 || menu.Tokens[0].State != AuthorityDiscoveryTokenExecutable {
+		t.Fatalf("tokens = %#v, want bundle live through second required grant action", menu.Tokens)
 	}
 }
 
@@ -480,6 +738,145 @@ func TestReviewEventLookaheadSurfacesNextRecoveryApprovalCard(t *testing.T) {
 	}
 	if len(wantTrace) != 0 {
 		t.Fatalf("trace links = %#v, missing %#v", trace.Links, wantTrace)
+	}
+}
+
+func TestLookaheadRecoveryApprovalPropagatesContractLookupError(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	rt := &Runtime{store: store}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	now := time.Date(2026, 7, 2, 13, 30, 0, 0, time.UTC)
+	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   "lookahead-lookup-error",
+		SessionID:           session.SessionIDForKey(key),
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake", "durable_agent", "wake_once", ""),
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "idolum-email"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "idolum-email",
+		GrantID:             "grant-idolum-email-wake",
+		GrantTargetResource: "durable_agent:idolum-email:wake_once",
+		CreatedAt:           now,
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract() err = %v", err)
+	}
+	_, action, err := store.RecordContinuationRecoveryContractNextAction(contract, session.NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contract.SubjectRef,
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: session.ContinuationRecoveryContractProjectionInput(contract.ContractID),
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordContinuationRecoveryContractNextAction() err = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() err = %v", err)
+	}
+	if _, err := rt.lookaheadRecoveryApprovalActionExecutable(action, now); err == nil {
+		t.Fatalf("lookaheadRecoveryApprovalActionExecutable() err = nil, want contract lookup error")
+	}
+}
+
+func TestReviewEventLookaheadMaterializationFailureDoesNotLeaveProposedToken(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	rt := &Runtime{store: store}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	now := time.Date(2026, 7, 2, 13, 45, 0, 0, time.UTC)
+	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   "lookahead-no-materialization",
+		SessionID:           session.SessionIDForKey(key),
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake", "durable_agent", "wake_once", ""),
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "idolum-email"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "idolum-email",
+		GrantID:             "grant-idolum-email-wake",
+		GrantTargetResource: "durable_agent:idolum-email:wake_once",
+		CreatedAt:           now,
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract() err = %v", err)
+	}
+	_, action, err := store.RecordContinuationRecoveryContractNextAction(contract, session.NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contract.SubjectRef,
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: session.ContinuationRecoveryContractProjectionInput(contract.ContractID),
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordContinuationRecoveryContractNextAction() err = %v", err)
+	}
+	event := session.ReviewEvent{
+		ID:                90,
+		SourceSessionID:   session.SessionIDForKey(key),
+		TargetSessionID:   session.SessionIDForKey(key),
+		TargetAdminChatID: 1001,
+		MetadataJSON:      `{"next_action_record_id":"` + action.RecordID + `","next_action_session_id":"` + session.SessionIDForKey(key) + `"}`,
+		Status:            "delivered",
+		DeliveryMessageID: 57,
+	}
+	text, err := rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-lookahead-no-materialization",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 57, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionLookaheadNext),
+	}, event, core.ReviewEventActionLookaheadNext)
+	if err != nil {
+		t.Fatalf("HandleReviewEventAction(no materialization) err = %v", err)
+	}
+	if !strings.Contains(text, "could not be materialized") || !strings.Contains(text, "No authority was approved or executed") {
+		t.Fatalf("lookahead text = %q, want no-materialization acknowledgement", text)
+	}
+	projections, err := store.IdentificationLedgerEntries(session.IdentificationLedgerQuery{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		LabelRef:    contract.ContractID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	for _, projection := range projections {
+		if projection.Entry.StepRef == "next_action:"+action.RecordID {
+			t.Fatalf("lookahead projection = %#v, want no proposed next-action token without materialized card", projection)
+		}
 	}
 }
 

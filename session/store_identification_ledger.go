@@ -13,6 +13,7 @@ type IdentificationLedgerQuery struct {
 	PlanID      string
 	PlanVersion string
 	SessionID   string
+	LabelRef    string
 	Status      IdentificationLedgerEntryStatus
 	Limit       int
 }
@@ -95,6 +96,7 @@ func (s *SQLiteStore) IdentificationLedgerEntries(query IdentificationLedgerQuer
 	query.PlanID = strings.TrimSpace(query.PlanID)
 	query.PlanVersion = strings.TrimSpace(query.PlanVersion)
 	query.SessionID = strings.TrimSpace(query.SessionID)
+	query.LabelRef = strings.TrimSpace(query.LabelRef)
 	query.Status = NormalizeIdentificationLedgerEntryStatus(query.Status)
 	if query.PlanVersion == "" {
 		query.PlanVersion = IdentificationDefaultPlanVersion
@@ -116,6 +118,10 @@ func (s *SQLiteStore) IdentificationLedgerEntries(query IdentificationLedgerQuer
 	if query.SessionID != "" {
 		where = append(where, "session_id = ?")
 		args = append(args, query.SessionID)
+	}
+	if query.LabelRef != "" {
+		where = append(where, "label_ref = ?")
+		args = append(args, query.LabelRef)
 	}
 	if query.Status != "" && query.Status != IdentificationLedgerStatusUnidentified {
 		where = append(where, "status = ?")

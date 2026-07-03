@@ -387,9 +387,19 @@ func (r *Runtime) authorityDiscoveryAuthorityBundleLive(key session.SessionKey, 
 		if strings.TrimSpace(spec.GrantID) == "" {
 			return false, nil
 		}
-		live, err := r.authorityDiscoveryLabelLive(key, sessionID, spec.GrantID, authorityDiscoveryShapeHashForGrantSpec(spec), now)
-		if err != nil || !live {
-			return live, err
+		specLive := false
+		for _, shapeHash := range authorityDiscoveryShapeHashesForGrantSpec(spec) {
+			live, err := r.authorityDiscoveryLabelLive(key, sessionID, spec.GrantID, shapeHash, now)
+			if err != nil {
+				return false, err
+			}
+			if live {
+				specLive = true
+				break
+			}
+		}
+		if !specLive {
+			return false, nil
 		}
 	}
 	return strings.TrimSpace(bundle.PrimaryContinuationContractID) != "" || len(bundle.RequiredCapabilityGrants) > 0, nil
@@ -413,18 +423,30 @@ func authorityDiscoveryGrantMatchesShape(grant session.CapabilityGrant, shapeHas
 }
 
 func authorityDiscoveryShapeHashForGrantSpec(spec session.CapabilityGrantSpec) string {
+	hashes := authorityDiscoveryShapeHashesForGrantSpec(spec)
+	if len(hashes) == 0 {
+		return ""
+	}
+	return hashes[0]
+}
+
+func authorityDiscoveryShapeHashesForGrantSpec(spec session.CapabilityGrantSpec) []string {
 	spec = session.NormalizeCapabilityGrantSpec(spec)
 	resourceClass := session.AuthorityResourceClass(spec.TargetResource)
+	var hashes []string
 	for _, action := range spec.AllowedActions {
 		if strings.TrimSpace(action) == "" {
 			continue
 		}
-		return session.AuthorityShapeHash(session.AuthorityShapeInput{
+		hash := session.AuthorityShapeHash(session.AuthorityShapeInput{
 			Action:        strings.TrimSpace(action),
 			ResourceClass: resourceClass,
 		})
+		if hash != "" {
+			hashes = append(hashes, hash)
+		}
 	}
-	return ""
+	return hashes
 }
 
 func authorityDiscoveryStateForEntry(entry session.IdentificationLedgerEntry, now time.Time, liveAuthority bool) AuthorityDiscoveryTokenState {
