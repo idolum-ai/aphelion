@@ -23,6 +23,8 @@ const (
 	AuthorityDiscoveryTokenInvalid         AuthorityDiscoveryTokenState = "invalid"
 )
 
+const MaxAuthorityDiscoveryLoadoutSlots = 2
+
 type AuthorityDiscoveryLoadoutSlot struct {
 	TokenID       string
 	LabelRef      string
@@ -132,7 +134,11 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 		}
 		menu.Tokens = append(menu.Tokens, token)
 	}
+	loadoutSlots := 0
 	for _, slot := range input.Loadout {
+		if loadoutSlots >= MaxAuthorityDiscoveryLoadoutSlots {
+			break
+		}
 		tokenID := strings.TrimSpace(slot.TokenID)
 		if tokenID == "" {
 			tokenID = strings.TrimSpace(slot.LabelRef)
@@ -165,6 +171,7 @@ func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityD
 			})
 		}
 		menu.Tokens = append(menu.Tokens, token)
+		loadoutSlots++
 	}
 	sort.SliceStable(menu.Tokens, func(i, j int) bool {
 		if menu.Tokens[i].StepRef == menu.Tokens[j].StepRef {

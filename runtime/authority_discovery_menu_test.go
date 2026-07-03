@@ -53,10 +53,15 @@ func TestCompileAuthorityDiscoveryMenuScoresFrontierAndLoadout(t *testing.T) {
 			TokenID:   "loadout-github-unverified",
 			LabelRef:  "authbundle-unverified-github",
 			ExpiresAt: now.Add(time.Hour),
+		}, {
+			TokenID:       "loadout-extra-skipped",
+			LabelRef:      "authbundle-extra",
+			LiveAuthority: true,
+			ExpiresAt:     now.Add(time.Hour),
 		}},
 	})
 	if len(menu.Tokens) != 3 {
-		t.Fatalf("tokens = %#v, want frontier plus loadout", menu.Tokens)
+		t.Fatalf("tokens = %#v, want frontier plus two loadout slots", menu.Tokens)
 	}
 	var frontier, verifiedLoadout, unverifiedLoadout AuthorityDiscoveryMenuToken
 	for _, token := range menu.Tokens {
@@ -68,6 +73,9 @@ func TestCompileAuthorityDiscoveryMenuScoresFrontierAndLoadout(t *testing.T) {
 		}
 		if token.TokenID == "loadout-github-unverified" {
 			unverifiedLoadout = token
+		}
+		if token.TokenID == "loadout-extra-skipped" {
+			t.Fatalf("tokens = %#v, want loadout capped at %d slots", menu.Tokens, MaxAuthorityDiscoveryLoadoutSlots)
 		}
 	}
 	if frontier.State != AuthorityDiscoveryTokenOneApprovalAway {

@@ -81,7 +81,7 @@ field, not a pre-identified map of the whole field.
 Aphelion should model that distinction directly. At plan start, the operator may
 approve a small plan loadout: one or two named bundles, leases, or standing
 capability shapes with explicit scope and expiry. Everything beyond the loadout
-is discovered by collision, static analysis, operator review, or metered
+is discovered by collision, static analysis, operator review, or frontier-bound
 lookahead.
 
 The count limit matters. It turns preemption from a moral restraint into a
@@ -327,13 +327,14 @@ The card must render a typed record. It may not invent authority from prose.
 
 ### Lookahead
 
-Lookahead is metered speculative identification. It asks: from the current plan
+Lookahead is speculative identification. It asks: from the current plan
 frontier, what is the next authority collision we can prove without executing
 anything?
 
 Lookahead should be exposed as a small operator action, likely a `Next grant`
 button on a successful approval card. Pressing it does not approve execution.
-It spends one bounded lookahead allowance and produces the next proposed card.
+In the full Ralph-loop implementation it should spend one bounded lookahead
+allowance and produce the next proposed card.
 
 Hard constraints:
 
@@ -349,10 +350,16 @@ the tail remains narrow, step-addressed, and perishable.
 
 The first executable implementation makes this a real control-plane loop over
 the current recovery frontier. The button authenticates the private admin
-callback, scans unresolved contract-backed `request_approval` next actions,
-records a lookahead observation for the selected action, and materializes the
-normal approval card for that exact stored contract. It does not approve
-authority and it does not execute the protected operation.
+callback, resolves an exact frontier when the review event names one, otherwise
+scans the review event's source session for unresolved contract-backed
+`request_approval` next actions, records lookahead observations for the selected
+action, and materializes the normal approval card for that exact stored
+contract. It does not approve authority and it does not execute the protected
+operation.
+
+This first implementation is frontier-bound, not yet globally budget-metered.
+It offers one next frontier per button press, but it does not yet enforce a
+cross-plan lookahead counter, cooldown, or allowance ledger.
 
 This is intentionally narrower than a full plan simulator. It identifies the
 next already-discovered authority frontier in the ledger/next-action graph. A

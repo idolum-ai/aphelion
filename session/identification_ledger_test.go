@@ -543,3 +543,144 @@ func TestContinuationRecoveryPublicationCoalescesSameShapeAcrossRequestInstances
 		t.Fatalf("entry shape hash %q should not equal either instance contract hash", projections[0].Entry.ShapeHash)
 	}
 }
+
+func TestContinuationRecoveryPublicationGeneratesNewLedgerEntryAfterConsumedCollision(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	key := SessionKey{ChatID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "1001"}}
+	sessionID := SessionIDForKey(key)
+	subjectRef := ContinuationRecoverySubjectRef(ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake", "durable_agent", "wake_once", "")
+	createdAt := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	contractA, err := CompileContinuationRecoveryContract(ContinuationRecoveryContractInput{
+		RequestInstanceID:   "ident-child-wake-consumed-a",
+		SessionID:           sessionID,
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          subjectRef,
+		Principal:           "telegram:1001",
+		LeaseClass:          ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "idolum-email"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "idolum-email",
+		GrantID:             "grant-idolum-email-wake",
+		GrantTargetResource: "durable_agent:idolum-email:wake_once",
+		CreatedAt:           createdAt,
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(A) err = %v", err)
+	}
+	_, actionA, err := store.RecordContinuationRecoveryContractNextAction(contractA, NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contractA.SubjectRef,
+		RequiredAuthority:  string(ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: ContinuationRecoveryContractProjectionInput(contractA.ContractID),
+		CreatedAt:          createdAt,
+	})
+	if err != nil {
+		t.Fatalf("RecordContinuationRecoveryContractNextAction(A) err = %v", err)
+	}
+	shapeHash := AuthorityShapeHashForContinuationRecoveryContract(contractA)
+	baseEntryID := IdentificationLedgerEntryID(IdentificationPlanIDForSession(sessionID), IdentificationDefaultPlanVersion, sessionID, subjectRef, shapeHash)
+	if _, err := store.RecordIdentificationLedgerEntry(IdentificationLedgerEntryInput{
+		EntryID:     baseEntryID,
+		PlanID:      IdentificationPlanIDForSession(sessionID),
+		PlanVersion: IdentificationDefaultPlanVersion,
+		SessionID:   sessionID,
+		StepRef:     subjectRef,
+		ShapeHash:   shapeHash,
+		LabelRef:    contractA.ContractID,
+		Status:      IdentificationLedgerStatusConsumed,
+		UpdatedAt:   createdAt.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(consumed) err = %v", err)
+	}
+	contractB, err := CompileContinuationRecoveryContract(ContinuationRecoveryContractInput{
+		RequestInstanceID:   "ident-child-wake-consumed-b",
+		SessionID:           sessionID,
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          subjectRef,
+		Principal:           "telegram:1001",
+		LeaseClass:          ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "idolum-email"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "idolum-email",
+		GrantID:             "grant-idolum-email-wake",
+		GrantTargetResource: "durable_agent:idolum-email:wake_once",
+		CreatedAt:           createdAt.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(B) err = %v", err)
+	}
+	_, actionB, err := store.RecordContinuationRecoveryContractNextAction(contractB, NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contractB.SubjectRef,
+		RequiredAuthority:  string(ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: ContinuationRecoveryContractProjectionInput(contractB.ContractID),
+		CreatedAt:          createdAt.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("RecordContinuationRecoveryContractNextAction(B) err = %v", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	foundB := false
+	for _, action := range open {
+		if action.RecordID == actionB.RecordID {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Fatalf("open next actions = %#v, want second recovery action %s", open, actionB.RecordID)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      IdentificationPlanIDForSession(sessionID),
+		PlanVersion: IdentificationDefaultPlanVersion,
+		SessionID:   sessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 2 {
+		t.Fatalf("entries = %#v, want consumed base plus new collision generation", projections)
+	}
+	foundConsumedBase := false
+	foundGenerated := false
+	for _, projection := range projections {
+		if projection.Entry.EntryID == baseEntryID {
+			foundConsumedBase = projection.Entry.Status == IdentificationLedgerStatusConsumed &&
+				projection.Entry.LabelRef == contractA.ContractID
+		}
+		if projection.Entry.ShapeHash == shapeHash &&
+			projection.Entry.LabelRef == contractB.ContractID &&
+			strings.HasPrefix(projection.Entry.StepRef, subjectRef+"#collision:") {
+			foundGenerated = true
+			if projection.Entry.Status != IdentificationLedgerStatusProposed {
+				t.Fatalf("generated entry status = %q, want proposed", projection.Entry.Status)
+			}
+		}
+	}
+	if !foundConsumedBase || !foundGenerated {
+		t.Fatalf("entries = %#v, want consumed base=%t generated=%t; first action was %s", projections, foundConsumedBase, foundGenerated, actionA.RecordID)
+	}
+}

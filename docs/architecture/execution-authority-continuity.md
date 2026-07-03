@@ -110,12 +110,14 @@ label produced by that event. Future plan-level ledgers and lookahead actions
 must write and consume those labels instead of reconstructing authority from
 nearby context, model prose, or prior cards.
 
-Lookahead, when implemented, is not execution authority. It is a metered
-non-executing transition that speculatively compiles the next authority
-collision into the same contract family used by ordinary fail-closed recovery.
-Any approval produced by lookahead must be bound to session, plan version, step,
-expiry, and exact resource/action terms. If those terms stop matching, the
-approval is stale tail and must be expired or invalidated before use.
+Lookahead is not execution authority. Its first implementation is a
+frontier-bound, non-executing transition that surfaces the next already-recorded
+contract-backed authority frontier through the same approval family used by
+ordinary fail-closed recovery. A later Ralph-loop implementation may add a
+metered allowance ledger and speculative plan simulation, but any approval
+produced by lookahead must still be bound to session, plan version, step, expiry,
+and exact resource/action terms. If those terms stop matching, the approval is
+stale tail and must be expired or invalidated before use.
 
 Context may select durable run authority, but it may not manufacture authority.
 Durable state remains canonical.

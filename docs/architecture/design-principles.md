@@ -143,8 +143,8 @@ authority state.
 Bounded preemption is allowed when it is explicit. A long-running plan may start
 with a small fixed loadout of named, scoped, expiring authority bundles, but that
 loadout must be count-limited and visible. Everything outside the loadout should
-be discovered by typed collision, static analysis, operator review, or metered
-lookahead.
+be discovered by typed collision, static analysis, operator review, or
+frontier-bound lookahead.
 
 Unknown edge cases are expected. The answer is not to pretend every phrase can
 be exhaustively matched; the answer is to preserve enough structure, evidence,

@@ -79,11 +79,16 @@ func recordContinuationRecoveryIdentificationTx(tx *sql.Tx, contract Continuatio
 	if strings.TrimSpace(contract.SessionID) == "" || strings.TrimSpace(shapeHash) == "" {
 		return nil
 	}
+	planID := IdentificationPlanIDForSession(contract.SessionID)
+	stepRef, err := continuationRecoveryIdentificationStepRefTx(tx, planID, IdentificationDefaultPlanVersion, contract.SessionID, contract.SubjectRef, shapeHash, record)
+	if err != nil {
+		return err
+	}
 	entry, err := recordIdentificationLedgerEntryTx(tx, IdentificationLedgerEntryInput{
-		PlanID:      IdentificationPlanIDForSession(contract.SessionID),
+		PlanID:      planID,
 		PlanVersion: IdentificationDefaultPlanVersion,
 		SessionID:   contract.SessionID,
-		StepRef:     contract.SubjectRef,
+		StepRef:     stepRef,
 		ShapeHash:   shapeHash,
 		LabelRef:    contract.ContractID,
 		Status:      IdentificationLedgerStatusProposed,
@@ -131,6 +136,26 @@ func recordContinuationRecoveryIdentificationTx(tx *sql.Tx, contract Continuatio
 		}
 	}
 	return nil
+}
+
+func continuationRecoveryIdentificationStepRefTx(tx *sql.Tx, planID string, planVersion string, sessionID string, baseStepRef string, shapeHash string, record NextActionRecord) (string, error) {
+	baseStepRef = strings.TrimSpace(baseStepRef)
+	if baseStepRef == "" {
+		baseStepRef = "continuation_recovery"
+	}
+	entryID := IdentificationLedgerEntryID(planID, planVersion, sessionID, baseStepRef, shapeHash)
+	existing, ok, err := identificationLedgerEntryByIDTx(tx, entryID)
+	if err != nil || !ok {
+		return baseStepRef, err
+	}
+	if existing.Status == IdentificationLedgerStatusApproved || identificationLedgerEntryTerminalStatus(existing.Status) {
+		collisionID := strings.TrimSpace(record.RecordID)
+		if collisionID == "" {
+			collisionID = fmt.Sprintf("%d", record.CreatedAt.UTC().UnixNano())
+		}
+		return baseStepRef + "#collision:" + collisionID, nil
+	}
+	return baseStepRef, nil
 }
 
 func upsertContinuationRecoveryContractTx(tx *sql.Tx, input ContinuationRecoveryContract) (ContinuationRecoveryContract, error) {
