@@ -407,6 +407,58 @@ func TestHandleTelegramCommandCallbackContinuationRejectsStaleDecisionID(t *test
 	}
 }
 
+func TestHandleTelegramCommandCallbackContinuationApproveStaleRuntimeDoesNotTrigger(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		continuationState: session.ContinuationState{
+			Status:         session.ContinuationStatusPending,
+			DecisionID:     "decision-terminal",
+			RemainingTurns: 1,
+			StageSummary:   "Run already completed work.",
+		},
+		approveContinuationReturn: session.ContinuationState{
+			Status:         session.ContinuationStatusRevoked,
+			DecisionID:     "decision-terminal",
+			RemainingTurns: 0,
+			StageSummary:   "Run already completed work.",
+		},
+		approveContinuationErr: fmt.Errorf("approve continuation: %w", core.ErrContinuationStale),
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-terminal-stale",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-terminal", continuationActionApproveLease),
+		Message: &telegram.Message{MessageID: 198, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approveContinuationInput != 7 || router.approveContinuationApprover != 1002 {
+		t.Fatalf("approve input/approver = %d/%d, want 7/1002", router.approveContinuationInput, router.approveContinuationApprover)
+	}
+	if router.triggerContinuationInput != 0 {
+		t.Fatalf("triggerContinuationInput = %d, want 0 for stale runtime approval", router.triggerContinuationInput)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != staleContinuationCallbackText {
+		t.Fatalf("answers = %#v, want stale callback answer", sender.answers)
+	}
+	if len(sender.editClear) != 1 || sender.editClear[0].messageID != 198 || !strings.Contains(sender.editClear[0].text, "old buttons cannot approve a changed plan") {
+		t.Fatalf("editClear = %#v, want stale approval card retired with no authority grant", sender.editClear)
+	}
+	if len(sender.editInline) != 0 {
+		t.Fatalf("editInline count = %d, want no fresh approval or approval-window rows", len(sender.editInline))
+	}
+	if router.callbackRetireChatID != 7 || router.callbackRetireMessageID != 198 || router.callbackRetireSurface != continuationCallbackRetiredSurface {
+		t.Fatalf("retired callback projection = chat:%d msg:%d surface:%q, want 7/198/%s", router.callbackRetireChatID, router.callbackRetireMessageID, router.callbackRetireSurface, continuationCallbackRetiredSurface)
+	}
+}
+
 func TestHandleTelegramCommandCallbackContinuationRejectsUnauthorizedActor(t *testing.T) {
 	t.Parallel()
 
