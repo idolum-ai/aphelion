@@ -134,19 +134,21 @@ func TestReviewEventLookaheadRecordsNonExecutingLedgerObservation(t *testing.T) 
 	if err != nil {
 		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
 	}
-	if len(projections) != 1 {
-		t.Fatalf("ledger entries = %#v, want one lookahead entry", projections)
+	if len(projections) != 0 {
+		t.Fatalf("ledger entries = %#v, want no authority-shape entry for no-frontier diagnostic", projections)
 	}
-	wantShapeHash := session.AuthorityShapeHash(session.AuthorityShapeInput{
-		Tool:          "request_approval",
-		Action:        string(core.ReviewEventActionLookaheadNext),
-		ResourceClass: "no_frontier",
-	})
-	if projections[0].Entry.ShapeHash != wantShapeHash {
-		t.Fatalf("lookahead shape hash = %q, want shared authority shape hash %q", projections[0].Entry.ShapeHash, wantShapeHash)
+	events, err := store.ExecutionEventsBySession(session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}, 0, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
-	if got := projections[0].Properties[session.IdentificationPropertyRetryability][0].Method; got != session.IdentificationObservationLookahead {
-		t.Fatalf("observation method = %q, want lookahead", got)
+	foundNoFrontier := false
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventAuthorityFindingReviewed && event.Status == "no_frontier" {
+			foundNoFrontier = true
+		}
+	}
+	if !foundNoFrontier {
+		t.Fatalf("events = %#v, want no-frontier authority finding event", events)
 	}
 }
 
@@ -232,6 +234,91 @@ func TestBuildAuthorityDiscoveryMenuRequiresExactLiveAuthority(t *testing.T) {
 	}
 }
 
+func TestBuildAuthorityDiscoveryMenuDoesNotTreatShapeMismatchedGrantAsExecutable(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	rt := &Runtime{store: store}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	now := time.Date(2026, 7, 2, 12, 30, 0, 0, time.UTC)
+	grant, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "grant-github-write",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github:idolum-ai/aphelion",
+		AllowedActions: []string{"github_issue_create"},
+		Status:         session.CapabilityGrantStatusActive,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		GrantedAt:      now,
+		ExpiresAt:      now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	wrongShape := session.AuthorityShapeHash(session.AuthorityShapeInput{
+		Action:        "github_pr_update",
+		ResourceClass: "github",
+	})
+	if _, err := store.RecordIdentificationLedgerEntry(session.IdentificationLedgerEntryInput{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		StepRef:     "step:update-pr",
+		ShapeHash:   wrongShape,
+		LabelRef:    grant.GrantID,
+		Status:      session.IdentificationLedgerStatusApproved,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry() err = %v", err)
+	}
+	menu, err := rt.BuildAuthorityDiscoveryMenu(AuthorityDiscoveryMenuBuildInput{Key: key, Now: now})
+	if err != nil {
+		t.Fatalf("BuildAuthorityDiscoveryMenu(wrong shape) err = %v", err)
+	}
+	if len(menu.Tokens) != 1 {
+		t.Fatalf("tokens = %#v, want one", menu.Tokens)
+	}
+	if menu.Tokens[0].State == AuthorityDiscoveryTokenExecutable {
+		t.Fatalf("token state = executable for shape-mismatched grant %#v", menu.Tokens[0])
+	}
+	rightShape := session.AuthorityShapeHash(session.AuthorityShapeInput{
+		Action:        "github_issue_create",
+		ResourceClass: "github",
+	})
+	if _, err := store.RecordIdentificationLedgerEntry(session.IdentificationLedgerEntryInput{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		StepRef:     "step:create-issue",
+		ShapeHash:   rightShape,
+		LabelRef:    grant.GrantID,
+		Status:      session.IdentificationLedgerStatusApproved,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(right shape) err = %v", err)
+	}
+	menu, err = rt.BuildAuthorityDiscoveryMenu(AuthorityDiscoveryMenuBuildInput{Key: key, Now: now})
+	if err != nil {
+		t.Fatalf("BuildAuthorityDiscoveryMenu(right shape) err = %v", err)
+	}
+	foundExecutable := false
+	for _, token := range menu.Tokens {
+		if token.StepRef == "step:create-issue" && token.State == AuthorityDiscoveryTokenExecutable {
+			foundExecutable = true
+		}
+	}
+	if !foundExecutable {
+		t.Fatalf("tokens = %#v, want shape-matched active grant executable", menu.Tokens)
+	}
+}
+
 func TestReviewEventLookaheadSurfacesNextRecoveryApprovalCard(t *testing.T) {
 	t.Parallel()
 
@@ -255,7 +342,7 @@ func TestReviewEventLookaheadSurfacesNextRecoveryApprovalCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	key := session.SessionKey{ChatID: 2002, UserID: 0, Scope: telegramDMScopeRef(2002)}
 	now := time.Date(2026, 7, 2, 13, 0, 0, 0, time.UTC)
 	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
 		RequestInstanceID:   "lookahead-child-wake-instance",
@@ -296,7 +383,7 @@ func TestReviewEventLookaheadSurfacesNextRecoveryApprovalCard(t *testing.T) {
 	event := session.ReviewEvent{
 		ID:                88,
 		SourceSessionID:   session.SessionIDForKey(key),
-		TargetSessionID:   session.SessionIDForKey(key),
+		TargetSessionID:   "telegram_dm:1001",
 		TargetAdminChatID: 1001,
 		Summary:           "Approved current grant.",
 		Status:            "delivered",
@@ -353,6 +440,7 @@ func TestReviewEventLookaheadSurfacesNextRecoveryApprovalCard(t *testing.T) {
 		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
 	}
 	foundLookahead := false
+	var lookaheadProjection session.IdentificationLedgerProjection
 	for _, projection := range projections {
 		if projection.Entry.StepRef != "next_action:"+action.RecordID {
 			continue
@@ -362,11 +450,157 @@ func TestReviewEventLookaheadSurfacesNextRecoveryApprovalCard(t *testing.T) {
 				observation.Property == session.IdentificationPropertyContract &&
 				observation.Value == contract.ContractID {
 				foundLookahead = true
+				lookaheadProjection = projection
 			}
 		}
 	}
 	if !foundLookahead {
 		t.Fatalf("ledger projections = %#v, want lookahead contract observation for next action", projections)
+	}
+	trace := AuthorityDiscoveryTraceForReviewEvent(event, action, lookaheadProjection)
+	wantTrace := map[string]string{
+		"review_event":                      "88",
+		"next_action":                       action.RecordID,
+		"contract":                          contract.ContractID,
+		"identification_ledger_entry":       lookaheadProjection.Entry.EntryID,
+		"identification_ledger_observation": "",
+	}
+	for _, link := range trace.Links {
+		if _, ok := wantTrace[link.Kind]; ok && (wantTrace[link.Kind] == "" || wantTrace[link.Kind] == link.Ref) {
+			delete(wantTrace, link.Kind)
+		}
+	}
+	if len(wantTrace) != 0 {
+		t.Fatalf("trace links = %#v, missing %#v", trace.Links, wantTrace)
+	}
+}
+
+func TestReviewEventLookaheadDoesNotFallForwardFromStaleExactFrontier(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	rt := &Runtime{store: store}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	now := time.Date(2026, 7, 2, 14, 0, 0, 0, time.UTC)
+	contractA, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   "lookahead-stale-a",
+		SessionID:           session.SessionIDForKey(key),
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake", "durable_agent", "wake_once", ""),
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "idolum-email"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "idolum-email",
+		GrantID:             "grant-idolum-email-wake",
+		GrantTargetResource: "durable_agent:idolum-email:wake_once",
+		CreatedAt:           now,
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(A) err = %v", err)
+	}
+	_, actionA, err := store.RecordContinuationRecoveryContractNextAction(contractA, session.NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contractA.SubjectRef,
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: session.ContinuationRecoveryContractProjectionInput(contractA.ContractID),
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordContinuationRecoveryContractNextAction(A) err = %v", err)
+	}
+	contractB, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   "lookahead-stale-b",
+		SessionID:           session.SessionIDForKey(key),
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          contractA.SubjectRef,
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "idolum-email"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "idolum-email",
+		GrantID:             "grant-idolum-email-wake",
+		GrantTargetResource: "durable_agent:idolum-email:wake_once",
+		CreatedAt:           now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(B) err = %v", err)
+	}
+	_, actionB, err := store.RecordContinuationRecoveryContractNextAction(contractB, session.NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contractB.SubjectRef,
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: session.ContinuationRecoveryContractProjectionInput(contractB.ContractID),
+		CreatedAt:          now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("RecordContinuationRecoveryContractNextAction(B) err = %v", err)
+	}
+	if actionA.RecordID == actionB.RecordID {
+		t.Fatalf("test setup produced same action record id %q", actionA.RecordID)
+	}
+	event := session.ReviewEvent{
+		ID:                89,
+		SourceSessionID:   session.SessionIDForKey(key),
+		TargetSessionID:   session.SessionIDForKey(key),
+		TargetAdminChatID: 1001,
+		Summary:           "Old frontier card.",
+		MetadataJSON:      `{"next_action_record_id":"` + actionA.RecordID + `","next_action_session_id":"` + session.SessionIDForKey(key) + `"}`,
+		Status:            "delivered",
+		DeliveryMessageID: 56,
+	}
+	text, err := rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-lookahead-stale",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 56, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionLookaheadNext),
+	}, event, core.ReviewEventActionLookaheadNext)
+	if err != nil {
+		t.Fatalf("HandleReviewEventAction(stale exact lookahead) err = %v", err)
+	}
+	if !strings.Contains(text, "No unresolved authority frontier") {
+		t.Fatalf("lookahead text = %q, want stale exact frontier to no-op", text)
+	}
+	projections, err := store.IdentificationLedgerEntries(session.IdentificationLedgerQuery{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		Limit:       20,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	for _, projection := range projections {
+		if projection.Entry.StepRef != "next_action:"+actionB.RecordID {
+			continue
+		}
+		for _, observation := range projection.Observations {
+			if observation.Method == session.IdentificationObservationLookahead {
+				t.Fatalf("newer action %s gained lookahead observation from stale card: %#v", actionB.RecordID, projection)
+			}
+		}
 	}
 }
 

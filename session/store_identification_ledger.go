@@ -60,6 +60,34 @@ func (s *SQLiteStore) RecordIdentificationLedgerObservation(entryInput Identific
 	return entry, observation, nil
 }
 
+func (s *SQLiteStore) RecordIdentificationLedgerObservations(entryInput IdentificationLedgerEntryInput, observationInputs []IdentificationLedgerObservationInput) (IdentificationLedgerEntry, []IdentificationLedgerObservation, error) {
+	if s == nil || s.db == nil {
+		return IdentificationLedgerEntry{}, nil, fmt.Errorf("identification ledger store unavailable")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return IdentificationLedgerEntry{}, nil, fmt.Errorf("begin identification ledger tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	entry, err := recordIdentificationLedgerEntryTx(tx, entryInput)
+	if err != nil {
+		return IdentificationLedgerEntry{}, nil, err
+	}
+	observations := make([]IdentificationLedgerObservation, 0, len(observationInputs))
+	for _, observationInput := range observationInputs {
+		observationInput.EntryID = entry.EntryID
+		observation, err := recordIdentificationLedgerObservationTx(tx, observationInput)
+		if err != nil {
+			return IdentificationLedgerEntry{}, nil, err
+		}
+		observations = append(observations, observation)
+	}
+	if err := tx.Commit(); err != nil {
+		return IdentificationLedgerEntry{}, nil, fmt.Errorf("commit identification ledger tx: %w", err)
+	}
+	return entry, observations, nil
+}
+
 func (s *SQLiteStore) IdentificationLedgerEntries(query IdentificationLedgerQuery) ([]IdentificationLedgerProjection, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("identification ledger store unavailable")

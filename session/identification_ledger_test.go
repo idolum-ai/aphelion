@@ -314,6 +314,45 @@ func TestIdentificationLedgerRejectsUnknownObservationProperty(t *testing.T) {
 	}
 }
 
+func TestIdentificationLedgerObservationSetRollsBackOnInvalidObservation(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:read-unread-mail",
+		ShapeHash:   "sha256:mail-shape",
+		Status:      IdentificationLedgerStatusPartial,
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservations(entryInput, []IdentificationLedgerObservationInput{{
+		Method:      IdentificationObservationLookahead,
+		Property:    IdentificationPropertyApprovalClass,
+		Value:       "data_access",
+		EvidenceRef: "review_event:42",
+	}, {
+		Method:      IdentificationObservationLookahead,
+		Property:    IdentificationObservationProperty("ad_hoc_future_property"),
+		Value:       "maybe",
+		EvidenceRef: "review_event:42",
+	}}); err == nil {
+		t.Fatalf("RecordIdentificationLedgerObservations(invalid second observation) err = nil, want validation error")
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 0 {
+		t.Fatalf("projections after rolled-back observation set = %#v, want none", projections)
+	}
+}
+
 func TestIdentificationLedgerDBRejectsInvalidEnums(t *testing.T) {
 	t.Parallel()
 

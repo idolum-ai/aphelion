@@ -74,6 +74,15 @@ type AuthorityDiscoveryTraceMetrics struct {
 	LiveTailCount       int
 }
 
+type AuthorityDiscoveryTraceLink struct {
+	Kind string
+	Ref  string
+}
+
+type AuthorityDiscoveryTrace struct {
+	Links []AuthorityDiscoveryTraceLink
+}
+
 func CompileAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuInput) AuthorityDiscoveryMenu {
 	now := input.Now.UTC()
 	if now.IsZero() {
@@ -193,6 +202,30 @@ func ScoreAuthorityDiscoveryMenu(menu AuthorityDiscoveryMenu) AuthorityDiscovery
 	return metrics
 }
 
+func AuthorityDiscoveryTraceForReviewEvent(event session.ReviewEvent, action session.NextActionRecord, projection session.IdentificationLedgerProjection) AuthorityDiscoveryTrace {
+	trace := AuthorityDiscoveryTrace{}
+	if event.ID > 0 {
+		trace.Links = append(trace.Links, AuthorityDiscoveryTraceLink{Kind: "review_event", Ref: fmt.Sprint(event.ID)})
+	}
+	if id := strings.TrimSpace(action.RecordID); id != "" {
+		trace.Links = append(trace.Links, AuthorityDiscoveryTraceLink{Kind: "next_action", Ref: id})
+	}
+	if id := actionRecoveryApprovalContractID(action); id != "" {
+		trace.Links = append(trace.Links, AuthorityDiscoveryTraceLink{Kind: "contract", Ref: id})
+	}
+	entry := session.NormalizeIdentificationLedgerEntry(projection.Entry)
+	if id := strings.TrimSpace(entry.EntryID); id != "" {
+		trace.Links = append(trace.Links, AuthorityDiscoveryTraceLink{Kind: "identification_ledger_entry", Ref: id})
+	}
+	for _, observation := range projection.Observations {
+		observation = session.NormalizeIdentificationLedgerObservation(observation)
+		if id := strings.TrimSpace(observation.ObservationID); id != "" {
+			trace.Links = append(trace.Links, AuthorityDiscoveryTraceLink{Kind: "identification_ledger_observation", Ref: id})
+		}
+	}
+	return trace
+}
+
 type AuthorityDiscoveryMenuBuildInput struct {
 	Key         session.SessionKey
 	PlanID      string
@@ -242,7 +275,7 @@ func (r *Runtime) BuildAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuBuildI
 		if labelRef == "" {
 			continue
 		}
-		live, err := r.authorityDiscoveryLabelLive(input.Key, sessionID, labelRef, now)
+		live, err := r.authorityDiscoveryLabelLive(input.Key, sessionID, labelRef, projection.Entry.ShapeHash, now)
 		if err != nil {
 			return AuthorityDiscoveryMenu{}, err
 		}
@@ -253,7 +286,7 @@ func (r *Runtime) BuildAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuBuildI
 		if labelRef == "" {
 			continue
 		}
-		live, err := r.authorityDiscoveryLabelLive(input.Key, sessionID, labelRef, now)
+		live, err := r.authorityDiscoveryLabelLive(input.Key, sessionID, labelRef, slot.ShapeHash, now)
 		if err != nil {
 			return AuthorityDiscoveryMenu{}, err
 		}
@@ -270,7 +303,7 @@ func (r *Runtime) BuildAuthorityDiscoveryMenu(input AuthorityDiscoveryMenuBuildI
 	}), nil
 }
 
-func (r *Runtime) authorityDiscoveryLabelLive(key session.SessionKey, sessionID string, labelRef string, now time.Time) (bool, error) {
+func (r *Runtime) authorityDiscoveryLabelLive(key session.SessionKey, sessionID string, labelRef string, shapeHash string, now time.Time) (bool, error) {
 	labelRef = strings.TrimSpace(labelRef)
 	if labelRef == "" || r == nil || r.store == nil {
 		return false, nil
@@ -285,7 +318,8 @@ func (r *Runtime) authorityDiscoveryLabelLive(key session.SessionKey, sessionID 
 			return false, err
 		}
 		grant = session.NormalizeCapabilityGrant(grant)
-		return grant.Status == session.CapabilityGrantStatusActive &&
+		return authorityDiscoveryGrantMatchesShape(grant, shapeHash) &&
+			grant.Status == session.CapabilityGrantStatusActive &&
 			grant.RevokedAt.IsZero() &&
 			(grant.ExpiresAt.IsZero() || grant.ExpiresAt.After(now.UTC())), nil
 	case "continuation_recovery_contract":
@@ -346,12 +380,44 @@ func (r *Runtime) authorityDiscoveryAuthorityBundleLive(key session.SessionKey, 
 		if strings.TrimSpace(spec.GrantID) == "" {
 			return false, nil
 		}
-		live, err := r.authorityDiscoveryLabelLive(key, sessionID, spec.GrantID, now)
+		live, err := r.authorityDiscoveryLabelLive(key, sessionID, spec.GrantID, authorityDiscoveryShapeHashForGrantSpec(spec), now)
 		if err != nil || !live {
 			return live, err
 		}
 	}
 	return strings.TrimSpace(bundle.PrimaryContinuationContractID) != "" || len(bundle.RequiredCapabilityGrants) > 0, nil
+}
+
+func authorityDiscoveryGrantMatchesShape(grant session.CapabilityGrant, shapeHash string) bool {
+	shapeHash = strings.TrimSpace(shapeHash)
+	if shapeHash == "" {
+		return false
+	}
+	resourceClass := session.AuthorityResourceClass(grant.TargetResource)
+	for _, action := range grant.AllowedActions {
+		if session.AuthorityShapeHash(session.AuthorityShapeInput{
+			Action:        strings.TrimSpace(action),
+			ResourceClass: resourceClass,
+		}) == shapeHash {
+			return true
+		}
+	}
+	return false
+}
+
+func authorityDiscoveryShapeHashForGrantSpec(spec session.CapabilityGrantSpec) string {
+	spec = session.NormalizeCapabilityGrantSpec(spec)
+	resourceClass := session.AuthorityResourceClass(spec.TargetResource)
+	for _, action := range spec.AllowedActions {
+		if strings.TrimSpace(action) == "" {
+			continue
+		}
+		return session.AuthorityShapeHash(session.AuthorityShapeInput{
+			Action:        strings.TrimSpace(action),
+			ResourceClass: resourceClass,
+		})
+	}
+	return ""
 }
 
 func authorityDiscoveryStateForEntry(entry session.IdentificationLedgerEntry, now time.Time, liveAuthority bool) AuthorityDiscoveryTokenState {
