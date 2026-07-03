@@ -10,12 +10,13 @@ import (
 type ReentryRecommendationStatus string
 
 const (
-	ReentryRecommendationStatusPending  ReentryRecommendationStatus = "pending"
-	ReentryRecommendationStatusShown    ReentryRecommendationStatus = "shown"
-	ReentryRecommendationStatusSelected ReentryRecommendationStatus = "selected"
-	ReentryRecommendationStatusIgnored  ReentryRecommendationStatus = "ignored"
-	ReentryRecommendationStatusStale    ReentryRecommendationStatus = "stale"
-	ReentryRecommendationStatusExpired  ReentryRecommendationStatus = "expired"
+	ReentryRecommendationStatusPending    ReentryRecommendationStatus = "pending"
+	ReentryRecommendationStatusShown      ReentryRecommendationStatus = "shown"
+	ReentryRecommendationStatusSelected   ReentryRecommendationStatus = "selected"
+	ReentryRecommendationStatusIgnored    ReentryRecommendationStatus = "ignored"
+	ReentryRecommendationStatusStale      ReentryRecommendationStatus = "stale"
+	ReentryRecommendationStatusExpired    ReentryRecommendationStatus = "expired"
+	ReentryRecommendationStatusSuppressed ReentryRecommendationStatus = "suppressed"
 )
 
 type ReentryCandidateKind string
@@ -93,6 +94,8 @@ func NormalizeReentryRecommendationStatus(status ReentryRecommendationStatus) Re
 		return ReentryRecommendationStatusStale
 	case ReentryRecommendationStatusExpired:
 		return ReentryRecommendationStatusExpired
+	case ReentryRecommendationStatusSuppressed:
+		return ReentryRecommendationStatusSuppressed
 	default:
 		return ReentryRecommendationStatusPending
 	}
@@ -100,7 +103,7 @@ func NormalizeReentryRecommendationStatus(status ReentryRecommendationStatus) Re
 
 func ReentryRecommendationStatusTerminal(status ReentryRecommendationStatus) bool {
 	switch NormalizeReentryRecommendationStatus(status) {
-	case ReentryRecommendationStatusSelected, ReentryRecommendationStatusIgnored, ReentryRecommendationStatusStale, ReentryRecommendationStatusExpired:
+	case ReentryRecommendationStatusSelected, ReentryRecommendationStatusIgnored, ReentryRecommendationStatusStale, ReentryRecommendationStatusExpired, ReentryRecommendationStatusSuppressed:
 		return true
 	default:
 		return false

@@ -248,6 +248,110 @@ func TestInteractiveAssemblyEvidenceHydrationFavorsActiveRequestUnderPressure(t 
 	}
 }
 
+func TestInteractiveAssemblySuppressedOperationDoesNotCreateHydrationPressure(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	admin, ok := rt.resolver.ResolveTelegramUser(1001)
+	if !ok {
+		t.Fatal("ResolveTelegramUser(1001) = false, want true")
+	}
+	scope, err := rt.scopeForPrincipal(admin)
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+
+	key := session.SessionKey{ChatID: 99203, UserID: 1001, Scope: telegramDMScopeRef(99203)}
+	sessionID := session.SessionIDForKey(key)
+	stale := budgetRecoveryTestOperationState()
+	stale.ID = "stale-gog-cli-hydration"
+	stale.Objective = "Run post-merge gog_cli audit/probe and verify only if drift clears."
+	stale.Status = session.OperationStatusActive
+	stale.Stage = "execution"
+	stale.PhasePlan.Goal = stale.Objective
+	stale.PhasePlan.CurrentPhaseID = "gog-cli-post-merge-lifecycle-verify-v1"
+	stale.PhasePlan.Phases[0].ID = "gog-cli-post-merge-lifecycle-verify-v1"
+	stale.PhasePlan.Phases[0].Summary = "Run gog_cli audit/probe and verify install state."
+	if err := store.UpdateOperationState(key, stale); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusRevoked,
+		RemainingTurns: 0,
+		ActionProposal: session.ActionProposal{
+			ID:        "aprop-stale-gog-cli-hydration",
+			Summary:   "Run gog_cli audit/probe and verify install state.",
+			Status:    session.ProposalStatusSuperseded,
+			UpdatedAt: time.Now().UTC(),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-stale-gog-cli-hydration",
+			ProposalID:     "aprop-stale-gog-cli-hydration",
+			Status:         session.ContinuationLeaseStatusRevoked,
+			RemainingTurns: 0,
+			UpdatedAt:      time.Now().UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if _, err := store.UpsertEvidenceObject(session.EvidenceObjectInput{
+		SourceKind:      session.EvidenceSourceOperationState,
+		SourceRef:       "operation_state:stale-gog-cli-hydration",
+		SessionID:       sessionID,
+		ChatID:          key.ChatID,
+		UserID:          key.UserID,
+		Scope:           key.Scope,
+		EpistemicStatus: session.EvidenceStatusProjection,
+		SubjectKey:      "stale gog_cli verification",
+		Summary:         "Stale gog_cli verification evidence should not be hydrated for a fresh PR reducer request.",
+		PayloadJSON:     `{"topic":"gog_cli verification"}`,
+		ObservedAt:      time.Now().UTC().Add(-30 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertEvidenceObject(stale operation) err = %v", err)
+	}
+
+	msg := core.InboundMessage{
+		ChatID:     key.ChatID,
+		SenderID:   key.UserID,
+		SenderName: "admin",
+		Text:       "Review pull request 287 and add reducer regression coverage.",
+		MessageID:  44,
+	}
+	assembled, err := rt.assembleInteractiveLikeTurn(context.Background(), interactiveLikeAssemblyInput{
+		Scope:                scope,
+		Key:                  key,
+		Msg:                  msg,
+		Channel:              "telegram",
+		RunKind:              session.TurnRunKindInteractive,
+		PrincipalRole:        string(admin.Role),
+		AuditChannel:         "telegram",
+		EventAwareness:       turnEventAwarenessForTest(msg),
+		PromptContextErrHint: "load workspace prompt context",
+		PolicyReason:         "mapped from pipeline interactive face policy",
+	})
+	if err != nil {
+		t.Fatalf("assembleInteractiveLikeTurn() err = %v", err)
+	}
+	joined := strings.Join(assembled.BaseGovernorAwareness.EvidenceContext, "\n")
+	if !strings.Contains(joined, "operation_state_suppressed=true") {
+		t.Fatalf("evidence context = %q, want suppressed operation breadcrumb", joined)
+	}
+	if strings.Contains(joined, "hydration_run=") || strings.Contains(joined, "Stale gog_cli verification evidence") {
+		t.Fatalf("suppressed stale operation still hydrated evidence: %q", joined)
+	}
+	stats, err := store.EvidenceLedgerStatsForChat(key.ChatID)
+	if err != nil {
+		t.Fatalf("EvidenceLedgerStatsForChat() err = %v", err)
+	}
+	if stats.HydrationRunCount != 0 {
+		t.Fatalf("hydration runs = %d, want 0 when stale operation pressure is shed", stats.HydrationRunCount)
+	}
+}
+
 func TestExplicitEvidenceRecallRequestContinuationTermsNeedIntent(t *testing.T) {
 	t.Parallel()
 

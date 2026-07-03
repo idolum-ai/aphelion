@@ -109,6 +109,97 @@ func TestToolAuthorityInstallSetShowListAndRegisterGateForExternalTool(t *testin
 	}
 }
 
+func TestToolAuthorityProbeRunRecordsFreshEvidenceWithoutClearingStaleInstall(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if err := os.MkdirAll(registry.workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) err = %v", err)
+	}
+	runScript := filepath.Join(registry.workspace, "run.sh")
+	if err := os.WriteFile(runScript, []byte("#!/usr/bin/env bash\necho '{\"summary\":\"ok\"}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh) err = %v", err)
+	}
+	probeScript := filepath.Join(registry.workspace, "probe.sh")
+	if err := os.WriteFile(probeScript, []byte("#!/usr/bin/env bash\necho 'probe ok'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(probe.sh) err = %v", err)
+	}
+	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
+		Name:      "browse_page",
+		Owner:     "child-alpha",
+		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		IO:        ExternalToolManifestIO{OutputSchema: json.RawMessage(`{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}`)},
+		Probe:     ExternalToolManifestProbe{Command: []string{"./probe.sh"}, ExpectedOutputContains: "probe ok"},
+	}})
+	if err != nil {
+		t.Fatalf("WithExternalToolManifests() err = %v", err)
+	}
+	for _, input := range []string{
+		`{"action":"install_set","tool_name":"browse_page","status":"installed","installer":"aphelion","install_ref":"workspace:tooling-v1"}`,
+		`{"action":"audit_run","tool_name":"browse_page"}`,
+		`{"action":"probe_run","tool_name":"browse_page"}`,
+		`{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:tooling-v1"}`,
+	} {
+		if _, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "tool_authority", json.RawMessage(input)); err != nil {
+			t.Fatalf("tool_authority input %s err = %v", input, err)
+		}
+	}
+	if err := os.WriteFile(runScript, []byte("#!/usr/bin/env bash\necho '{\"summary\":\"mutated\"}'\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(run.sh mutated) err = %v", err)
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "tool_authority", json.RawMessage(`{"action":"install_show","tool_name":"browse_page"}`)); err != nil {
+		t.Fatalf("install_show after drift err = %v", err)
+	}
+	stale, ok, err := store.ToolInstallRecord("browse_page")
+	if err != nil || !ok {
+		t.Fatalf("ToolInstallRecord(stale) ok=%t err=%v", ok, err)
+	}
+	if stale.DriftSource != session.ToolDriftSourceWorkspaceDrift || stale.StaleReason == "" || stale.BaselineWorkspaceFingerprint == stale.CurrentWorkspaceFingerprint {
+		t.Fatalf("stale record = %#v, want workspace drift before reprobe", stale)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "tool_authority", json.RawMessage(`{"action":"probe_run","tool_name":"browse_page"}`)); err != nil {
+		t.Fatalf("probe_run after drift err = %v", err)
+	}
+	refreshed, ok, err := store.ToolInstallRecord("browse_page")
+	if err != nil || !ok {
+		t.Fatalf("ToolInstallRecord(refreshed) ok=%t err=%v", ok, err)
+	}
+	if refreshed.ProbeStatus != session.ToolProbeStatusPassed {
+		t.Fatalf("probe status = %q, want passed", refreshed.ProbeStatus)
+	}
+	if refreshed.Status != session.ToolInstallStatusStale {
+		t.Fatalf("status after passing reprobe = %q, want stale until explicit verification", refreshed.Status)
+	}
+	if refreshed.DriftSource != session.ToolDriftSourceWorkspaceDrift || refreshed.StaleReason == "" {
+		t.Fatalf("drift after passing reprobe = source=%q reason=%q, want actionable workspace drift until verification", refreshed.DriftSource, refreshed.StaleReason)
+	}
+	if refreshed.BaselineWorkspaceFingerprint == refreshed.CurrentWorkspaceFingerprint {
+		t.Fatalf("workspace baseline unexpectedly refreshed by probe-only path: baseline=%q current=%q", refreshed.BaselineWorkspaceFingerprint, refreshed.CurrentWorkspaceFingerprint)
+	}
+
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "tool_authority", json.RawMessage(`{"action":"audit_run","tool_name":"browse_page"}`)); err != nil {
+		t.Fatalf("audit_run after drift err = %v", err)
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, key, "tool_authority", json.RawMessage(`{"action":"install_set","tool_name":"browse_page","status":"verified","installer":"aphelion","install_ref":"workspace:tooling-v1"}`)); err != nil {
+		t.Fatalf("install_set verified after fresh audit/probe err = %v", err)
+	}
+	verified, ok, err := store.ToolInstallRecord("browse_page")
+	if err != nil || !ok {
+		t.Fatalf("ToolInstallRecord(verified) ok=%t err=%v", ok, err)
+	}
+	if verified.Status != session.ToolInstallStatusVerified {
+		t.Fatalf("status after explicit verification = %q, want verified", verified.Status)
+	}
+	if verified.DriftSource != "" || verified.StaleReason != "" {
+		t.Fatalf("drift after explicit verification = source=%q reason=%q, want cleared", verified.DriftSource, verified.StaleReason)
+	}
+	if verified.BaselineWorkspaceFingerprint != verified.CurrentWorkspaceFingerprint {
+		t.Fatalf("workspace baseline=%q current=%q, want refreshed baseline after verification", verified.BaselineWorkspaceFingerprint, verified.CurrentWorkspaceFingerprint)
+	}
+}
+
 func TestToolAuthorityInstallShowMarksExternalToolStaleOnFingerprintDrift(t *testing.T) {
 	t.Parallel()
 

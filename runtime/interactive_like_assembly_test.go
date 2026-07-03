@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/pipeline"
@@ -326,5 +327,103 @@ func TestAssembleInteractiveLikeTurnIncludesWorkingObjectiveBesideTerminalOperat
 	}
 	if got, want := aw.OperationObjective, "Document old Imexx SSH recall context."; got != want {
 		t.Fatalf("OperationObjective = %q, want %q", got, want)
+	}
+}
+
+func TestAssembleInteractiveLikeTurnShedsStaleActiveOperationContext(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	admin, ok := rt.resolver.ResolveTelegramUser(1001)
+	if !ok {
+		t.Fatal("ResolveTelegramUser(1001) = false, want true")
+	}
+	dmScope, err := rt.scopeForPrincipal(admin)
+	if err != nil {
+		t.Fatalf("scopeForPrincipal() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9026, UserID: 0, Scope: telegramDMScopeRef(9026)}
+	if err := store.UpdateWorkingObjective(key, session.WorkingObjective{
+		Objective:  "Proceed to implement the PR 287 reducer regression.",
+		Source:     "inferred",
+		Confidence: "medium",
+	}); err != nil {
+		t.Fatalf("UpdateWorkingObjective() err = %v", err)
+	}
+	stale := budgetRecoveryTestOperationState()
+	stale.ID = "stale-gog-cli-verification"
+	stale.Objective = "Run post-merge gog_cli audit/probe and verify only if drift clears."
+	stale.Status = session.OperationStatusActive
+	stale.Stage = "execution"
+	stale.PhasePlan.ID = "gog-cli-lifecycle-plan"
+	stale.PhasePlan.Goal = stale.Objective
+	stale.PhasePlan.CurrentPhaseID = "gog-cli-post-merge-lifecycle-verify-v1"
+	stale.PhasePlan.Phases[0].ID = "gog-cli-post-merge-lifecycle-verify-v1"
+	stale.PhasePlan.Phases[0].Summary = "Run gog_cli audit/probe and verify install state."
+	stale.Artifacts = append(stale.Artifacts, session.OperationArtifact{Label: "work evidence", Ref: "/tmp/stale-gog-cli.md"})
+	if err := store.UpdateOperationState(key, stale); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Status:         session.ContinuationStatusRevoked,
+		RemainingTurns: 0,
+		ActionProposal: session.ActionProposal{
+			ID:        "aprop-stale-gog-cli-verification",
+			Summary:   "Run gog_cli audit/probe and verify install state.",
+			Status:    session.ProposalStatusSuperseded,
+			UpdatedAt: time.Now().UTC(),
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-stale-gog-cli-verification",
+			ProposalID:     "aprop-stale-gog-cli-verification",
+			Status:         session.ContinuationLeaseStatusRevoked,
+			RemainingTurns: 0,
+			UpdatedAt:      time.Now().UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, SenderName: "admin", Text: "Review pull request 287 and add reducer regression coverage.", MessageID: 32}
+	assembled, err := rt.assembleInteractiveLikeTurn(context.Background(), interactiveLikeAssemblyInput{
+		Scope:                dmScope,
+		Key:                  key,
+		Msg:                  msg,
+		Channel:              "telegram",
+		RunKind:              session.TurnRunKindInteractive,
+		PrincipalRole:        string(admin.Role),
+		AuditChannel:         "telegram",
+		EventAwareness:       turn.EventAwareness{Origin: string(core.InboundOriginUser)},
+		PromptContextErrHint: "load workspace prompt context",
+		PolicyReason:         "mapped from pipeline interactive face policy",
+	})
+	if err != nil {
+		t.Fatalf("assembleInteractiveLikeTurn() err = %v", err)
+	}
+	aw := assembled.BaseGovernorAwareness
+	if aw.OperationActive || aw.OperationObjective != "" || aw.PhasePlanActive || len(aw.OperationPhases) != 0 || len(aw.OperationArtifacts) != 0 {
+		t.Fatalf("operation awareness = %#v, want stale active operation shed from current prompt context", aw)
+	}
+	if assembled.PromptOperationState.Active() {
+		t.Fatalf("PromptOperationState = %#v, want shed prompt-only operation state", assembled.PromptOperationState)
+	}
+	joined := strings.Join(aw.EvidenceContext, "\n")
+	if !strings.Contains(joined, "operation_state_suppressed=true") || !strings.Contains(joined, "surface=prompt_context") {
+		t.Fatalf("evidence context = %q, want compact suppression breadcrumb", joined)
+	}
+	for _, line := range aw.EvidenceContext {
+		if strings.HasPrefix(line, "evidence_ledger=available") && strings.Contains(line, "operation_id=stale-gog-cli-verification") {
+			t.Fatalf("evidence context line = %q, want evidence pointer not scoped to suppressed stale operation", line)
+		}
+	}
+	events, err := store.LatestExecutionEventsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("LatestExecutionEventsBySession() err = %v", err)
+	}
+	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventRecoveryCandidateSuppressed, "surface", "prompt_context") {
+		t.Fatalf("events = %#v, want prompt-context suppression event", events)
 	}
 }

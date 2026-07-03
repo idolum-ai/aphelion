@@ -145,6 +145,8 @@ type turnCoordinatorExecuteInput struct {
 	PromptContext         *workspace.PromptContext
 	Tools                 agent.ToolRegistry
 	BaseGovernorAwareness prompt.RuntimeAwareness
+	PromptOperationState  session.OperationState
+	PromptOperationSet    bool
 	Audit                 *turnAuditRecorder
 	RunKind               session.TurnRunKind
 	FaceNote              string
@@ -313,9 +315,13 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		if brokerage.Phase == "brokerage" && strings.TrimSpace(brokerage.Ratification) == "accept" {
 			sess.PlanState = maybeSeedPlanFromBrokerage(sess.PlanState, brokerage)
 		}
+		promptOperationState := sess.OperationState
+		if input.PromptOperationSet {
+			promptOperationState = input.PromptOperationState
+		}
 		governorAwareness := turn.ApplyOperationAwareness(
 			turn.ApplyPlanAwareness(baseGovernorAwareness, sess.PlanState),
-			sess.OperationState,
+			promptOperationState,
 		)
 		governorAwareness = turn.ApplyContinuationAwareness(governorAwareness, sess.ContinuationState)
 		promptState = r.buildTurnCoordinatorGovernorPrompt(input, governorAwareness, brokerage)
@@ -469,12 +475,16 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 		return out, monitorErr
 	}
 
+	faceOperationState := sess.OperationState
+	if input.PromptOperationSet {
+		faceOperationState = r.operationPromptContextForTurn(input.Key, input.Msg, sess.OperationState, sess.ContinuationState, time.Now().UTC(), "face_context").State
+	}
 	out.LastFaceAwareness = turn.ApplyOperationAwareness(
 		turn.ApplyBrokerageAwareness(
 			r.governorRuntimeAwareness(input.Scope, runKind, input.Channel, input.Exec),
 			brokerage.toTurnAwareness(),
 		),
-		sess.OperationState,
+		faceOperationState,
 	)
 	out.LastFaceAwareness = turn.ApplyContinuationAwareness(out.LastFaceAwareness, sess.ContinuationState)
 

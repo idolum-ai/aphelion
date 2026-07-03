@@ -1115,6 +1115,52 @@ func TestTriggerCodingContinuationEmptySuccessOffersFreshRetry(t *testing.T) {
 	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
 		t.Fatalf("events = %#v, want no work executor success event", events)
 	}
+
+	if _, err := rt.ApproveContinuation(8194, 1001); err != nil {
+		t.Fatalf("ApproveContinuation(second retry) err = %v", err)
+	}
+	err = rt.TriggerContinuation(context.Background(), 8194)
+	if err == nil || !strings.Contains(err.Error(), errWorkExecutorNoCompletionEvidence.Error()) {
+		t.Fatalf("TriggerContinuation(second) err = %v, want repeated no-completion-evidence failure", err)
+	}
+	if work.calls != 2 {
+		t.Fatalf("work calls after second trigger = %d, want two executor attempts", work.calls)
+	}
+	blocked, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(second) err = %v", err)
+	}
+	if blocked.Status == session.ContinuationStatusPending || blocked.ActionProposal.Status == session.ProposalStatusPending || blocked.ContinuationLease.Status == session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation after repeated failure = %#v, want non-pending parked state", blocked)
+	}
+	op, err = store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState(second) err = %v", err)
+	}
+	if op.Status != session.OperationStatusBlocked || op.Stage != "work_executor_repeat_failure" || !strings.Contains(op.Summary, "same retry fingerprint") {
+		t.Fatalf("operation after repeated failure = %#v, want repeat-failure blocker", op)
+	}
+	sender.mu.Lock()
+	inlineCount = len(sender.inline)
+	sentCount := len(sender.sent)
+	sentText := ""
+	if sentCount > 0 {
+		sentText = sender.sent[sentCount-1].Text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count after repeated failure = %d, want no second retry prompt", inlineCount)
+	}
+	if !strings.Contains(sentText, "failed the same way twice") {
+		t.Fatalf("sent text = %q, want repeated-failure notice", sentText)
+	}
+	events, err = store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(second) err = %v", err)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationBlocked, "repeat_work_failure") {
+		t.Fatalf("events = %#v, want repeat work failure block", events)
+	}
 }
 
 func TestTriggerCommitContinuationReconcilesLocalCommitBeforeRetry(t *testing.T) {
@@ -2014,6 +2060,13 @@ func TestWorkFailureRetryFallbackSendsPlainNoticeWhenInlinePromptFails(t *testin
 	}
 	if len(sent) != 1 || !strings.Contains(sent[0].Text, "I could not show the retry approval buttons.") || !strings.Contains(sent[0].Text, "fresh manual approval") {
 		t.Fatalf("sent = %#v, want plain fallback retry notice", sent)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status == session.ContinuationStatusPending || got.ActionProposal.Status == session.ProposalStatusPending || got.ContinuationLease.Status == session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation = %#v, want undelivered retry prompt revoked", got)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 50)
 	if err != nil {

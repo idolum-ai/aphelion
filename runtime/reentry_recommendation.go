@@ -20,13 +20,14 @@ import (
 )
 
 const (
-	reentryRecommendationDelay   = 5 * time.Minute
-	reentryRecommendationCadence = time.Minute
-	reentryRecommendationLimit   = 96
-	reentryCandidateLimit        = 3
-	reentryBodyTextRuneLimit     = 700
-	reentryIgnoredDampeningTTL   = 12 * time.Hour
-	reentryStaleDampeningTTL     = 6 * time.Hour
+	reentryRecommendationDelay    = 5 * time.Minute
+	reentryRecommendationCadence  = time.Minute
+	reentryRecommendationLimit    = 96
+	reentryCandidateLimit         = 3
+	reentryBodyTextRuneLimit      = 700
+	reentryIgnoredDampeningTTL    = 12 * time.Hour
+	reentryStaleDampeningTTL      = 6 * time.Hour
+	reentrySuppressedDampeningTTL = time.Hour
 )
 
 func (r *Runtime) StartReentryRecommendationLoop(ctx context.Context, logger func(string, ...any)) {
@@ -92,13 +93,24 @@ func (r *Runtime) maybeSurfaceReentryRecommendation(ctx context.Context, run ses
 		return nil
 	}
 	if reentryRecommendationLowValueOnly(candidates) {
+		record := reentryRecommendationRecordForState(state, candidates)
+		stored, allowed, reason, err := r.store.CreateSuppressedReentryRecommendationIfAllowed(record, "low-value candidates suppressed", now)
+		if err != nil {
+			return err
+		}
+		recommendationID := reentryRecommendationID(state.Fingerprint)
+		if strings.TrimSpace(stored.ID) != "" {
+			recommendationID = stored.ID
+		}
 		r.recordReentryRecommendationJudgment(key, "suppressed_low_value", map[string]any{
-			"recommendation_id":    reentryRecommendationID(state.Fingerprint),
+			"recommendation_id":    recommendationID,
 			"turn_run_id":          state.Run.ID,
 			"terminal_fingerprint": state.Fingerprint,
 			"candidate_count":      len(candidates),
 			"candidate_order":      reentryRecommendationCandidateIDs(candidates),
 			"candidates":           reentryRecommendationAuditCandidates(candidates),
+			"persisted":            allowed,
+			"store_reason":         reason,
 		}, now)
 		return nil
 	}
@@ -114,22 +126,26 @@ func (r *Runtime) maybeSurfaceReentryRecommendation(ctx context.Context, run ses
 	if len(candidates) > reentryCandidateLimit {
 		candidates = candidates[:reentryCandidateLimit]
 	}
-	record := session.ReentryRecommendation{
-		ID:                  reentryRecommendationID(state.Fingerprint),
-		Owner:               reentryRecommendationOwner(run),
-		ChatID:              run.ChatID,
-		SessionID:           run.SessionID,
-		Scope:               run.Scope,
-		SourceTurnRunID:     run.ID,
-		TerminalFingerprint: state.Fingerprint,
-		Candidates:          candidates,
-	}
+	record := reentryRecommendationRecordForState(state, candidates)
 	record, allowed, reason, err := r.store.CreateReentryRecommendationIfAllowed(record, now)
 	if err != nil || !allowed {
 		_ = reason
 		return err
 	}
 	return r.deliverReentryRecommendation(ctx, key, record, now)
+}
+
+func reentryRecommendationRecordForState(state reentryRecommendationState, candidates []session.ReentryRecommendationCandidate) session.ReentryRecommendation {
+	return session.ReentryRecommendation{
+		ID:                  reentryRecommendationID(state.Fingerprint),
+		Owner:               reentryRecommendationOwner(state.Run),
+		ChatID:              state.Run.ChatID,
+		SessionID:           state.Run.SessionID,
+		Scope:               state.Run.Scope,
+		SourceTurnRunID:     state.Run.ID,
+		TerminalFingerprint: state.Fingerprint,
+		Candidates:          candidates,
+	}
 }
 
 type reentryRecommendationState struct {
@@ -721,8 +737,8 @@ func (r *Runtime) applyReentryRecommendationDampening(state reentryRecommendatio
 	if r == nil || r.store == nil || strings.TrimSpace(state.Run.SessionID) == "" || len(candidates) == 0 {
 		return candidates
 	}
-	ignored, stale := r.reentryRecommendationDampeningKeys(state)
-	if len(ignored) == 0 && len(stale) == 0 {
+	ignored, stale, suppressed := r.reentryRecommendationDampeningKeys(state)
+	if len(ignored) == 0 && len(stale) == 0 && len(suppressed) == 0 {
 		return candidates
 	}
 	out := make([]session.ReentryRecommendationCandidate, 0, len(candidates))
@@ -730,6 +746,9 @@ func (r *Runtime) applyReentryRecommendationDampening(state reentryRecommendatio
 		key := reentryCandidateDampeningKey(candidate)
 		candidate.DampeningKey = key
 		if _, ok := ignored[key]; ok {
+			continue
+		}
+		if _, ok := suppressed[key]; ok {
 			continue
 		}
 		if _, ok := stale[key]; ok {
@@ -742,12 +761,13 @@ func (r *Runtime) applyReentryRecommendationDampening(state reentryRecommendatio
 	return out
 }
 
-func (r *Runtime) reentryRecommendationDampeningKeys(state reentryRecommendationState) (map[string]time.Time, map[string]time.Time) {
+func (r *Runtime) reentryRecommendationDampeningKeys(state reentryRecommendationState) (map[string]time.Time, map[string]time.Time, map[string]time.Time) {
 	ignored := map[string]time.Time{}
 	stale := map[string]time.Time{}
+	suppressed := map[string]time.Time{}
 	records, err := r.store.ReentryRecommendations(session.ReentryRecommendationFilter{SessionID: state.Run.SessionID, Limit: 100})
 	if err != nil {
-		return ignored, stale
+		return ignored, stale, suppressed
 	}
 	now := state.Now
 	if now.IsZero() {
@@ -775,6 +795,11 @@ func (r *Runtime) reentryRecommendationDampeningKeys(state reentryRecommendation
 				continue
 			}
 			target = stale
+		case session.ReentryRecommendationStatusSuppressed:
+			if age < 0 || age > reentrySuppressedDampeningTTL {
+				continue
+			}
+			target = suppressed
 		default:
 			continue
 		}
@@ -784,7 +809,7 @@ func (r *Runtime) reentryRecommendationDampeningKeys(state reentryRecommendation
 			}
 		}
 	}
-	return ignored, stale
+	return ignored, stale, suppressed
 }
 
 func cloneReentryCandidateScores(scores map[string]float64) map[string]float64 {
