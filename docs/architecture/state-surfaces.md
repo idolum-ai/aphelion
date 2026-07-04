@@ -43,7 +43,7 @@ Aphelion state is intentionally multi-surface.
 - Re-entry recommendations (`reentry_recommendations`) are current projection
   records for recommendation cards. They are not canonical for whether the
   recommended work surface is still live.
-- Future attention-radar entries should be canonical for recommendation
+- Planned attention-radar entries should be canonical for recommendation
   liveness and provenance; recommendation cards should project those entries
   rather than reconstructing liveness from nearby state.
 
@@ -93,7 +93,7 @@ Classifications below use the shared truth classes defined in
 | `sessions.continuation_state_json` | operational current-state store | What continuation state, embedded `ActionProposal`, and embedded `ContinuationLease` are currently declared? |
 | `mission_ledger` candidate rows projected as pending items | projection | Which durable candidate missions should be visible for operator review now? |
 | `reentry_recommendations` | projection | Which recommendation card was rendered or selected from a candidate set? |
-| Future attention-radar track ledger | canonical | Which recommendable surfaces are live, stale, selected, ignored, superseded, or expired, and what evidence last refreshed them? |
+| Planned attention-radar track ledger | canonical (planned) | Which recommendable surfaces are live, selected, ignored, superseded, expired, or ghost-classified, and what evidence last refreshed them? |
 | `session.review_events (status='pending')` | operational current-state store | Which review artifacts are queued for governance delivery? |
 | `/status` | projection | How should system/chat state be rendered for operators now? |
 | `/health trace` | projection | How should execution evidence be rendered for diagnosis now? |

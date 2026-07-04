@@ -234,16 +234,17 @@ This prevents the controller from moving the goalposts to declare success.
 
 ## Pursuit State
 
-Illustrative state machine:
+Illustrative branching state machine:
 
 ```text
 pursuing
-  -> awaiting_approval
-  -> reaiming
-  -> criteria_satisfied
-  -> operator_accepted
-  -> stalled
-  -> halted_cost
+  |-- boundary needed -----------> awaiting_approval --tap/lease--> pursuing
+  |-- cheaper plan / regression -> reaiming ----------------------> pursuing
+  |-- required criteria met -----> criteria_satisfied ------------> operator_accepted
+  |-- no useful work remains ----> controller_converged ----------> operator_accepted | parked
+  |-- ambiguous attribution -----> awaiting_operator_disambiguation
+  |-- no progress for K rounds --> stalled
+  |-- budget exhausted ----------> halted_cost
 ```
 
 Important distinction:
@@ -251,6 +252,8 @@ Important distinction:
 - `criteria_satisfied`: evaluator found enough evidence.
 - `controller_converged`: no further useful work is available.
 - `operator_accepted`: human closed the mission.
+- `awaiting_operator_disambiguation`: the controller cannot tell whether the
+  work regressed or the reference is wrong.
 
 Evaluator satisfaction is not consent.
 

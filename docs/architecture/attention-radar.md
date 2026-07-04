@@ -97,8 +97,11 @@ Attention tracks are canonical for recommendation liveness:
 - Which evidence last refreshed it?
 - Which properties are known: urgency, freshness, authority cost, user fit,
   conflict, dampening?
-- Is the track live, coasting, holding, selected, ignored, stale, superseded,
-  expired, or invalidated?
+- Is the track live, coasting, holding, selected, ignored, superseded, expired,
+  or invalidated?
+- Is the track fresh, cooling, stale, or unknown?
+- Does projection classify it as a ghost because its durable source still
+  exists but no live witness supports recommendation?
 - Which operator or runtime event changed that state?
 
 Recommendation cards are projections of tracks. They are not the source of
@@ -135,7 +138,7 @@ type AttentionTrack struct {
     TrackHash  string // stable over source + attention archetype
 
     Status string // live | coasting | holding | selected | ignored |
-                  // stale | superseded | expired | invalidated
+                  // superseded | expired | invalidated
 
     FreshnessClass string // fresh | cooling | stale | unknown
     PriorityClass  string // emergency | now | soon | later
@@ -151,9 +154,12 @@ type AttentionTrackReturn struct {
     TrackID string
 
     Method string // source_event | static | operator | child_report |
-                  // evidence_hydration | recommendation_click | absence
+                  // evidence_hydration | recommendation_click |
+                  // recommendation_card | absence
     Property string // liveness | urgency | conflict | authority_cost |
-                    // user_fit | freshness | supersession | dampening
+                    // user_fit | freshness | supersession | dampening |
+                    // presentation | selection | holding |
+                    // expired_unreviewed | stale_callback
     Value       string
     EvidenceRef string
 
@@ -169,6 +175,20 @@ type AttentionTrackReturn struct {
 The track is the durable identity. Returns are the provenance history. Track
 status is not a model summary; it is the current projection of returns,
 freshness policy, operator actions, and supersession rules.
+
+`Status` owns lifecycle and operator action. `FreshnessClass` owns measured
+recency. `ghost` is not a stored status; it is a projection-time classification:
+the durable source row still exists, but current witnesses do not support
+recommendation. Keeping those axes separate prevents a future schema from
+confusing "old signal" with "terminal lifecycle."
+
+An attention archetype is the redacted class of why a source is recommendable:
+`operation_resume`, `unresolved_next_action`, `child_task_blocker`,
+`goal_boundary_decision`, `memory_pressure`, and similar stable shapes. It
+excludes exact user text, file paths, secret-bearing values, and transient
+summary prose. The archetype decides what coalesces into one track and what
+dampens together, so it must be registered and validated rather than invented
+ad hoc by a ranker.
 
 Graduated identification applies here too. A first return might identify only
 "this is operation-shaped." Later returns can refine authority cost, urgency,
@@ -224,16 +244,18 @@ after the candidate set is typed. The model receives track IDs and bounded
 metadata; it returns an ordering or an abstention. It cannot create a track,
 reacquire a ghost, or decide that a selection is executable.
 
-The projection should record presentation events:
+The projection should record presentation events as returns:
 
-- shown;
-- selected;
-- ignored;
-- parked;
-- expired-unreviewed;
-- conflict-rendered;
-- superseded;
-- stale-callback.
+| Presentation event | Return method | Return property |
+| --- | --- | --- |
+| shown | `recommendation_card` | `presentation` |
+| selected | `recommendation_click` | `selection` |
+| ignored | `operator` | `dampening` |
+| parked | `operator` | `holding` |
+| expired-unreviewed | `absence` | `expired_unreviewed` |
+| conflict-rendered | `recommendation_card` | `conflict` |
+| superseded | `source_event` | `supersession` |
+| stale-callback | `recommendation_click` | `stale_callback` |
 
 Those events are returns too. The operator's inaction and attention are part of
 the signal. Silence that expires a card is an actor-stamped return, not missing
@@ -250,9 +272,9 @@ Selecting a recommendation compiles a typed work token:
 - `inspect_memory_pressure(track_id, signal_id)`
 - `continue_goal_pursuit(track_id, goal_id)`
 
-The token becomes the active work surface, or the track is marked stale if the
-source can no longer satisfy selection. Selection should never merely send a
-prompt that asks the model to infer what the button meant.
+The token becomes the active work surface, or the track's freshness is marked
+stale if the source can no longer satisfy selection. Selection should never
+merely send a prompt that asks the model to infer what the button meant.
 
 Callback identity is exact. A stale recommendation callback must not bind to a
 newer track silently. It should render the current radar view or a stale-card
@@ -260,14 +282,15 @@ message that points at the new track.
 
 ## Staleness, Coasting, And Ghosts
 
-A track can be current, cooling, stale, or a ghost.
+A track has a lifecycle status and a freshness class. Ghost is derived.
 
-- **Live:** current return plus source witness.
-- **Coasting:** no new return yet, but still inside a short source-specific
+- **Status `live`:** current return plus source witness.
+- **Status `coasting`:** no new return yet, but still inside a short source-specific
   grace window.
-- **Holding:** intentionally parked or dampened; inspectable, not interrupting.
-- **Stale:** freshness window passed or superseded by a stronger source.
-- **Ghost:** durable source row still exists, but no live witness supports
+- **Status `holding`:** intentionally parked or dampened; inspectable, not interrupting.
+- **Freshness `stale`:** freshness window passed or superseded by a stronger
+  source.
+- **Ghost classification:** durable source row still exists, but no live witness supports
   recommendation.
 
 Ghost tracks are not deleted. They remain inspectable evidence and can be
@@ -281,6 +304,10 @@ Rules:
 - Expiry without review records operator absence.
 - Coasting windows must be source-specific and short; indefinite coasting is a
   ghost with nicer wording.
+- Existing re-entry dampening TTLs provide a first calibration point: ignored
+  recommendations dampen for 12 hours, stale recommendations for 6 hours, and
+  suppressed recommendations for 1 hour. Radar TTLs may differ by source, but
+  should be explicit and test-covered.
 
 ## Where Aphelion Is Already Strong
 
@@ -395,7 +422,7 @@ track returns
         |
         v
 radar projection
-  live + coasting + holding tracks; ghosts only in details
+  live + coasting + holding tracks; ghost classifications only in details
         |
         v
 optional model ranking over typed track IDs
@@ -414,7 +441,7 @@ track is selectable.
 initiated
    |
    v
-live ---- missed return ----> coasting ---- timeout ----> stale
+live ---- missed return ----> coasting ---- timeout ----> freshness=stale
  |                              |                         |
  |                              v                         v
  |                          reacquired <---------- fresh return
@@ -425,13 +452,16 @@ live ---- missed return ----> coasting ---- timeout ----> stale
  |
  +---- conflict ----> conflict card ----> selected or parked
  |
- +---- invalidated / superseded / expired ----> ghost
+ +---- invalidated / superseded / expired ----> terminal lifecycle status
+
+projection overlay:
+  durable source row + no live witness => ghost classification
 ```
 
 The important state is not "recommended" but "why is this track allowed to be
 recommended now?" A track can remain durable after it stops being live. That is
-the ghost-track case, and it must be visible for diagnosis without entering the
-main recommendation lane.
+the ghost classification, and it must be visible for diagnosis without entering
+the main recommendation lane.
 
 ### Selection Handoff
 
