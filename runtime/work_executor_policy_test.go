@@ -444,7 +444,7 @@ func TestWorkResultEffectAttemptFallsBackToWorkPreDispatchPerMissingCommand(t *t
 	}); err != nil {
 		t.Fatalf("UpsertEffectAttempt(unrelated turn command) err = %v", err)
 	}
-	workCommand := "set -u\ncd /home/sadasant_gmail_com/code/github.com/CopilotKit/CopilotKit\npnpm --filter @copilotkit/react-core test > /tmp/copilotkit-a2ui-recovery.log 2>&1"
+	workCommand := "set -u\ncd /tmp/aphelion-fixtures/copilotkit\npnpm --filter @copilotkit/react-core test > /tmp/copilotkit-a2ui-recovery.log 2>&1"
 	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
 		AttemptID:    "eff-work-command-predispatch",
 		Key:          key,

@@ -177,7 +177,7 @@ func TestRuntimeDefaultApprovalWindowAdminExecAutoApprovalRecordsExactKind(t *te
 				"Command class:",
 				"unknown",
 				"Workdir:",
-				"/home/sadasant_gmail_com/.aphelion/workspace",
+				"/tmp/aphelion-fixtures/workspace",
 				"Why now:",
 				"The shell command is outside the typed dispatchable subset.",
 			}, "\n\n"),
