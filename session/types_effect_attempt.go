@@ -88,6 +88,9 @@ func EffectAttemptID(sessionID string, turnRunID int64, tool string, command str
 }
 
 func EffectAttemptCommandHash(command string) string {
+	// This hash intentionally follows NormalizeCommand-style field compaction.
+	// It is a durable correlation key, not proof of shell-semantic equivalence:
+	// quoted whitespace differences can collide.
 	normalized := strings.Join(strings.Fields(strings.TrimSpace(command)), " ")
 	sum := sha256.Sum256([]byte(normalized))
 	return "sha256:" + hex.EncodeToString(sum[:])

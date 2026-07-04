@@ -343,7 +343,7 @@ func (r *Registry) runAdminApprovedExactExec(ctx context.Context, in execInput, 
 		Kind:          "admin_unbounded_exact_exec",
 		Summary:       "Approve one exact admin shell command",
 		WhyNow:        "The shell command is outside the typed dispatchable subset or exceeds the current continuation envelope. Only an admin DM can approve it.",
-		BoundedEffect: "Run exactly this command once through bash -lc. Approval is keyed to command_hash=" + commandHash + " and does not approve variants or future commands.",
+		BoundedEffect: "Run exactly the displayed command once through bash -lc. command_hash=" + commandHash + " is provenance only and does not approve variants or future commands.",
 	}
 	if err := r.persistExecProposalState(key, proposal, session.ProposalStatusPending); err != nil {
 		return "", err

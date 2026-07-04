@@ -44,6 +44,11 @@ and treat later same-occurrence projections as duplicate evidence. A
 side-effecting command with no matching effect attempt remains a fail-closed
 ledger error.
 
+Command hashes are fuzzy correlation keys: they compact whitespace and are not
+shell-semantic equivalence proofs. Exact execution identity should come from
+effect-attempt IDs, tool invocation refs, and literal command evidence, not from
+the hash alone.
+
 ## Verification
 
 Verification is effect-family specific and intentionally conservative.

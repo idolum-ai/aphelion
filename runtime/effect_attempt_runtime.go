@@ -264,6 +264,9 @@ func normalizeWorkCommandEvidence(evidence WorkCommandEvidence) (WorkCommandEvid
 }
 
 func runtimeWorkCommandHash(command string) string {
+	// Fuzzy evidence-correlation key only. This inherits NormalizeCommand's
+	// whitespace compaction and must not stand in for exact shell identity,
+	// authority, or proof that two command strings are equivalent.
 	command = redactRuntimeEvidenceText(commandeffect.NormalizeCommand(strings.TrimSpace(command)))
 	if command == "" {
 		return ""

@@ -673,6 +673,83 @@ func TestWorkResultEffectAttemptsAdvanceDuplicateCommandOccurrences(t *testing.T
 	}
 }
 
+func TestWorkResultEffectAttemptsUseAttemptIDAcrossFuzzyCommandHashCollision(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7010, UserID: 0, Scope: telegramDMScopeRef(7010)}
+	req := WorkRequest{
+		OperationID: "op-effect-fuzzy-hash",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-fuzzy-hash",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-fuzzy-hash", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-fuzzy-hash",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-fuzzy-hash",
+				LeaseID: "lease-effect-fuzzy-hash",
+			}}},
+		},
+	}
+	wideQuotedWhitespace := "printf 'a  b' > generated.txt"
+	narrowQuotedWhitespace := "printf 'a b' > generated.txt"
+	if runtimeWorkCommandHash(wideQuotedWhitespace) != runtimeWorkCommandHash(narrowQuotedWhitespace) {
+		t.Fatalf("test fixture hashes differ; fuzzy command hash no longer documents quoted-whitespace collision")
+	}
+	now := time.Now().UTC()
+	for i, attempt := range []struct {
+		id      string
+		command string
+	}{
+		{id: "eff-fuzzy-hash-wide", command: wideQuotedWhitespace},
+		{id: "eff-fuzzy-hash-narrow", command: narrowQuotedWhitespace},
+	} {
+		if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+			AttemptID:    attempt.id,
+			Key:          key,
+			OperationID:  req.OperationID,
+			PhaseID:      "phase-effect-fuzzy-hash",
+			LeaseID:      req.LeaseID,
+			ProposalID:   req.State.ActionProposal.ID,
+			WorkMode:     string(req.Mode),
+			Executor:     "native",
+			Tool:         "work_executor",
+			Command:      attempt.command,
+			EffectKind:   string(commandeffect.KindBuildArtifact),
+			EffectReason: "shell redirection",
+			Status:       session.EffectAttemptStatusAttempted,
+			StartedAt:    now.Add(time.Duration(i) * time.Second),
+			UpdatedAt:    now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("UpsertEffectAttempt(%s) err = %v", attempt.id, err)
+		}
+	}
+
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{
+		ExecutorName: "native",
+		CommandEvidence: []WorkCommandEvidence{
+			{Command: wideQuotedWhitespace, EffectAttemptID: "eff-fuzzy-hash-wide", Source: "test"},
+			{Command: narrowQuotedWhitespace, EffectAttemptID: "eff-fuzzy-hash-narrow", Source: "test"},
+		},
+	}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v", err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("attempts = %#v, want both quoted-whitespace executions advanced by attempt id", attempts)
+	}
+	if attempts[0].AttemptID != "eff-fuzzy-hash-wide" || attempts[1].AttemptID != "eff-fuzzy-hash-narrow" {
+		t.Fatalf("attempt ids = %q, %q; want effect-attempt identity to beat fuzzy hash collision", attempts[0].AttemptID, attempts[1].AttemptID)
+	}
+}
+
 func TestConsumedWorkPhaseDoesNotCompleteWithoutMatchingWorkEvidence(t *testing.T) {
 	t.Parallel()
 
