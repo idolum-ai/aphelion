@@ -369,6 +369,122 @@ regresses, reaches criteria satisfaction, or needs a boundary decision. The
 radar projects those tracks alongside ordinary operations, missions, threads,
 and child updates.
 
+## Architecture Flows
+
+These diagrams are design constraints, not implementation decoration. Every
+arrow that crosses from source state to operator action should name the typed
+record or projection that carries it.
+
+### Radar Sweep
+
+```text
+source stores
+  operation / plan / mission / thread / child task / next action / memory signal
+        |
+        v
+source-owned liveness witnesses
+  unresolved? current? superseded? explicitly recalled? recently updated?
+        |
+        v
+track correlation
+  existing track hash or new track initiation
+        |
+        v
+track returns
+  liveness, freshness, urgency, authority cost, conflict, user fit
+        |
+        v
+radar projection
+  live + coasting + holding tracks; ghosts only in details
+        |
+        v
+optional model ranking over typed track IDs
+        |
+        v
+operator recommendation card
+```
+
+The source owns the witness. The model may rank the typed candidate set after
+correlation; it may not create a witness, reacquire a ghost, or decide that a
+track is selectable.
+
+### Track Lifecycle
+
+```text
+initiated
+   |
+   v
+live ---- missed return ----> coasting ---- timeout ----> stale
+ |                              |                         |
+ |                              v                         v
+ |                          reacquired <---------- fresh return
+ |
+ +---- selected ----> handoff ----> selected / superseded
+ |
+ +---- ignored ----> holding / dampened
+ |
+ +---- conflict ----> conflict card ----> selected or parked
+ |
+ +---- invalidated / superseded / expired ----> ghost
+```
+
+The important state is not "recommended" but "why is this track allowed to be
+recommended now?" A track can remain durable after it stops being live. That is
+the ghost-track case, and it must be visible for diagnosis without entering the
+main recommendation lane.
+
+### Selection Handoff
+
+```text
+operator taps exact track callback
+        |
+        v
+reload track + current liveness witness
+        |
+        +-- missing / stale / superseded --> stale-card response + current radar
+        |
+        v
+compile typed work token
+  resume_operation | inspect_next_action | review_child_update |
+  reopen_thread | inspect_memory_pressure | continue_goal_pursuit
+        |
+        v
+ordinary Aphelion boundary
+  no authority needed -> active work
+  authority needed    -> authority discovery / approval card
+  goal pursuit        -> predictive interception acceptance contract
+```
+
+The callback never means "ask the model what this old button probably meant."
+It means "reload this exact track and compile the exact work token if it is still
+live."
+
+### Predictive-Interception Handoff
+
+```text
+goal-related attention track
+        |
+        v
+operator selects track
+        |
+        v
+goal acceptance contract
+        |
+        v
+evidence projection
+        |
+        v
+re-aim / ask / stop / propose boundary action
+        |
+        v
+new evidence emits fresh radar returns when attention is needed again
+```
+
+Radar and interception form a loop only through typed records. Radar chooses
+where attention should go. Interception pursues a selected goal. When pursuit
+stalls, satisfies criteria, needs authority, or cannot classify a reference
+change, it emits a new track for the radar rather than bypassing the operator.
+
 ## Testing As An Optimization Problem
 
 The interesting tests are not "does a card render." They ask whether the radar
