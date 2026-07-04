@@ -329,7 +329,7 @@ func TestCodexWorkResultDerivesEvidenceAndCommitLane(t *testing.T) {
 		{Kind: "file_change", Path: "runtime/work_executor.go", Preview: "@@ diff"},
 		{Kind: "command", Command: "go test ./runtime", Status: "completed"},
 	}
-	result := WorkResult(codex.WorkResultFromAppServer(codexWorkRequest(WorkRequest{Mode: WorkModeWorkspaceWrite}), "thread-1", "turn-1", codex.Result{
+	result := workResultFromCodex(codex.WorkResultFromAppServer(codexWorkRequest(WorkRequest{Mode: WorkModeWorkspaceWrite}), "thread-1", "turn-1", codex.Result{
 		ThreadID:    "thread-1",
 		TurnID:      "turn-1",
 		Text:        "done",
@@ -452,7 +452,7 @@ func TestAttachNativeWorkTurnEvidenceUsesTypedExecEffectWhenPreviewIsTruncated(t
 	}
 }
 
-func TestAttachNativeWorkTurnEvidenceDedupesCommandsByCommandHash(t *testing.T) {
+func TestAttachNativeWorkTurnEvidenceCorrelatesCommandEvidenceToAttempt(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -486,7 +486,7 @@ func TestAttachNativeWorkTurnEvidenceDedupesCommandsByCommandHash(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("UpsertEffectAttempt() err = %v", err)
 	}
-	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+	events, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
 		{
 			EventType: core.ExecutionEventToolStarted,
 			Stage:     "tool",
@@ -510,7 +510,8 @@ func TestAttachNativeWorkTurnEvidenceDedupesCommandsByCommandHash(t *testing.T) 
 			),
 			CreatedAt: now.Add(2 * time.Second),
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("AppendExecutionEvents() err = %v", err)
 	}
 
@@ -521,6 +522,18 @@ func TestAttachNativeWorkTurnEvidenceDedupesCommandsByCommandHash(t *testing.T) 
 	}
 	if session.EffectAttemptCommandHash(result.Commands[0]) != session.EffectAttemptCommandHash(command) {
 		t.Fatalf("command hash = %s, want %s", session.EffectAttemptCommandHash(result.Commands[0]), session.EffectAttemptCommandHash(command))
+	}
+	if len(result.CommandEvidence) != 2 {
+		t.Fatalf("command evidence = %#v, want pre-dispatch and execution-event evidence", result.CommandEvidence)
+	}
+	if result.CommandEvidence[0].Source != workCommandEvidenceSourceEffectAttempt ||
+		result.CommandEvidence[0].EffectAttemptID != "eff-native-duplicate-command-predispatch" {
+		t.Fatalf("first command evidence = %#v, want attempt-backed evidence", result.CommandEvidence[0])
+	}
+	if result.CommandEvidence[1].Source != workCommandEvidenceSourceExecutionEvent ||
+		result.CommandEvidence[1].EffectAttemptID != "eff-native-duplicate-command-predispatch" ||
+		!containsString(result.CommandEvidence[1].EvidenceRefs, fmt.Sprintf("execution_event:%d", events[1].ID)) {
+		t.Fatalf("second command evidence = %#v, want event evidence correlated to same attempt", result.CommandEvidence[1])
 	}
 }
 
