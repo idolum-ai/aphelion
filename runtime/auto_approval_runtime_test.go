@@ -154,7 +154,7 @@ func TestRuntimeDefaultApprovalWindowOpensFiniteRowsForAdminRequest(t *testing.T
 	assertOperatorWindowDuration(t, overrides[0].CreatedAt, overrides[0].ExpiresAt, 30*time.Minute)
 }
 
-func TestRuntimeDefaultApprovalWindowDoesNotAutoApproveExactAdminShellCommand(t *testing.T) {
+func TestRuntimeDefaultApprovalWindowAdminExecAutoApprovalRecordsExactKind(t *testing.T) {
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
@@ -188,15 +188,30 @@ func TestRuntimeDefaultApprovalWindowDoesNotAutoApproveExactAdminShellCommand(t 
 	if err != nil {
 		t.Fatalf("AutoResolveDecision() err = %v", err)
 	}
-	if result.Choice != "" {
-		t.Fatalf("auto resolution = %#v, want exact admin shell command to require explicit approval", result)
+	if result.Choice != "approve" || !strings.Contains(result.Reason, "auto_approved:") {
+		t.Fatalf("auto resolution = %#v, want approve through default approval window", result)
 	}
-	leases, err := store.ActiveOperatorAutoApprovalLeases(99296, time.Now().UTC())
+
+	key := session.SessionKey{ChatID: 99296, UserID: 0, Scope: telegramDMScopeRef(99296)}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
 	if err != nil {
-		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
-	if len(leases) != 0 {
-		t.Fatalf("leases = %#v, want no default approval lease minted for exact admin shell command", leases)
+	var usedPayload map[string]any
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventAutoApprovalUsed {
+			usedPayload = executionEventPayload(event.PayloadJSON)
+			break
+		}
+	}
+	if usedPayload == nil {
+		t.Fatalf("events = %#v, want auto approval used event", events)
+	}
+	if got := payloadString(usedPayload, "approval_kind"); got != "admin_unbounded_exact_exec" {
+		t.Fatalf("approval_kind = %q payload=%#v, want exact admin exec kind recorded outside truncated details", got, usedPayload)
+	}
+	if got := payloadString(usedPayload, "auto_mode_source"); got != defaultApprovalWindowEventSource {
+		t.Fatalf("auto_mode_source = %q payload=%#v, want default approval window provenance", got, usedPayload)
 	}
 }
 
