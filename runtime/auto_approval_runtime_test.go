@@ -154,6 +154,52 @@ func TestRuntimeDefaultApprovalWindowOpensFiniteRowsForAdminRequest(t *testing.T
 	assertOperatorWindowDuration(t, overrides[0].CreatedAt, overrides[0].ExpiresAt, 30*time.Minute)
 }
 
+func TestRuntimeDefaultApprovalWindowDoesNotAutoApproveExactAdminShellCommand(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "15m"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-default-window-admin-exec",
+		Request: decision.Request{
+			Kind:     decision.KindProposalApproval,
+			ChatID:   99296,
+			SenderID: 1001,
+			Prompt:   "Approve this proposal?",
+			Details: strings.Join([]string{
+				"Approve one exact admin shell command",
+				"Kind: admin_unbounded_exact_exec",
+				"Command class:",
+				"unknown",
+				"Workdir:",
+				"/home/sadasant_gmail_com/.aphelion/workspace",
+				"Why now:",
+				"The shell command is outside the typed dispatchable subset.",
+			}, "\n\n"),
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "" {
+		t.Fatalf("auto resolution = %#v, want exact admin shell command to require explicit approval", result)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99296, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("leases = %#v, want no default approval lease minted for exact admin shell command", leases)
+	}
+}
+
 func TestRuntimeDefaultApprovalWindowFiniteDoesNotReopenAfterBaselineExpires(t *testing.T) {
 	t.Parallel()
 
