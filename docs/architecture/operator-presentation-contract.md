@@ -20,6 +20,19 @@ render the next candidate approval, but they may not admit execution authority.
 The rendered card must point to the underlying contract, ledger entry, or review
 event that owns the action.
 
+Recommendation surfaces may expose attention-radar controls such as resume,
+ignore, inspect, or park. Those controls are presentation over typed attention
+tracks. A recommendation card should name why the track is live now, which
+source owns it, what selecting it will compile, and whether the next step will
+need authority. A durable source row without a fresh liveness witness may be
+shown in details, but should not be rendered as a current next step.
+
+Goal-pursuit surfaces may expose predictive-interception controls such as
+approve next boundary, pause, show evidence, amend criterion, or accept done.
+Those controls render a goal acceptance contract and current evidence
+projection. Evaluator satisfaction is not operator acceptance; the UI should
+keep those states distinct.
+
 Dense records are still allowed when clearly labeled as trace or evidence:
 `/health trace`, logs, machine-readable Tailnet/status mirrors, forensic records, and
 explicit evidence sections may expose raw identifiers or enum-heavy state.

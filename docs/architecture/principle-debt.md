@@ -101,6 +101,13 @@ Monitored Tensions.
   invariant covered as new native operations appear, and to be explicit that
   hard-link provenance and non-Linux parity are not solved by the Linux
   descriptor path.
+- **Recommendation liveness:** Re-entry recommendations are durable
+  presentation and selection judgments, but the current implementation still
+  reconstructs "what is live now?" from nearby operation, recovery, and memory
+  state. The Attention Radar direction makes recommendation liveness a canonical
+  track/return ledger with freshness, owner, contradiction, and ghost-track
+  states. Until that exists, stale next-step suggestions must remain suppressible
+  and inspectable rather than executable truth.
 
 ## Machine-Checked Paths
 
