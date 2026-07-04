@@ -40,6 +40,7 @@ type commandRouter interface {
 	TailnetStatus(ctx context.Context, senderID int64) (core.TailnetStatusSnapshot, error)
 	TailnetSurfaces(senderID int64) ([]core.TailnetSurfaceStatus, error)
 	TailnetGrantBindings(senderID int64) ([]core.TailnetGrantBindingStatus, error)
+	AuthorityFrontierStatus(ctx context.Context, senderID int64) (core.AuthorityFrontierStatusSnapshot, error)
 	RevokeTailnetSurface(ctx context.Context, senderID int64, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error)
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
@@ -243,6 +244,8 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			return true, err
 		}
 		return true, nil
+	case "frontier":
+		return handleAuthorityFrontierCommand(ctx, router, sender, msg)
 	case "context":
 		snapshot, err := contextSnapshotForCommand(ctx, router, msg)
 		if err != nil {

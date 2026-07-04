@@ -1,0 +1,824 @@
+//go:build linux
+
+package session
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestIdentificationLedgerPreservesGraduatedObservationHistory(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:read-unread-mail",
+		ShapeHash:   "sha256:mail-shape",
+		Status:      IdentificationLedgerStatusPartial,
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(entryInput, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationStatic,
+		Property:    IdentificationPropertyApprovalClass,
+		Value:       "data_access",
+		EvidenceRef: "plan:static-analysis",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(static) err = %v", err)
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(entryInput, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationCollision,
+		Property:    IdentificationPropertyRetryability,
+		Value:       "bounded_backoff",
+		EvidenceRef: "next_action:mail-read-blocker",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(collision) err = %v", err)
+	}
+	entryInput.LabelRef = "crc-mail-read"
+	entryInput.Status = IdentificationLedgerStatusProposed
+	if _, _, err := store.RecordIdentificationLedgerObservation(entryInput, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationOperator,
+		Property:    IdentificationPropertyContract,
+		Value:       "crc-mail-read",
+		EvidenceRef: "review_event:42",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(operator) err = %v", err)
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(entryInput, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationCollision,
+		Property:    IdentificationPropertyRetryability,
+		Value:       "bounded_backoff",
+		EvidenceRef: "next_action:mail-read-blocker",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(duplicate) err = %v", err)
+	}
+
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 1 {
+		t.Fatalf("entries = %d, want 1", len(projections))
+	}
+	projection := projections[0]
+	if projection.Entry.Status != IdentificationLedgerStatusProposed || projection.Entry.LabelRef != "crc-mail-read" {
+		t.Fatalf("entry status/label = %q/%q, want proposed/crc-mail-read", projection.Entry.Status, projection.Entry.LabelRef)
+	}
+	if len(projection.Observations) != 3 {
+		t.Fatalf("observations = %#v, want 3 append-only observations", projection.Observations)
+	}
+	if got := projection.Properties[IdentificationPropertyApprovalClass][0].Method; got != IdentificationObservationStatic {
+		t.Fatalf("approval_class method = %q, want static", got)
+	}
+	if got := projection.Properties[IdentificationPropertyRetryability][0].Method; got != IdentificationObservationCollision {
+		t.Fatalf("retryability method = %q, want collision", got)
+	}
+	if got := projection.Properties[IdentificationPropertyRetryability][0].OccurrenceCount; got != 2 {
+		t.Fatalf("retryability occurrence count = %d, want duplicate sighting counted", got)
+	}
+	if got := projection.Properties[IdentificationPropertyContract][0].Method; got != IdentificationObservationOperator {
+		t.Fatalf("contract method = %q, want operator", got)
+	}
+}
+
+func TestIdentificationLedgerObservationPreservesOperatorProvenance(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:review-next-grant",
+		ShapeHash:   "sha256:lookahead-shape",
+		Status:      IdentificationLedgerStatusPartial,
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(entryInput, IdentificationLedgerObservationInput{
+		Method:         IdentificationObservationOperator,
+		Property:       IdentificationPropertyOperatorAction,
+		Value:          "lookahead_next",
+		EvidenceRef:    "review_event:42",
+		ActorKind:      "operator",
+		ActorPrincipal: "telegram:1001",
+		ActorAction:    "lookahead_next",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(operator) err = %v", err)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 1 || len(projections[0].Observations) != 1 {
+		t.Fatalf("projections = %#v, want one operator observation", projections)
+	}
+	obs := projections[0].Observations[0]
+	if obs.Property != IdentificationPropertyOperatorAction ||
+		obs.ActorKind != "operator" ||
+		obs.ActorPrincipal != "telegram:1001" ||
+		obs.ActorAction != "lookahead_next" {
+		t.Fatalf("operator observation = %#v, want actor provenance preserved", obs)
+	}
+	if !strings.Contains(obs.ObservationID, "idobs:") {
+		t.Fatalf("observation id = %q, want deterministic id", obs.ObservationID)
+	}
+}
+
+func TestIdentificationLedgerImplicitObservationDoesNotDowngradeLifecycleStatus(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:read-unread-mail",
+		ShapeHash:   "sha256:mail-shape",
+		LabelRef:    "crc-mail-read",
+		Status:      IdentificationLedgerStatusApproved,
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(entryInput); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(approved) err = %v", err)
+	}
+	implicitInput := IdentificationLedgerEntryInput{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		StepRef:     entryInput.StepRef,
+		ShapeHash:   entryInput.ShapeHash,
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(implicitInput, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationCollision,
+		Property:    IdentificationPropertyRetryability,
+		Value:       "bounded_backoff",
+		EvidenceRef: "next_action:mail-read-blocker",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(implicit status) err = %v", err)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 1 {
+		t.Fatalf("entries = %#v, want one", projections)
+	}
+	if got := projections[0].Entry.Status; got != IdentificationLedgerStatusApproved {
+		t.Fatalf("implicit observation downgraded status to %q, want approved", got)
+	}
+	if got := projections[0].Entry.LabelRef; got != "crc-mail-read" {
+		t.Fatalf("implicit observation label_ref = %q, want existing label", got)
+	}
+	entryInput.Status = IdentificationLedgerStatusProposed
+	if _, err := store.RecordIdentificationLedgerEntry(entryInput); err == nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(explicit downgrade) err = nil, want transition error")
+	}
+
+	terminalInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:archive-processed-mail",
+		ShapeHash:   "sha256:archive-shape",
+		LabelRef:    "crc-archive-processed",
+		Status:      IdentificationLedgerStatusConsumed,
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(terminalInput); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(consumed) err = %v", err)
+	}
+	implicitTerminalInput := terminalInput
+	implicitTerminalInput.LabelRef = ""
+	implicitTerminalInput.Status = ""
+	if _, _, err := store.RecordIdentificationLedgerObservation(implicitTerminalInput, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationCollision,
+		Property:    IdentificationPropertyTool,
+		Value:       "mail:archive",
+		EvidenceRef: "next_action:archive-blocker",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(terminal implicit status) err = %v", err)
+	}
+	projections, err = store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      terminalInput.PlanID,
+		PlanVersion: terminalInput.PlanVersion,
+		SessionID:   terminalInput.SessionID,
+		Status:      IdentificationLedgerStatusConsumed,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries(consumed) err = %v", err)
+	}
+	if len(projections) != 1 || projections[0].Entry.Status != IdentificationLedgerStatusConsumed {
+		t.Fatalf("consumed projections = %#v, want consumed entry preserved", projections)
+	}
+	terminalInput.Status = IdentificationLedgerStatusApproved
+	if _, err := store.RecordIdentificationLedgerEntry(terminalInput); err == nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(terminal reopen) err = nil, want transition error")
+	}
+}
+
+func TestIdentificationLedgerRejectsScalarLabelRewrite(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:review-next-grant",
+		ShapeHash:   "sha256:review-shape",
+		LabelRef:    "authbundle-first",
+		Status:      IdentificationLedgerStatusProposed,
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(entryInput); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(first) err = %v", err)
+	}
+	rewrite := entryInput
+	rewrite.LabelRef = "authbundle-second"
+	if _, err := store.RecordIdentificationLedgerEntry(rewrite); err == nil || !strings.Contains(err.Error(), "cannot rewrite label_ref") {
+		t.Fatalf("RecordIdentificationLedgerEntry(rewrite) err = %v, want label rewrite rejection", err)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 1 || projections[0].Entry.LabelRef != "authbundle-first" {
+		t.Fatalf("projections = %#v, want original label preserved", projections)
+	}
+}
+
+func TestIdentificationLedgerCanQueryUnidentifiedStatus(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	base := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		ShapeHash:   "sha256:shape",
+	}
+	unidentified := base
+	unidentified.StepRef = "step:unknown"
+	unidentified.Status = IdentificationLedgerStatusUnidentified
+	if _, err := store.RecordIdentificationLedgerEntry(unidentified); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(unidentified) err = %v", err)
+	}
+	partial := base
+	partial.StepRef = "step:partial"
+	partial.Status = IdentificationLedgerStatusPartial
+	if _, err := store.RecordIdentificationLedgerEntry(partial); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(partial) err = %v", err)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      base.PlanID,
+		PlanVersion: base.PlanVersion,
+		SessionID:   base.SessionID,
+		Status:      IdentificationLedgerStatusUnidentified,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries(unidentified) err = %v", err)
+	}
+	if len(projections) != 1 || projections[0].Entry.Status != IdentificationLedgerStatusUnidentified {
+		t.Fatalf("unidentified projections = %#v, want only unidentified entry", projections)
+	}
+}
+
+func TestIdentificationLedgerExpiryExtensionRequiresExplicitLifecycleStatus(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	now := time.Date(2026, 7, 2, 18, 0, 0, 0, time.UTC)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:read-unread-mail",
+		ShapeHash:   "sha256:mail-shape",
+		LabelRef:    "crc-mail-read",
+		Status:      IdentificationLedgerStatusApproved,
+		ExpiresAt:   now.Add(time.Hour),
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(entryInput); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(approved) err = %v", err)
+	}
+	implicitExtension := IdentificationLedgerEntryInput{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		StepRef:     entryInput.StepRef,
+		ShapeHash:   entryInput.ShapeHash,
+		ExpiresAt:   now.Add(2 * time.Hour),
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(implicitExtension, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationCollision,
+		Property:    IdentificationPropertyRetryability,
+		Value:       "bounded_backoff",
+		EvidenceRef: "next_action:mail-read-blocker",
+	}); err == nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(implicit expiry extension) err = nil, want explicit-status error")
+	}
+
+	implicitShortening := implicitExtension
+	implicitShortening.ExpiresAt = now.Add(30 * time.Minute)
+	if _, _, err := store.RecordIdentificationLedgerObservation(implicitShortening, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationCollision,
+		Property:    IdentificationPropertyRetryability,
+		Value:       "bounded_backoff",
+		EvidenceRef: "next_action:mail-read-blocker",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(implicit expiry shortening) err = %v", err)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 1 {
+		t.Fatalf("entries = %#v, want one", projections)
+	}
+	if got := projections[0].Entry.ExpiresAt; !got.Equal(now.Add(30 * time.Minute)) {
+		t.Fatalf("expires_at after implicit shortening = %s, want %s", got, now.Add(30*time.Minute))
+	}
+
+	explicitExtension := implicitExtension
+	explicitExtension.Status = IdentificationLedgerStatusApproved
+	if _, err := store.RecordIdentificationLedgerEntry(explicitExtension); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(explicit expiry extension) err = %v", err)
+	}
+	projections, err = store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries(after explicit extension) err = %v", err)
+	}
+	if got := projections[0].Entry.ExpiresAt; !got.Equal(now.Add(2 * time.Hour)) {
+		t.Fatalf("expires_at after explicit extension = %s, want %s", got, now.Add(2*time.Hour))
+	}
+
+	terminalInput := explicitExtension
+	terminalInput.Status = IdentificationLedgerStatusConsumed
+	if _, err := store.RecordIdentificationLedgerEntry(terminalInput); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(consumed) err = %v", err)
+	}
+	terminalInput.ExpiresAt = now.Add(3 * time.Hour)
+	if _, err := store.RecordIdentificationLedgerEntry(terminalInput); err == nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(terminal expiry extension) err = nil, want terminal-extension error")
+	}
+}
+
+func TestIdentificationLedgerRejectsUnknownObservationProperty(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:read-unread-mail",
+		ShapeHash:   "sha256:mail-shape",
+		Status:      IdentificationLedgerStatusPartial,
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(entryInput, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationCollision,
+		Property:    IdentificationObservationProperty("ad_hoc_future_property"),
+		Value:       "maybe",
+		EvidenceRef: "next_action:unknown",
+	}); err == nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(unknown property) err = nil, want validation error")
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservation(entryInput, IdentificationLedgerObservationInput{
+		Method:      IdentificationObservationMethod("ad_hoc_future_method"),
+		Property:    IdentificationPropertyApprovalClass,
+		Value:       "maybe",
+		EvidenceRef: "next_action:unknown",
+	}); err == nil {
+		t.Fatalf("RecordIdentificationLedgerObservation(unknown method) err = nil, want validation error")
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:read-unread-mail",
+		ShapeHash:   "sha256:mail-shape",
+		Status:      IdentificationLedgerEntryStatus("ad_hoc_future_status"),
+	}); err == nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(unknown status) err = nil, want validation error")
+	}
+}
+
+func TestIdentificationLedgerObservationSetRollsBackOnInvalidObservation(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	entryInput := IdentificationLedgerEntryInput{
+		PlanID:      "plan-job-search",
+		PlanVersion: "v1",
+		SessionID:   "telegram_dm:1001",
+		StepRef:     "step:read-unread-mail",
+		ShapeHash:   "sha256:mail-shape",
+		Status:      IdentificationLedgerStatusPartial,
+	}
+	if _, _, err := store.RecordIdentificationLedgerObservations(entryInput, []IdentificationLedgerObservationInput{{
+		Method:      IdentificationObservationLookahead,
+		Property:    IdentificationPropertyApprovalClass,
+		Value:       "data_access",
+		EvidenceRef: "review_event:42",
+	}, {
+		Method:      IdentificationObservationLookahead,
+		Property:    IdentificationObservationProperty("ad_hoc_future_property"),
+		Value:       "maybe",
+		EvidenceRef: "review_event:42",
+	}}); err == nil {
+		t.Fatalf("RecordIdentificationLedgerObservations(invalid second observation) err = nil, want validation error")
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      entryInput.PlanID,
+		PlanVersion: entryInput.PlanVersion,
+		SessionID:   entryInput.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 0 {
+		t.Fatalf("projections after rolled-back observation set = %#v, want none", projections)
+	}
+}
+
+func TestIdentificationLedgerDBRejectsInvalidEnums(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	if _, err := store.db.Exec(`
+		INSERT INTO identification_ledger_entries(
+			entry_id, plan_id, plan_version, session_id, step_ref, shape_hash, status
+		) VALUES ('ident:bad-status', 'plan', 'v1', 'session', 'step', 'shape', 'made_up')
+	`); err == nil {
+		t.Fatalf("insert invalid ledger status err = nil, want CHECK failure")
+	}
+	if _, err := store.db.Exec(`
+		INSERT INTO identification_ledger_entries(
+			entry_id, plan_id, plan_version, session_id, step_ref, shape_hash, status
+		) VALUES ('ident:valid-status', 'plan', 'v1', 'session', 'step', 'shape', 'partial')
+	`); err != nil {
+		t.Fatalf("insert valid ledger entry: %v", err)
+	}
+	if _, err := store.db.Exec(`
+		INSERT INTO identification_ledger_observations(
+			observation_id, entry_id, method, property, value
+		) VALUES ('idobs:bad-method', 'ident:valid-status', 'made_up', 'approval_class', 'child_wake')
+	`); err == nil {
+		t.Fatalf("insert invalid observation method err = nil, want CHECK failure")
+	}
+	if _, err := store.db.Exec(`
+		INSERT INTO identification_ledger_observations(
+			observation_id, entry_id, method, property, value
+		) VALUES ('idobs:bad-property', 'ident:valid-status', 'collision', 'made_up', 'child_wake')
+	`); err == nil {
+		t.Fatalf("insert invalid observation property err = nil, want CHECK failure")
+	}
+}
+
+func TestContinuationRecoveryPublicationRecordsIdentificationLedgerCollision(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	createdAt := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	contract, err := CompileContinuationRecoveryContract(ContinuationRecoveryContractInput{
+		RequestInstanceID:   "ident-child-wake-instance",
+		SessionID:           "telegram_dm:1001",
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          ContinuationRecoverySubjectRef(ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake", "durable_agent", "wake_once", ""),
+		Principal:           "telegram:1001",
+		LeaseClass:          ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "idolum-email"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "idolum-email",
+		GrantID:             "grant-idolum-email-wake",
+		GrantTargetResource: "durable_agent:idolum-email:wake_once",
+		CreatedAt:           createdAt,
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract() err = %v", err)
+	}
+	key := SessionKey{ChatID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "1001"}}
+	_, record, err := store.RecordContinuationRecoveryContractNextAction(contract, NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contract.SubjectRef,
+		CausalRefs:         []string{"test:collision"},
+		RequiredAuthority:  string(ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: ContinuationRecoveryContractProjectionInput(contract.ContractID),
+		CreatedAt:          createdAt,
+	})
+	if err != nil {
+		t.Fatalf("RecordContinuationRecoveryContractNextAction() err = %v", err)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      IdentificationPlanIDForSession(contract.SessionID),
+		PlanVersion: IdentificationDefaultPlanVersion,
+		SessionID:   contract.SessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 1 {
+		t.Fatalf("entries = %#v, want one collision-derived label", projections)
+	}
+	projection := projections[0]
+	wantShapeHash := AuthorityShapeHashForContinuationRecoveryContract(contract)
+	if projection.Entry.LabelRef != contract.ContractID || projection.Entry.ShapeHash != wantShapeHash {
+		t.Fatalf("entry label/hash = %q/%q, want %q/%q", projection.Entry.LabelRef, projection.Entry.ShapeHash, contract.ContractID, wantShapeHash)
+	}
+	if projection.Entry.ShapeHash == contract.ContractHash {
+		t.Fatalf("entry shape hash reused instance-bound contract hash %q", contract.ContractHash)
+	}
+	if got := projection.Properties[IdentificationPropertyApprovalClass][0].Value; got != string(ContinuationLeaseClassChildWake) {
+		t.Fatalf("approval class = %q, want child_wake", got)
+	}
+	if got := projection.Properties[IdentificationPropertyContract][0].Value; got != contract.ContractID {
+		t.Fatalf("contract property = %q, want %q", got, contract.ContractID)
+	}
+	foundEvidence := false
+	for _, observation := range projection.Observations {
+		if observation.EvidenceRef == "next_action:"+record.RecordID {
+			foundEvidence = true
+		}
+		if strings.Contains(observation.Value, "idolum-email") && observation.Property == IdentificationPropertyResource {
+			foundEvidence = true
+		}
+	}
+	if !foundEvidence {
+		t.Fatalf("observations = %#v, want next_action evidence/resource observation", projection.Observations)
+	}
+}
+
+func TestContinuationRecoveryPublicationSplitsSameShapeAcrossDifferentContracts(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	key := SessionKey{ChatID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "1001"}}
+	subjectRef := ContinuationRecoverySubjectRef(ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake", "durable_agent", "wake_once", "")
+	createdAt := time.Date(2026, 7, 2, 11, 0, 0, 0, time.UTC)
+	var contracts []ContinuationRecoveryContract
+	for i, requestInstanceID := range []string{"ident-child-wake-instance-a", "ident-child-wake-instance-b"} {
+		contract, err := CompileContinuationRecoveryContract(ContinuationRecoveryContractInput{
+			RequestInstanceID:   requestInstanceID,
+			SessionID:           "telegram_dm:1001",
+			SubjectKind:         "continuation_lease_request",
+			SubjectRef:          subjectRef,
+			Principal:           "telegram:1001",
+			LeaseClass:          ContinuationLeaseClassChildWake,
+			AllowedActions:      []string{"wake_named_child"},
+			Constraints:         map[string]string{"agent_id": "idolum-email"},
+			Tool:                "durable_agent",
+			ToolAction:          "wake_once",
+			AgentID:             "idolum-email",
+			GrantID:             "grant-idolum-email-wake",
+			GrantTargetResource: "durable_agent:idolum-email:wake_once",
+			CreatedAt:           createdAt.Add(time.Duration(i) * time.Minute),
+		})
+		if err != nil {
+			t.Fatalf("CompileContinuationRecoveryContract(%s) err = %v", requestInstanceID, err)
+		}
+		contracts = append(contracts, contract)
+		_, _, err = store.RecordContinuationRecoveryContractNextAction(contract, NextActionInput{
+			Key:                key,
+			Owner:              "test",
+			State:              NextActionBlockedNeedsAuthority,
+			SubjectKind:        "continuation_lease_request",
+			SubjectRef:         contract.SubjectRef,
+			RequiredAuthority:  string(ContinuationLeaseClassChildWake),
+			ResourceBlocker:    "missing_continuation_lease",
+			RetryPolicy:        "ask_for_grant",
+			OperationKind:      "continuation_lease_request",
+			OperationTool:      "request_approval",
+			OperationInputJSON: ContinuationRecoveryContractProjectionInput(contract.ContractID),
+			CreatedAt:          createdAt.Add(time.Duration(i) * time.Minute),
+		})
+		if err != nil {
+			t.Fatalf("RecordContinuationRecoveryContractNextAction(%s) err = %v", requestInstanceID, err)
+		}
+	}
+	if contracts[0].ContractHash == contracts[1].ContractHash {
+		t.Fatalf("contract hashes should remain instance-bound, both = %q", contracts[0].ContractHash)
+	}
+	if got, want := AuthorityShapeHashForContinuationRecoveryContract(contracts[0]), AuthorityShapeHashForContinuationRecoveryContract(contracts[1]); got != want {
+		t.Fatalf("shape hashes differ for same authority shape: %q vs %q", got, want)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      IdentificationPlanIDForSession("telegram_dm:1001"),
+		PlanVersion: IdentificationDefaultPlanVersion,
+		SessionID:   "telegram_dm:1001",
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 2 {
+		t.Fatalf("entries = %#v, want one generated entry per exact contract", projections)
+	}
+	shapeHash := AuthorityShapeHashForContinuationRecoveryContract(contracts[0])
+	found := map[string]IdentificationLedgerProjection{}
+	for _, projection := range projections {
+		if projection.Entry.ShapeHash != shapeHash {
+			t.Fatalf("entry shape hash = %q, want reusable shape %q", projection.Entry.ShapeHash, shapeHash)
+		}
+		if projection.Entry.ShapeHash == contracts[0].ContractHash || projection.Entry.ShapeHash == contracts[1].ContractHash {
+			t.Fatalf("entry shape hash %q should not equal either instance contract hash", projection.Entry.ShapeHash)
+		}
+		found[projection.Entry.LabelRef] = projection
+	}
+	for i, contract := range contracts {
+		projection, ok := found[contract.ContractID]
+		if !ok {
+			t.Fatalf("entries = %#v, want label %s", projections, contract.ContractID)
+		}
+		if i == 0 && projection.Entry.StepRef != subjectRef {
+			t.Fatalf("first step_ref = %q, want base subject ref", projection.Entry.StepRef)
+		}
+		if i == 1 && !strings.HasPrefix(projection.Entry.StepRef, subjectRef+"#collision:") {
+			t.Fatalf("second step_ref = %q, want generated collision step", projection.Entry.StepRef)
+		}
+		if got := len(projection.Properties[IdentificationPropertyContract]); got != 1 {
+			t.Fatalf("contract observations for %s = %d, want one exact contract observation", contract.ContractID, got)
+		}
+	}
+}
+
+func TestContinuationRecoveryPublicationGeneratesNewLedgerEntryAfterConsumedCollision(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	key := SessionKey{ChatID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "1001"}}
+	sessionID := SessionIDForKey(key)
+	subjectRef := ContinuationRecoverySubjectRef(ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake", "durable_agent", "wake_once", "")
+	createdAt := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	contractA, err := CompileContinuationRecoveryContract(ContinuationRecoveryContractInput{
+		RequestInstanceID:   "ident-child-wake-consumed-a",
+		SessionID:           sessionID,
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          subjectRef,
+		Principal:           "telegram:1001",
+		LeaseClass:          ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "idolum-email"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "idolum-email",
+		GrantID:             "grant-idolum-email-wake",
+		GrantTargetResource: "durable_agent:idolum-email:wake_once",
+		CreatedAt:           createdAt,
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(A) err = %v", err)
+	}
+	_, actionA, err := store.RecordContinuationRecoveryContractNextAction(contractA, NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contractA.SubjectRef,
+		RequiredAuthority:  string(ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: ContinuationRecoveryContractProjectionInput(contractA.ContractID),
+		CreatedAt:          createdAt,
+	})
+	if err != nil {
+		t.Fatalf("RecordContinuationRecoveryContractNextAction(A) err = %v", err)
+	}
+	shapeHash := AuthorityShapeHashForContinuationRecoveryContract(contractA)
+	baseEntryID := IdentificationLedgerEntryID(IdentificationPlanIDForSession(sessionID), IdentificationDefaultPlanVersion, sessionID, subjectRef, shapeHash)
+	if _, err := store.RecordIdentificationLedgerEntry(IdentificationLedgerEntryInput{
+		EntryID:     baseEntryID,
+		PlanID:      IdentificationPlanIDForSession(sessionID),
+		PlanVersion: IdentificationDefaultPlanVersion,
+		SessionID:   sessionID,
+		StepRef:     subjectRef,
+		ShapeHash:   shapeHash,
+		LabelRef:    contractA.ContractID,
+		Status:      IdentificationLedgerStatusConsumed,
+		UpdatedAt:   createdAt.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(consumed) err = %v", err)
+	}
+	contractB, err := CompileContinuationRecoveryContract(ContinuationRecoveryContractInput{
+		RequestInstanceID:   "ident-child-wake-consumed-b",
+		SessionID:           sessionID,
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          subjectRef,
+		Principal:           "telegram:1001",
+		LeaseClass:          ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "idolum-email"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "idolum-email",
+		GrantID:             "grant-idolum-email-wake",
+		GrantTargetResource: "durable_agent:idolum-email:wake_once",
+		CreatedAt:           createdAt.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(B) err = %v", err)
+	}
+	_, actionB, err := store.RecordContinuationRecoveryContractNextAction(contractB, NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contractB.SubjectRef,
+		RequiredAuthority:  string(ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: ContinuationRecoveryContractProjectionInput(contractB.ContractID),
+		CreatedAt:          createdAt.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("RecordContinuationRecoveryContractNextAction(B) err = %v", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	foundB := false
+	for _, action := range open {
+		if action.RecordID == actionB.RecordID {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Fatalf("open next actions = %#v, want second recovery action %s", open, actionB.RecordID)
+	}
+	projections, err := store.IdentificationLedgerEntries(IdentificationLedgerQuery{
+		PlanID:      IdentificationPlanIDForSession(sessionID),
+		PlanVersion: IdentificationDefaultPlanVersion,
+		SessionID:   sessionID,
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("IdentificationLedgerEntries() err = %v", err)
+	}
+	if len(projections) != 2 {
+		t.Fatalf("entries = %#v, want consumed base plus new collision generation", projections)
+	}
+	foundConsumedBase := false
+	foundGenerated := false
+	for _, projection := range projections {
+		if projection.Entry.EntryID == baseEntryID {
+			foundConsumedBase = projection.Entry.Status == IdentificationLedgerStatusConsumed &&
+				projection.Entry.LabelRef == contractA.ContractID
+		}
+		if projection.Entry.ShapeHash == shapeHash &&
+			projection.Entry.LabelRef == contractB.ContractID &&
+			strings.HasPrefix(projection.Entry.StepRef, subjectRef+"#collision:") {
+			foundGenerated = true
+			if projection.Entry.Status != IdentificationLedgerStatusProposed {
+				t.Fatalf("generated entry status = %q, want proposed", projection.Entry.Status)
+			}
+		}
+	}
+	if !foundConsumedBase || !foundGenerated {
+		t.Fatalf("entries = %#v, want consumed base=%t generated=%t; first action was %s", projections, foundConsumedBase, foundGenerated, actionA.RecordID)
+	}
+}

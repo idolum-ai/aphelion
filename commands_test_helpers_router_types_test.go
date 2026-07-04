@@ -23,6 +23,9 @@ type stubCommandRouter struct {
 	tailnetGrantBindings         []core.TailnetGrantBindingStatus
 	tailnetGrantBindingsErr      error
 	tailnetGrantBindingsSenderID int64
+	authorityFrontierStatus      core.AuthorityFrontierStatusSnapshot
+	authorityFrontierStatusErr   error
+	authorityFrontierSenderID    int64
 	latestDoctorReport           session.DoctorReportRecord
 	latestDoctorReportOK         bool
 	latestDoctorReportErr        error

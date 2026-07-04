@@ -75,6 +75,9 @@ func TestHandleReviewEventCallbackApprovesCapabilityRequest(t *testing.T) {
 	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "Capability request approved.") || !strings.Contains(sender.edits[0].text, "Request: cap-button-approve") || !strings.Contains(sender.edits[0].text, "Review event:") || !strings.Contains(sender.edits[0].text, "Capability request cap-button-approve") {
 		t.Fatalf("edits = %#v, want durable approved review-event copy", sender.edits)
 	}
+	if len(sender.edits[0].rows) != 1 || len(sender.edits[0].rows[0]) != 1 || sender.edits[0].rows[0][0].Text != "Next grant" || sender.edits[0].rows[0][0].CallbackData != core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionLookaheadNext) {
+		t.Fatalf("confirmation rows = %#v, want Next grant lookahead control", sender.edits[0].rows)
+	}
 	if len(sender.answers) != 1 || sender.answers[0].text != "" {
 		t.Fatalf("answers = %#v, want empty ack", sender.answers)
 	}
@@ -176,6 +179,56 @@ func TestHandleReviewEventCallbackDelegatesChildWakeRetry(t *testing.T) {
 	}
 	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "approval surfaced") || sender.edits[0].chatID != 1001 || sender.edits[0].messageID != 88 {
 		t.Fatalf("edits = %#v, want retry acknowledgement edit on original card", sender.edits)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != "" {
+		t.Fatalf("answers = %#v, want empty callback ack", sender.answers)
+	}
+}
+
+func TestHandleReviewEventCallbackDelegatesLookahead(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(t.TempDir() + "/sessions.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	eventID, err := store.InsertReviewEvent(session.ReviewEvent{
+		SourceSessionID:   "telegram_dm:1001",
+		SourceChatID:      7001,
+		SourceUserID:      1001,
+		SourceRole:        "capability_request",
+		TargetSessionID:   "telegram_dm:1001",
+		TargetAdminChatID: 1001,
+		Summary:           "Grant approved.",
+		MetadataJSON:      `{"request_id":"cap-lookahead"}`,
+		Status:            "delivered",
+		CreatedAt:         time.Now().UTC(),
+		DeliveredAt:       time.Now().UTC(),
+		DeliveryMessageID: 89,
+	})
+	if err != nil {
+		t.Fatalf("InsertReviewEvent() err = %v", err)
+	}
+	sender := &decisionTestSender{}
+	runner := &reviewEventActionRunnerStub{returnText: "Next authority frontier recorded."}
+	handler := newDecisionHandlerForTest(sender, &decisionTestRouter{}, decision.NewBroker(nil), store)
+	handler.SetReviewEventActionRunner(runner)
+
+	err = handler.HandleCallbackQuery(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-lookahead",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 89, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(eventID, core.ReviewEventActionLookaheadNext),
+	})
+	if err != nil {
+		t.Fatalf("HandleCallbackQuery(lookahead) err = %v", err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0] != core.ReviewEventActionLookaheadNext || runner.eventIDs[0] != eventID {
+		t.Fatalf("runner calls = %#v eventIDs=%#v, want lookahead for event %d", runner.calls, runner.eventIDs, eventID)
+	}
+	if len(sender.edits) != 1 || !strings.Contains(sender.edits[0].text, "frontier recorded") || sender.edits[0].chatID != 1001 || sender.edits[0].messageID != 89 {
+		t.Fatalf("edits = %#v, want lookahead acknowledgement edit on original card", sender.edits)
 	}
 	if len(sender.answers) != 1 || sender.answers[0].text != "" {
 		t.Fatalf("answers = %#v, want empty callback ack", sender.answers)

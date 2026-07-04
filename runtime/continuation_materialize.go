@@ -662,6 +662,132 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 	return false, false, nil
 }
 
+func (r *Runtime) materializeRecoveryApprovalNextActionLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord, now time.Time) (bool, bool, error) {
+	if r == nil || r.store == nil {
+		return false, false, nil
+	}
+	actor, ok := r.recoveryApprovalMaterializationActor(msg)
+	if !ok {
+		return false, false, nil
+	}
+	tools := r.toolsForPrincipal(actor, key)
+	if tools == nil {
+		return false, false, nil
+	}
+	if _, err := r.promoteDurableChildAuthorityBundleRequestsForParentKey(key, now); err != nil {
+		return false, false, err
+	}
+	if !action.ResolvedAt.IsZero() {
+		return false, false, nil
+	}
+	consumable, invalid := recoveryApprovalNextActionConsumable(action)
+	if invalid {
+		if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+			RecordID:    action.RecordID,
+			Key:         key,
+			Owner:       "runtime",
+			SubjectKind: action.SubjectKind,
+			SubjectRef:  action.SubjectRef,
+			Reason:      "invalid_recovery_handoff",
+			ResolvedAt:  now,
+		}); err != nil {
+			return false, false, fmt.Errorf("resolve invalid recovery approval handoff %s: %w", action.RecordID, err)
+		}
+		return false, true, nil
+	}
+	if !consumable {
+		return false, false, nil
+	}
+	switch strings.TrimSpace(action.OperationKind) {
+	case "continuation_lease_request":
+		executable, invalid, err := r.recoveryApprovalContinuationContractExecutable(key, action)
+		if err != nil {
+			return false, false, err
+		}
+		if invalid {
+			if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+				RecordID:    action.RecordID,
+				Key:         key,
+				Owner:       "runtime",
+				SubjectKind: action.SubjectKind,
+				SubjectRef:  action.SubjectRef,
+				Reason:      "invalid_continuation_recovery_contract",
+				ResolvedAt:  now,
+			}); err != nil {
+				return false, false, fmt.Errorf("resolve invalid continuation recovery handoff %s: %w", action.RecordID, err)
+			}
+			return false, true, nil
+		}
+		if !executable {
+			return false, false, nil
+		}
+	case "authority_bundle_request":
+		executable, invalid, terminalReason, err := r.recoveryApprovalAuthorityBundleExecutable(key, action, now)
+		if err != nil {
+			return false, false, err
+		}
+		if invalid {
+			if strings.TrimSpace(terminalReason) == "" {
+				terminalReason = "invalid_authority_bundle_handoff"
+			}
+			if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+				RecordID:    action.RecordID,
+				Key:         key,
+				Owner:       "runtime",
+				SubjectKind: action.SubjectKind,
+				SubjectRef:  action.SubjectRef,
+				Reason:      terminalReason,
+				ResolvedAt:  now,
+			}); err != nil {
+				return false, false, fmt.Errorf("resolve invalid authority bundle handoff %s: %w", action.RecordID, err)
+			}
+			return false, true, nil
+		}
+		if !executable {
+			return false, false, nil
+		}
+	default:
+		return false, false, nil
+	}
+	if _, err := tools.Execute(ctx, "request_approval", json.RawMessage(action.OperationInputJSON)); err != nil {
+		var conflict toolpkg.RequestApprovalContinuationConflictError
+		if !errors.As(err, &conflict) {
+			return false, false, fmt.Errorf("materialize recovery approval handoff %s: %w", action.RecordID, err)
+		}
+		retry, handled, handleErr := r.adjudicateRecoveryApprovalContinuationConflictLocked(ctx, key, msg, action, conflict, now)
+		if handleErr != nil {
+			return false, false, handleErr
+		}
+		if !handled {
+			return false, false, fmt.Errorf("materialize recovery approval handoff %s: %w", action.RecordID, err)
+		}
+		if !retry {
+			if err := r.emitRecoveryApprovalContinuationConflictBlocker(key, action, conflict, now); err != nil {
+				return false, false, err
+			}
+			return false, true, nil
+		}
+		if _, err := tools.Execute(ctx, "request_approval", json.RawMessage(action.OperationInputJSON)); err != nil {
+			return false, false, fmt.Errorf("materialize recovery approval handoff %s after adjudication: %w", action.RecordID, err)
+		}
+	}
+	if err := r.sendMaterializedRecoveryApprovalOfferLocked(ctx, key, msg, action, now); err != nil {
+		return false, false, err
+	}
+	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+		RecordID:    action.RecordID,
+		Key:         key,
+		Owner:       "runtime",
+		SubjectKind: action.SubjectKind,
+		SubjectRef:  action.SubjectRef,
+		Reason:      "recovery_handoff_materialized",
+		ResolvedAt:  now,
+	}); err != nil {
+		return false, false, fmt.Errorf("resolve recovery approval handoff %s: %w", action.RecordID, err)
+	}
+	return true, false, nil
+}
+
 func (r *Runtime) recoveryApprovalContinuationContractExecutable(key session.SessionKey, action session.NextActionRecord) (bool, bool, error) {
 	if r == nil || r.store == nil {
 		return false, false, nil
@@ -676,7 +802,7 @@ func (r *Runtime) recoveryApprovalContinuationContractExecutable(key session.Ses
 	}
 	contract, ok, err := r.store.ContinuationRecoveryContract(contractID)
 	if err != nil {
-		return false, true, nil
+		return false, false, err
 	}
 	if !ok {
 		return false, true, nil

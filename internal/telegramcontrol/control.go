@@ -85,6 +85,7 @@ type Runtime interface {
 	TailnetStatusSnapshot(ctx context.Context) (core.TailnetStatusSnapshot, error)
 	TailnetSurfacesSnapshot() ([]core.TailnetSurfaceStatus, error)
 	TailnetGrantBindingsSnapshot() ([]core.TailnetGrantBindingStatus, error)
+	AuthorityFrontierStatus(ctx context.Context, adminChatID int64) (core.AuthorityFrontierStatusSnapshot, error)
 	RevokeTailnetSurface(ctx context.Context, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error)
 	IsTelegramAdmin(senderID int64) bool
 	CurrentEfforts() (string, string)

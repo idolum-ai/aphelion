@@ -71,6 +71,16 @@ Code anchors:
   tool boundary. The child wake turn that follows is child-scoped work; it does
   not inherit the raw parent admission or parent tool invocation reference as
   its own authority evidence.
+- In long-running parent plans, child-wake blockers are authority-identification
+  events. Missing `child_wake` leases, stale child runtime grants, transient
+  external blockers, and child-local resource failures should label the current
+  plan frontier through typed recovery contracts and ledger entries, not through
+  repeated prose requests. Any speculative child-wake approval must be bound to
+  the named child, current plan step, session, and expiry.
+- Child wake result status is an authority boundary input. The parent must treat
+  child summaries as projection and commit typed result status, blocker class,
+  retryability, and next action before using the result to advance or compile
+  more authority.
 - Parent-conversation acknowledgements are message-ID explicit, and continuity
   updates are written transactionally so parent guidance, child review state, and
   wake bookkeeping do not overwrite each other under concurrent control-plane

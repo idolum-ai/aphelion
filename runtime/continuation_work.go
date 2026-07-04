@@ -129,6 +129,12 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return session.ContinuationState{}, err
 	}
+	if err := r.markAuthorityDiscoveryContinuationRecoveryContractStatus(key, state, session.IdentificationLedgerStatusApproved, now); err != nil {
+		return session.ContinuationState{}, err
+	}
+	if err := r.recordAuthorityDiscoveryOperatorObservationForLabel(key, state.ContinuationLease.RecoveryContractID, fmt.Sprintf("telegram:%d", approverID), "approve_continuation", now); err != nil {
+		return session.ContinuationState{}, err
+	}
 	if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusApproved); err != nil {
 		return session.ContinuationState{}, fmt.Errorf("sync approved operation proposal status: %w", err)
 	}
@@ -392,6 +398,9 @@ func (r *Runtime) revokeContinuationForKeyLocked(key session.SessionKey) (Contin
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
 			return ContinuationRevokeResult{}, err
 		}
+		if err := r.markAuthorityDiscoveryContinuationRecoveryContractStatus(key, state, session.IdentificationLedgerStatusInvalidated, now); err != nil {
+			return ContinuationRevokeResult{}, err
+		}
 		if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusDenied); err != nil {
 			return ContinuationRevokeResult{}, fmt.Errorf("sync revoked operation proposal status: %w", err)
 		}
@@ -528,6 +537,9 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
 			return session.ContinuationState{}, nil, 0, nil, err
 		}
+		if err := r.markAuthorityDiscoveryContinuationRecoveryContractStatus(key, state, session.IdentificationLedgerStatusExpired, now); err != nil {
+			return session.ContinuationState{}, nil, 0, nil, err
+		}
 		if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusExpired); err != nil {
 			return session.ContinuationState{}, nil, 0, nil, fmt.Errorf("sync expired operation proposal status: %w", err)
 		}
@@ -577,6 +589,9 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 	authorityAdmission, hasAuthorityAdmission := directContinuationAuthorityAdmission(key, executionActor, approvedState, now)
 	state = continuationStateAfterLeaseTurnConsumed(state, now)
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
+		return state, nil, loopBudget, nil, err
+	}
+	if err := r.markAuthorityDiscoveryContinuationRecoveryContractStatus(key, state, session.IdentificationLedgerStatusConsumed, now); err != nil {
 		return state, nil, loopBudget, nil, err
 	}
 	payload := continuationExecutionPayload(state)

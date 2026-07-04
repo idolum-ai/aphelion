@@ -52,6 +52,9 @@ func (r *Runtime) StartHeartbeatLoop(ctx context.Context, logger func(string, ..
 }
 
 func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err error) {
+	if err := r.sweepExpiredLookaheadAllowancesWithSilence(now); err != nil {
+		return fmt.Errorf("sweep expired lookahead allowances: %w", err)
+	}
 	targetChatID, deliver := r.resolveHeartbeatTarget(now)
 	if targetChatID == 0 {
 		return nil

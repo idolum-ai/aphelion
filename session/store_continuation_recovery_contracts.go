@@ -64,10 +64,106 @@ func (s *SQLiteStore) RecordContinuationRecoveryContractNextAction(contractInput
 	if err != nil {
 		return ContinuationRecoveryContract{}, NextActionRecord{}, err
 	}
+	if err := recordContinuationRecoveryIdentificationTx(tx, contract, record); err != nil {
+		return ContinuationRecoveryContract{}, NextActionRecord{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return ContinuationRecoveryContract{}, NextActionRecord{}, fmt.Errorf("commit continuation recovery publication tx: %w", err)
 	}
 	return contract, record, nil
+}
+
+func recordContinuationRecoveryIdentificationTx(tx *sql.Tx, contract ContinuationRecoveryContract, record NextActionRecord) error {
+	contract = NormalizeContinuationRecoveryContract(contract)
+	shapeHash := AuthorityShapeHashForContinuationRecoveryContract(contract)
+	if strings.TrimSpace(contract.SessionID) == "" || strings.TrimSpace(shapeHash) == "" {
+		return nil
+	}
+	planID := IdentificationPlanIDForSession(contract.SessionID)
+	stepRef, err := continuationRecoveryIdentificationStepRefTx(tx, planID, IdentificationDefaultPlanVersion, contract.SessionID, contract.SubjectRef, shapeHash, contract.ContractID, record)
+	if err != nil {
+		return err
+	}
+	entry, err := recordIdentificationLedgerEntryTx(tx, IdentificationLedgerEntryInput{
+		PlanID:      planID,
+		PlanVersion: IdentificationDefaultPlanVersion,
+		SessionID:   contract.SessionID,
+		StepRef:     stepRef,
+		ShapeHash:   shapeHash,
+		LabelRef:    contract.ContractID,
+		Status:      IdentificationLedgerStatusProposed,
+		CreatedAt:   record.CreatedAt,
+		UpdatedAt:   record.CreatedAt,
+	})
+	if err != nil {
+		return fmt.Errorf("record continuation recovery identification entry: %w", err)
+	}
+	evidenceRef := "next_action:" + strings.TrimSpace(record.RecordID)
+	observations := []struct {
+		property IdentificationObservationProperty
+		value    string
+	}{
+		{IdentificationPropertyApprovalClass, string(contract.LeaseClass)},
+		{IdentificationPropertyContract, contract.ContractID},
+		{IdentificationPropertyTool, strings.TrimSpace(contract.Tool + ":" + contract.ToolAction)},
+		{IdentificationPropertyRetryability, record.RetryPolicy},
+	}
+	switch {
+	case contract.AgentID != "":
+		observations = append(observations, struct {
+			property IdentificationObservationProperty
+			value    string
+		}{IdentificationPropertyResource, "durable_agent:" + contract.AgentID})
+	case contract.Resource != "":
+		observations = append(observations, struct {
+			property IdentificationObservationProperty
+			value    string
+		}{IdentificationPropertyResource, contract.Resource})
+	}
+	for _, observation := range observations {
+		if strings.TrimSpace(observation.value) == "" || strings.TrimSpace(observation.value) == ":" {
+			continue
+		}
+		if _, err := recordIdentificationLedgerObservationTx(tx, IdentificationLedgerObservationInput{
+			EntryID:     entry.EntryID,
+			Method:      IdentificationObservationCollision,
+			Property:    observation.property,
+			Value:       observation.value,
+			EvidenceRef: evidenceRef,
+			ObservedAt:  record.CreatedAt,
+		}); err != nil {
+			return fmt.Errorf("record continuation recovery identification observation: %w", err)
+		}
+	}
+	return nil
+}
+
+func continuationRecoveryIdentificationStepRefTx(tx *sql.Tx, planID string, planVersion string, sessionID string, baseStepRef string, shapeHash string, labelRef string, record NextActionRecord) (string, error) {
+	baseStepRef = strings.TrimSpace(baseStepRef)
+	if baseStepRef == "" {
+		baseStepRef = "continuation_recovery"
+	}
+	entryID := IdentificationLedgerEntryID(planID, planVersion, sessionID, baseStepRef, shapeHash)
+	existing, ok, err := identificationLedgerEntryByIDTx(tx, entryID)
+	if err != nil || !ok {
+		return baseStepRef, err
+	}
+	existingLabel := strings.TrimSpace(existing.LabelRef)
+	nextLabel := strings.TrimSpace(labelRef)
+	if existing.Status == IdentificationLedgerStatusApproved ||
+		identificationLedgerEntryTerminalStatus(existing.Status) ||
+		(existingLabel != "" && nextLabel != "" && existingLabel != nextLabel) {
+		return generatedContinuationRecoveryIdentificationStepRef(baseStepRef, record), nil
+	}
+	return baseStepRef, nil
+}
+
+func generatedContinuationRecoveryIdentificationStepRef(baseStepRef string, record NextActionRecord) string {
+	collisionID := strings.TrimSpace(record.RecordID)
+	if collisionID == "" {
+		collisionID = fmt.Sprintf("%d", record.CreatedAt.UTC().UnixNano())
+	}
+	return strings.TrimSpace(baseStepRef) + "#collision:" + collisionID
 }
 
 func upsertContinuationRecoveryContractTx(tx *sql.Tx, input ContinuationRecoveryContract) (ContinuationRecoveryContract, error) {

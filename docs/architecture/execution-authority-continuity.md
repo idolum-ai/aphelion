@@ -15,6 +15,13 @@ The invariant is:
 > invocation evidence that names the run, session, lease, grant, action, and
 > outcome.
 
+Authority continuity is trace continuity. A sampled language-agent turn may vary
+from one run to the next, but the authority events it produces must remain
+typed, ordered, and comparable: admission, point-of-use validation, consumption,
+blocker, recovery handoff, invalidation, and terminal outcome. Runtime layers may
+carry only the durable identity needed to reload those records; they must not
+reconstruct authority from neighboring prose or ambient context.
+
 The child substrate is deliberately strong vertically: durable child identity,
 policy, workspace, memory, control traffic, replay protection, snapshots, and
 reporting are owned by `durableagent/`. This document covers the horizontal
@@ -95,6 +102,41 @@ typed links to evidence or related contracts, not a free-form extension bag.
 Handoffs are small pointers to stored contracts. Transition specs route those
 pointers through known adapters. Projection text is only the audience-facing
 view and must never become authority or evidence by itself.
+
+The same spine is the basis for long-plan authority discovery. A missing grant,
+missing continuation lease, or child blocker is not merely a failure; it is an
+identification event for the current run. The typed recovery contract is the
+label produced by that event. Future plan-level ledgers and lookahead actions
+must write and consume those labels instead of reconstructing authority from
+nearby context, model prose, or prior cards.
+
+Lookahead is not execution authority. Its first implementation is a
+frontier-bound, non-executing transition that surfaces the next already-recorded
+contract-backed authority frontier through the same approval family used by
+ordinary fail-closed recovery. It also carries a durable metered allowance
+ledger: one `Next grant` tap can reserve one unresolved frontier for the target
+admin, source/target session, review event, surfaced next action, and
+identification-ledger entry. When no already-recorded frontier exists, the
+runtime may simulate the active `OperationPhasePlan` forward through declared
+unmet capability requirements and compile that phase frontier into one
+authority-bundle approval card. The bundle, not the lookahead tap, is the
+authority object. Any approval produced by lookahead must still be bound to
+session, plan version, step, expiry, and exact resource/action terms. If those
+terms stop matching, the approval is stale tail and must be expired or
+invalidated before use.
+
+The menu projection must join ledger labels against live authority state before
+it calls anything executable. That join produces a local `LiveSlotWitness`;
+shape hashes, label refs, loadout tokens, and projection text are never enough.
+Frontier changes should also leave execution-event deltas, and expired
+lookahead cards should stamp `expired_unreviewed` operator-absence observations
+on the ledger entry they failed to approve.
+
+Lookahead allowances are single-principal in this implementation. The private
+admin callback records which principal spent the allowance; it does not model a
+quorum, shared audience, or delegated committee. If Aphelion needs plural
+approval later, that must become an explicit contract family with its own
+reservation, revocation, and satisfaction rules.
 
 Context may select durable run authority, but it may not manufacture authority.
 Durable state remains canonical.

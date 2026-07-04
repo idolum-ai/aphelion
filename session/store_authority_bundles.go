@@ -43,6 +43,33 @@ func (s *SQLiteStore) AuthorityBundleContract(bundleID string) (AuthorityBundleC
 	return authorityBundleContractByID(s.db, bundleID)
 }
 
+func (s *SQLiteStore) RecordAuthorityBundleContractNextAction(contractInput AuthorityBundleContract, actionInput NextActionInput) (AuthorityBundleContract, NextActionRecord, error) {
+	if s == nil || s.db == nil {
+		return AuthorityBundleContract{}, NextActionRecord{}, fmt.Errorf("authority bundle contract store unavailable")
+	}
+	contractInput, err := CanonicalizeAuthorityBundleContract(contractInput)
+	if err != nil {
+		return AuthorityBundleContract{}, NextActionRecord{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return AuthorityBundleContract{}, NextActionRecord{}, fmt.Errorf("begin authority bundle publication tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	contract, err := upsertAuthorityBundleContractTx(tx, contractInput)
+	if err != nil {
+		return AuthorityBundleContract{}, NextActionRecord{}, err
+	}
+	record, err := recordNextActionTx(tx, actionInput)
+	if err != nil {
+		return AuthorityBundleContract{}, NextActionRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AuthorityBundleContract{}, NextActionRecord{}, fmt.Errorf("commit authority bundle publication tx: %w", err)
+	}
+	return contract, record, nil
+}
+
 func upsertAuthorityBundleContractTx(tx *sql.Tx, input AuthorityBundleContract) (AuthorityBundleContract, error) {
 	input, err := CanonicalizeAuthorityBundleContract(input)
 	if err != nil {

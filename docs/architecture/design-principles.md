@@ -106,6 +106,18 @@ Open language should be interpreted by a layer that can disambiguate, ask for
 context, and return typed claims or proposed actions. The runtime can then
 validate those claims against contracts and evidence.
 
+Model outputs are stochastic. Runtime guarantees should attach to typed traces
+and hard invariants, not to expected prose behavior. Equivalent prompts, models,
+or child implementations should be compared by the distribution of authority
+events they produce under the same policy: blockers, requests, admissions,
+consumptions, invalidations, and terminal outcomes.
+
+Keep menu selection separate from kitchen compilation. A user-facing persona may
+select a compiled menu token and attach notes, but it should not need to know
+how to construct grants, leases, retry contracts, or recovery handoffs. The
+system compiler owns workflow expansion, resolution sets, and typed authority
+contracts. The presentation layer renders those records without inventing them.
+
 One-time authority should default to generic continuation recovery, not a new
 pre-coded grant type. If work is blocked by several narrow approvals, Aphelion
 may compile a broad-but-specific authority bundle from the typed blockers: what
@@ -114,6 +126,35 @@ contracts it satisfies, and the review surface that can approve it. A new
 authority type belongs in code only when it carries durable enforcement value or
 useful aggregate labeling across repeated workflows; otherwise the one-time
 case should stay a compiled recovery contract.
+
+For long-running plans, unknown authority should be treated as something the run
+identifies, not something the model guesses. A fail-closed collision with an
+authority boundary is a valid discovery event when it produces a typed blocker,
+compiled recovery contract, and replayable next action. Static plan analysis and
+lookahead may propose authority shapes, but execution remains gated on the same
+compiled contracts.
+
+Identification may be partial. A run can learn approval class, resource shape,
+retryability, timeout behavior, and bundle compatibility at different times.
+Those labels should preserve provenance instead of overwriting a scalar
+"method"; current labels are projections over typed observations and live
+authority state. Operator interactions that advance discovery, such as approval
+clicks or `Next grant` taps, should be recorded with actor provenance rather
+than treated as invisible UI side effects.
+
+Bounded preemption is allowed when it is explicit. A long-running plan may start
+with a small fixed loadout of named, scoped, expiring authority bundles, but that
+loadout must be count-limited and visible. Everything outside the loadout should
+be discovered by typed collision, static analysis, operator review, or
+frontier-bound lookahead. Lookahead should be metered by unresolved speculative
+frontiers, not by hidden trust in model restraint; a full meter should stop
+projection before it publishes another candidate, and should never approve or
+execute authority. The meter itself should be a typed operator projection, not a
+private runtime counter, so the operator can inspect what speculative authority
+is trailing a long plan. Frontier changes should also be durable events, and
+non-response should be stamped as `expired_unreviewed` provenance rather than
+lost as silence. Menu tokens become executable only through live witnesses
+produced by point-of-use authority validation.
 
 Unknown edge cases are expected. The answer is not to pretend every phrase can
 be exhaustively matched; the answer is to preserve enough structure, evidence,
@@ -127,6 +168,12 @@ forbidden resources, consent subject, TTL, turn or action budget, validation
 gates, and stop conditions.
 
 The boundary should be readable by the operator and enforceable by the runtime.
+
+Approved authority should also be perishable. A grant, lease, bundle, or
+speculative approval that was useful for one step of a long plan must be
+consumed, expired, or invalidated when the step, session, or plan version no
+longer matches. A long run may accumulate authority only while that authority
+still has a current reason to exist.
 
 Raw shell is an execution transport, not an authority model. When a shell
 command contains multiple side-effecting atoms, dynamic execution, executable
@@ -180,6 +227,13 @@ authority or evidence is missing, what exact next action can repair it, who can
 take that action, and what will happen after it is approved or completed. The
 next consumer should act on that same contract instead of reconstructing the
 failure from prose or nearby state.
+
+Repeated safe stops inside one plan should become cumulative knowledge, not
+isolated interruptions. The planned direction is a per-plan identification
+ledger: discovered authority shapes are labeled by collision, static analysis,
+lookahead, or operator review, then projected as a current menu over live grant
+state. The operator sees cards and buttons; the runtime consumes ledger-backed
+contracts.
 
 ### Persona and governor are collaborators
 

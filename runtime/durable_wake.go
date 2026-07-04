@@ -496,6 +496,9 @@ func (durableWakeChildValueBoundary) Value(any) any {
 	return nil
 }
 
+// durableWakeChildContext is an allow-list context boundary: cancellation and
+// deadlines cross into the child turn, parent context values do not. Child task
+// authority is admitted explicitly after this boundary is constructed.
 func durableWakeChildContext(parent context.Context) context.Context {
 	if parent == nil {
 		parent = context.Background()
@@ -880,21 +883,27 @@ type durableWakeChildOutcome struct {
 	Status      session.ChildTaskResultStatus
 	BlockerKind string
 	Summary     string
+	Typed       bool
 }
 
 func (r *Runtime) compileDurableWakeChildOutcome(agent core.DurableAgent, summary string, result *turn.Result) durableWakeChildOutcome {
-	status, blockerKind := durableWakeChildTaskStatusFromStructuredSummary(summary)
+	status, blockerKind, typed := durableWakeChildTaskStatusFromTurnResult(result)
+	if !typed {
+		status, blockerKind = durableWakeChildTaskStatusFromStructuredSummary(summary)
+		typed = status != ""
+	}
 	if status == "" {
-		status, blockerKind = durableWakeChildTaskStatusFromSummary(summary)
+		status, blockerKind = durableWakeLegacyReviewStatusFromSummary(summary)
 	}
 	if status == "" {
 		status = session.ChildTaskResultUpdate
-		blockerKind = "missing_terminal_review_status"
+		blockerKind = "missing_typed_child_result"
 	}
 	outcome := durableWakeChildOutcome{
 		Status:      status,
 		BlockerKind: strings.TrimSpace(blockerKind),
 		Summary:     strings.TrimSpace(summary),
+		Typed:       typed,
 	}
 	if outcome.Status == session.ChildTaskResultBlocked &&
 		durableWakeSummaryClaimsToolRuntimeNotExecutable(agent, outcome.Summary) &&
@@ -1249,6 +1258,13 @@ func (r *Runtime) processPendingDurableWakeOutcomeIntents(ctx context.Context, l
 }
 
 func durableWakeChildTaskStatusFromSummary(summary string) (session.ChildTaskResultStatus, string) {
+	if status, blockerKind := durableWakeLegacyReviewStatusFromSummary(summary); status != "" {
+		return status, blockerKind
+	}
+	return session.ChildTaskResultUpdate, "missing_terminal_review_status"
+}
+
+func durableWakeLegacyReviewStatusFromSummary(summary string) (session.ChildTaskResultStatus, string) {
 	blockerKind := ""
 	for _, line := range strings.Split(summary, "\n") {
 		line = strings.TrimSpace(line)
@@ -1276,7 +1292,7 @@ func durableWakeChildTaskStatusFromSummary(summary string) (session.ChildTaskRes
 			return session.ChildTaskResultFailed, "child_reported_failed"
 		}
 	}
-	return session.ChildTaskResultUpdate, "missing_terminal_review_status"
+	return "", ""
 }
 
 func durableWakeChildTaskStatusFromStructuredSummary(summary string) (session.ChildTaskResultStatus, string) {
@@ -1312,6 +1328,36 @@ func durableWakeChildTaskStatusFromStructuredSummary(summary string) (session.Ch
 		}
 	}
 	return "", ""
+}
+
+func durableWakeChildTaskStatusFromTurnResult(result *turn.Result) (session.ChildTaskResultStatus, string, bool) {
+	if result == nil || result.Turn == nil || result.Turn.ChildTaskResult == nil {
+		return "", "", false
+	}
+	return durableWakeChildTaskStatusFromContract(*result.Turn.ChildTaskResult)
+}
+
+func durableWakeChildTaskStatusFromContract(contract core.ChildTaskResultContract) (session.ChildTaskResultStatus, string, bool) {
+	switch strings.Trim(strings.ToLower(contract.Status), " .") {
+	case "completed", "complete":
+		return session.ChildTaskResultCompleted, "", true
+	case "update":
+		return session.ChildTaskResultUpdate, "", true
+	case "blocked", "needs_review":
+		blockerKind := normalizeExternalChannelWakeOutcomeReason(contract.BlockerKind)
+		if blockerKind == "" {
+			blockerKind = "child_reported_blocked"
+		}
+		return session.ChildTaskResultBlocked, blockerKind, true
+	case "failed", "failure":
+		blockerKind := normalizeExternalChannelWakeOutcomeReason(contract.BlockerKind)
+		if blockerKind == "" {
+			blockerKind = "child_reported_failed"
+		}
+		return session.ChildTaskResultFailed, blockerKind, true
+	default:
+		return session.ChildTaskResultUpdate, "invalid_child_result_contract", true
+	}
 }
 
 func durableTurnInferenceUnavailable(result *turn.Result, summary string) bool {

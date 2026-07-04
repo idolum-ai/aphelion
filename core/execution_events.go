@@ -124,7 +124,9 @@ const (
 	ExecutionEventAutoModeEnabled     = "auto_mode.enabled"
 	ExecutionEventAutoModeRevoked     = "auto_mode.revoked"
 
-	ExecutionEventAuthorityFindingReviewed = "authority.finding.reviewed"
+	ExecutionEventAuthorityFindingReviewed    = "authority.finding.reviewed"
+	ExecutionEventAuthorityDiscoveryLifecycle = "authority.discovery.lifecycle"
+	ExecutionEventAuthorityFrontierDelta      = "authority.frontier.delta"
 
 	ExecutionEventRecoveryAwake     = "recovery.awake"
 	ExecutionEventRecoveryDetected  = "recovery.detected"
