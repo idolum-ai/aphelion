@@ -183,6 +183,9 @@ func TestRuntimeDefaultApprovalWindowAdminExecAutoApprovalRecordsExactKind(t *te
 			}, "\n\n"),
 			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
 			DefaultChoice: "deny",
+			Metadata: map[string]string{
+				"approval_kind": "admin_unbounded_exact_exec",
+			},
 		},
 	})
 	if err != nil {

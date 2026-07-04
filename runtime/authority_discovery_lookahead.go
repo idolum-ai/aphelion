@@ -318,12 +318,36 @@ func (r *Runtime) publishLookaheadPhaseAuthorityBundleCluster(key session.Sessio
 	if err != nil {
 		return session.AuthorityBundleContract{}, session.NextActionRecord{}, err
 	}
+	if existingBundle, existingAction, exists, reusable, err := r.lookaheadReusableAuthorityBundlePublication(sessionID, bundle, now); err != nil {
+		return session.AuthorityBundleContract{}, session.NextActionRecord{}, err
+	} else if reusable {
+		return existingBundle, existingAction, nil
+	} else if exists {
+		requestInstanceID = lookaheadGeneratedRequestInstanceID(requestInstanceID, now)
+		bundle, err = session.CompileAuthorityBundleContract(session.AuthorityBundleContractInput{
+			RequestInstanceID:        requestInstanceID,
+			SessionID:                sessionID,
+			Principal:                strings.TrimSpace(principal),
+			Objective:                firstNonEmptyContinuation(opState.Objective, opState.PhasePlan.Goal, "Continue the current operation plan."),
+			Summary:                  lookaheadPhaseClusterAuthorityBundleSummary(opState, phases),
+			AllowedActions:           allowed,
+			ForbiddenActions:         lookaheadPhaseClusterForbiddenActions(phases, allowed),
+			StopConditions:           lookaheadPhaseClusterStopConditions(phases),
+			RequiredCapabilityGrants: grants,
+			Components:               components,
+			ExpiresAt:                now.Add(session.DefaultLookaheadAllowanceTTL),
+			CreatedAt:                now,
+		})
+		if err != nil {
+			return session.AuthorityBundleContract{}, session.NextActionRecord{}, err
+		}
+	}
 	inputJSON, err := promotedDurableChildAuthorityBundleOperationInput(bundle.BundleID)
 	if err != nil {
 		return session.AuthorityBundleContract{}, session.NextActionRecord{}, err
 	}
 	actionInput := session.NextActionInput{
-		RecordID:           session.NextActionRecordID(sessionID, "authority_bundle_request", bundle.BundleID, session.NextActionBlockedNeedsAuthority, time.Unix(0, 0).UTC()),
+		RecordID:           lookaheadAuthorityBundleActionRecordID(sessionID, bundle.BundleID),
 		Key:                key,
 		Owner:              "lookahead",
 		State:              session.NextActionBlockedNeedsAuthority,
@@ -378,12 +402,41 @@ func (r *Runtime) publishLookaheadPhaseAuthorityBundle(key session.SessionKey, o
 	if err != nil {
 		return session.AuthorityBundleContract{}, session.NextActionRecord{}, err
 	}
+	if existingBundle, existingAction, exists, reusable, err := r.lookaheadReusableAuthorityBundlePublication(sessionID, bundle, now); err != nil {
+		return session.AuthorityBundleContract{}, session.NextActionRecord{}, err
+	} else if reusable {
+		return existingBundle, existingAction, nil
+	} else if exists {
+		requestInstanceID = lookaheadGeneratedRequestInstanceID(requestInstanceID, now)
+		bundle, err = session.CompileAuthorityBundleContract(session.AuthorityBundleContractInput{
+			RequestInstanceID:        requestInstanceID,
+			SessionID:                sessionID,
+			Principal:                strings.TrimSpace(principal),
+			Objective:                firstNonEmptyContinuation(opState.Objective, opState.PhasePlan.Goal, phase.Summary, "Continue the current operation plan."),
+			Summary:                  lookaheadPhaseAuthorityBundleSummary(opState, phase),
+			AllowedActions:           allowed,
+			ForbiddenActions:         lookaheadPhaseForbiddenActions(phase, allowed),
+			StopConditions:           lookaheadPhaseStopConditions(phase),
+			RequiredCapabilityGrants: grants,
+			Components: []session.AuthorityBundleComponent{{
+				Kind:       session.AuthorityBundleComponentKindOperationPhase,
+				RefID:      firstNonEmptyContinuation(phase.ID, "current"),
+				Subject:    "operation",
+				SubjectRef: strings.TrimSpace(opState.ID),
+			}},
+			ExpiresAt: now.Add(session.DefaultLookaheadAllowanceTTL),
+			CreatedAt: now,
+		})
+		if err != nil {
+			return session.AuthorityBundleContract{}, session.NextActionRecord{}, err
+		}
+	}
 	inputJSON, err := promotedDurableChildAuthorityBundleOperationInput(bundle.BundleID)
 	if err != nil {
 		return session.AuthorityBundleContract{}, session.NextActionRecord{}, err
 	}
 	actionInput := session.NextActionInput{
-		RecordID:           session.NextActionRecordID(sessionID, "authority_bundle_request", bundle.BundleID, session.NextActionBlockedNeedsAuthority, time.Unix(0, 0).UTC()),
+		RecordID:           lookaheadAuthorityBundleActionRecordID(sessionID, bundle.BundleID),
 		Key:                key,
 		Owner:              "lookahead",
 		State:              session.NextActionBlockedNeedsAuthority,
@@ -421,6 +474,49 @@ func lookaheadPhaseClusterAuthorityBundleRequestInstanceID(sessionID string, opS
 		token = token[:16]
 	}
 	return "lookahead-frontier-" + token
+}
+
+func (r *Runtime) lookaheadReusableAuthorityBundlePublication(sessionID string, bundle session.AuthorityBundleContract, now time.Time) (session.AuthorityBundleContract, session.NextActionRecord, bool, bool, error) {
+	if r == nil || r.store == nil {
+		return session.AuthorityBundleContract{}, session.NextActionRecord{}, false, false, nil
+	}
+	bundle = session.NormalizeAuthorityBundleContract(bundle)
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(bundle.BundleID) == "" {
+		return session.AuthorityBundleContract{}, session.NextActionRecord{}, false, false, nil
+	}
+	actionID := lookaheadAuthorityBundleActionRecordID(sessionID, bundle.BundleID)
+	existingAction, actionOK, err := r.store.NextActionByRecordID(actionID)
+	if err != nil {
+		return session.AuthorityBundleContract{}, session.NextActionRecord{}, false, false, err
+	}
+	existingBundle, bundleOK, err := r.store.AuthorityBundleContract(bundle.BundleID)
+	if err != nil {
+		return session.AuthorityBundleContract{}, session.NextActionRecord{}, false, false, err
+	}
+	if !actionOK && !bundleOK {
+		return session.AuthorityBundleContract{}, session.NextActionRecord{}, false, false, nil
+	}
+	if !actionOK || !bundleOK {
+		return existingBundle, existingAction, true, false, nil
+	}
+	existingBundle = session.NormalizeAuthorityBundleContract(existingBundle)
+	if existingAction.ResolvedAt.IsZero() &&
+		existingBundle.Status == session.AuthorityBundleStatusRecorded &&
+		(existingBundle.ExpiresAt.IsZero() || now.Before(existingBundle.ExpiresAt.UTC())) {
+		return existingBundle, existingAction, true, true, nil
+	}
+	return existingBundle, existingAction, true, false, nil
+}
+
+func lookaheadAuthorityBundleActionRecordID(sessionID string, bundleID string) string {
+	return session.NextActionRecordID(sessionID, "authority_bundle_request", bundleID, session.NextActionBlockedNeedsAuthority, time.Unix(0, 0).UTC())
+}
+
+func lookaheadGeneratedRequestInstanceID(base string, now time.Time) string {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return strings.TrimSpace(base) + "-generation-" + fmt.Sprint(now.UTC().UnixNano())
 }
 
 func lookaheadPhaseClusterID(collisions []lookaheadPhaseCapabilityCollision) string {

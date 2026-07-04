@@ -37,10 +37,8 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 	if completedAt.IsZero() {
 		completedAt = time.Now().UTC()
 	}
-	existingByCommandHash := r.effectAttemptIDsByTurnCommandHash(key, result.TurnRunID)
-	if len(existingByCommandHash) == 0 {
-		existingByCommandHash = r.effectAttemptIDsByWorkCommandHash(key, req)
-	}
+	existingByTurnCommandHash := r.effectAttemptIDsByTurnCommandHash(key, result.TurnRunID)
+	existingByWorkCommandHash := r.effectAttemptIDsByWorkCommandHash(key, req)
 	phaseID := effectAttemptPhaseID(req)
 	commands := workResultEffectAttemptCommands(result)
 	var attempts []session.EffectAttempt
@@ -68,9 +66,15 @@ func (r *Runtime) recordWorkResultEffectAttempts(key session.SessionKey, req Wor
 		attemptID := workEffectAttemptID(key, req, command)
 		commandHash := session.EffectAttemptCommandHash(command)
 		var existingID string
-		if queue := existingByCommandHash[commandHash]; len(queue) > 0 {
+		if queue := existingByTurnCommandHash[commandHash]; len(queue) > 0 {
 			existingID = strings.TrimSpace(queue[0])
-			existingByCommandHash[commandHash] = queue[1:]
+			existingByTurnCommandHash[commandHash] = queue[1:]
+		}
+		if existingID == "" {
+			if queue := existingByWorkCommandHash[commandHash]; len(queue) > 0 {
+				existingID = strings.TrimSpace(queue[0])
+				existingByWorkCommandHash[commandHash] = queue[1:]
+			}
 		}
 		if existingID == "" {
 			err := fmt.Errorf("missing pre-dispatch effect attempt for command_hash=%s", commandHash)

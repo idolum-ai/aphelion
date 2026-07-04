@@ -254,6 +254,7 @@ type PendingDecisionRecord struct {
 	MessageID         int64
 	Prompt            string
 	Details           string
+	MetadataJSON      string
 	Rationale         string
 	ArtifactRefs      []RecordReference
 	ChoicesJSON       string

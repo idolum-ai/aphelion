@@ -80,8 +80,12 @@ func (o *observedToolRegistry) Execute(ctx context.Context, name string, input j
 			projection := projector.ProjectToolOutput(ctx, name, input, out, err)
 			if err != nil && projection.Err == nil {
 				signals := classifyProjectedToolFailure(err, out)
+				summary := strings.TrimSpace(signals.SafeSummary)
+				if summary == "" {
+					summary = safeToolFailureSummary(signals.FailureClass, "")
+				}
 				projection.Err = projectedToolFailureError{
-					safe:             safeToolFailureSummary(signals.FailureClass, ""),
+					safe:             summary,
 					failureClass:     signals.FailureClass,
 					retryable:        signals.Retryable,
 					contextCancelled: signals.ContextCancelled,

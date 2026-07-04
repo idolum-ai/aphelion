@@ -148,7 +148,7 @@ func (r *Runtime) naturalDurableAgentWakeAuthorityState(key session.SessionKey, 
 			continue
 		}
 		resources := token.Properties[session.IdentificationPropertyResource]
-		if len(resources) > 0 && !stringSliceContains(resources, wantResource) {
+		if !stringSliceContains(resources, wantResource) {
 			continue
 		}
 		best = bestAuthorityDiscoveryTokenState(best, token.State)
