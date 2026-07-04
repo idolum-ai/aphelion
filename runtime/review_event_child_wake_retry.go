@@ -108,14 +108,23 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 	action := selections[0].Action
 	key := sessionKeyForNextActionRecord(action)
 	labelRef, _, shapeHash, _ := r.lookaheadAuthorityFrontierLabel(action)
-	materialized, handled, err := r.materializeRecoveryApprovalNextActionLocked(ctx, key, msg, action, now)
+	priorState, priorExists, err := r.store.ContinuationStateIfExists(key)
 	if err != nil {
+		if releaseErr := r.releaseLookaheadAllowanceOrRecord(key, allowance.AllowanceID, "continuation_state_snapshot_error", now); releaseErr != nil {
+			return "", fmt.Errorf("snapshot continuation state before lookahead materialization: %w; release reserved allowance: %v", err, releaseErr)
+		}
+		return "", err
+	}
+	materialized, handled, err := r.prepareRecoveryApprovalNextActionLocked(ctx, key, msg, action, now)
+	if err != nil {
+		r.restoreLookaheadPreparedContinuationState(key, priorState, priorExists, now)
 		if releaseErr := r.releaseLookaheadAllowanceOrRecord(key, allowance.AllowanceID, "materialize_error", now); releaseErr != nil {
 			return "", fmt.Errorf("materialize lookahead frontier: %w; release reserved allowance: %v", err, releaseErr)
 		}
 		return "", err
 	}
 	if handled && !materialized {
+		r.restoreLookaheadPreparedContinuationState(key, priorState, priorExists, now)
 		if err := r.retireLookaheadPublishedAction(key, action, "lookahead_not_materialized", now); err != nil {
 			return "", err
 		}
@@ -125,6 +134,7 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 		return "Next authority frontier is no longer materializable. No authority was approved or executed.", nil
 	}
 	if !materialized {
+		r.restoreLookaheadPreparedContinuationState(key, priorState, priorExists, now)
 		if err := r.retireLookaheadPublishedAction(key, action, "lookahead_not_materialized", now); err != nil {
 			return "", err
 		}
@@ -135,14 +145,34 @@ func (r *Runtime) handleReviewEventLookaheadNext(ctx context.Context, cb telegra
 	}
 	entryID, err := r.recordLookaheadAuthorityFrontier(event, key, action, actorPrincipal, now)
 	if err != nil {
+		r.restoreLookaheadPreparedContinuationState(key, priorState, priorExists, now)
 		if releaseErr := r.releaseLookaheadAllowanceOrRecord(key, allowance.AllowanceID, "ledger_record_error", now); releaseErr != nil {
 			return "", fmt.Errorf("record lookahead frontier: %w; release reserved allowance: %v", err, releaseErr)
 		}
 		return "", err
 	}
 	if err := r.store.BindLookaheadAllowanceOrReleaseOnFailure(allowance.AllowanceID, action.RecordID, entryID, "bind_error", now); err != nil {
+		r.restoreLookaheadPreparedContinuationState(key, priorState, priorExists, now)
 		r.recordLookaheadAllowanceIssue(key, allowance.AllowanceID, action.RecordID, entryID, "lookahead_allowance_bind_failed", err, now)
 		return "", err
+	}
+	if err := r.sendMaterializedRecoveryApprovalOfferLocked(ctx, key, msg, action, now); err != nil {
+		r.restoreLookaheadPreparedContinuationState(key, priorState, priorExists, now)
+		if releaseErr := r.releaseLookaheadAllowanceOrRecord(key, allowance.AllowanceID, "offer_send_error", now); releaseErr != nil {
+			return "", fmt.Errorf("send lookahead frontier offer: %w; release bound allowance: %v", err, releaseErr)
+		}
+		return "", err
+	}
+	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+		RecordID:    action.RecordID,
+		Key:         key,
+		Owner:       "runtime",
+		SubjectKind: action.SubjectKind,
+		SubjectRef:  action.SubjectRef,
+		Reason:      "recovery_handoff_materialized",
+		ResolvedAt:  now,
+	}); err != nil {
+		return "", fmt.Errorf("resolve recovery approval handoff %s: %w", action.RecordID, err)
 	}
 	r.recordAuthorityFrontierDelta(key, "open", map[string]any{
 		"allowance_id":          allowance.AllowanceID,
@@ -171,6 +201,23 @@ func (r *Runtime) releaseLookaheadAllowanceOrRecord(key session.SessionKey, allo
 		"reason":               strings.TrimSpace(reason),
 	}, now)
 	return nil
+}
+
+func (r *Runtime) restoreLookaheadPreparedContinuationState(key session.SessionKey, prior session.ContinuationState, priorExists bool, now time.Time) {
+	if r == nil || r.store == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if priorExists {
+		_ = r.store.UpdateContinuationState(key, prior)
+		return
+	}
+	_ = r.store.UpdateContinuationState(key, session.ContinuationState{
+		Status:    session.ContinuationStatusIdle,
+		UpdatedAt: now,
+	})
 }
 
 func (r *Runtime) recordAuthorityFrontierDelta(key session.SessionKey, status string, payload map[string]any, now time.Time) {
@@ -771,9 +818,6 @@ func reviewEventPrivateAdminCallbackResponse(cb telegram.CallbackQuery, event se
 	}
 	if cb.Message == nil || cb.Message.Chat == nil || cb.Message.Chat.ID != targetAdminChatID {
 		return "This control is only actionable from the delivered private admin card.", nil
-	}
-	if event.DeliveryMessageID != 0 && cb.Message.MessageID != event.DeliveryMessageID {
-		return "This control is no longer actionable; use the newest card.", nil
 	}
 	return "", nil
 }

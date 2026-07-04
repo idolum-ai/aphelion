@@ -745,3 +745,7 @@ func ensureCurrentSchemaShapeRepairColumns(tx *sql.Tx) error {
 	}
 	return nil
 }
+
+func migrateSchemaV89ToV90(tx *sql.Tx) error {
+	return ensureScopedDecisionColumns(tx)
+}

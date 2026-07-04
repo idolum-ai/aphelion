@@ -3,6 +3,7 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -34,6 +35,10 @@ func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error 
 	record.Kind = strings.TrimSpace(record.Kind)
 	record.Prompt = strings.TrimSpace(record.Prompt)
 	record.Details = strings.TrimSpace(record.Details)
+	metadataJSON, err := normalizePendingDecisionMetadataJSON(record.MetadataJSON)
+	if err != nil {
+		return err
+	}
 	record.Rationale = strings.TrimSpace(record.Rationale)
 	record.ArtifactRefs = NormalizeRecordReferences(record.ArtifactRefs)
 	record.DefaultChoice = strings.TrimSpace(record.DefaultChoice)
@@ -42,12 +47,12 @@ func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error 
 		choicesJSON = "[]"
 	}
 
-	_, err := s.db.Exec(`
+	_, err = s.db.Exec(`
 		INSERT INTO pending_decisions(
 			decision_id, decision_seq, owner_key, session_id, scope_kind, scope_id, durable_agent_id, kind, chat_id, sender_id, message_id,
-			prompt, details, rationale, artifact_refs_json, choices_json, default_choice, timeout_ns, delivery_message_id,
+			prompt, details, metadata_json, rationale, artifact_refs_json, choices_json, default_choice, timeout_ns, delivery_message_id,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(decision_id) DO UPDATE SET
 			decision_seq = excluded.decision_seq,
 			owner_key = excluded.owner_key,
@@ -61,6 +66,7 @@ func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error 
 			message_id = excluded.message_id,
 			prompt = excluded.prompt,
 			details = excluded.details,
+			metadata_json = excluded.metadata_json,
 			rationale = excluded.rationale,
 			artifact_refs_json = excluded.artifact_refs_json,
 			choices_json = excluded.choices_json,
@@ -82,6 +88,7 @@ func (s *SQLiteStore) UpsertPendingDecision(record PendingDecisionRecord) error 
 		record.MessageID,
 		record.Prompt,
 		record.Details,
+		metadataJSON,
 		record.Rationale,
 		encodeRecordReferences(record.ArtifactRefs),
 		choicesJSON,
@@ -155,7 +162,7 @@ func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
 	rows, err := s.db.Query(`
 		SELECT
 			decision_id, decision_seq, owner_key, session_id, scope_kind, scope_id, durable_agent_id, kind, chat_id, sender_id, message_id,
-			prompt, details, rationale, artifact_refs_json, choices_json, default_choice, timeout_ns, delivery_message_id,
+			prompt, details, metadata_json, rationale, artifact_refs_json, choices_json, default_choice, timeout_ns, delivery_message_id,
 			created_at, updated_at
 		FROM pending_decisions
 		ORDER BY decision_seq ASC, decision_id ASC
@@ -176,7 +183,7 @@ func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
 		)
 		if err := rows.Scan(
 			&record.ID, &sequenceRaw, &record.OwnerKey, &record.SessionID, &record.ScopeKind, &record.ScopeID, &record.DurableAgentID, &record.Kind, &record.ChatID, &record.SenderID, &record.MessageID,
-			&record.Prompt, &record.Details, &record.Rationale, &artifactRefsRaw, &record.ChoicesJSON, &record.DefaultChoice, &record.TimeoutNanos, &record.DeliveryMessageID,
+			&record.Prompt, &record.Details, &record.MetadataJSON, &record.Rationale, &artifactRefsRaw, &record.ChoicesJSON, &record.DefaultChoice, &record.TimeoutNanos, &record.DeliveryMessageID,
 			&createdAtRaw, &updatedAtRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan pending decision: %w", err)
@@ -186,6 +193,10 @@ func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
 		}
 		record.Prompt = strings.TrimSpace(record.Prompt)
 		record.Details = strings.TrimSpace(record.Details)
+		record.MetadataJSON = strings.TrimSpace(record.MetadataJSON)
+		if record.MetadataJSON == "" {
+			record.MetadataJSON = "{}"
+		}
 		record.OwnerKey = strings.TrimSpace(record.OwnerKey)
 		record.SessionID = strings.TrimSpace(record.SessionID)
 		record.ScopeKind = strings.TrimSpace(record.ScopeKind)
@@ -215,4 +226,29 @@ func (s *SQLiteStore) PendingDecisions() ([]PendingDecisionRecord, error) {
 		return nil, fmt.Errorf("iterate pending decisions: %w", err)
 	}
 	return records, nil
+}
+
+func normalizePendingDecisionMetadataJSON(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "{}", nil
+	}
+	var metadata map[string]string
+	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+		return "", fmt.Errorf("decode pending decision metadata: %w", err)
+	}
+	normalized := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		normalized[key] = value
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return "", fmt.Errorf("encode pending decision metadata: %w", err)
+	}
+	return string(encoded), nil
 }

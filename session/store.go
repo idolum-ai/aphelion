@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 89
+const schemaVersion = 90
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -465,6 +465,7 @@ func (s *SQLiteStore) init() error {
 			message_id INTEGER NOT NULL DEFAULT 0,
 			prompt TEXT NOT NULL DEFAULT '',
 			details TEXT NOT NULL DEFAULT '',
+			metadata_json TEXT NOT NULL DEFAULT '{}',
 			rationale TEXT NOT NULL DEFAULT '',
 			artifact_refs_json TEXT NOT NULL DEFAULT '[]',
 			choices_json TEXT NOT NULL DEFAULT '[]',

@@ -234,6 +234,49 @@ func TestNaturalDurableAgentReportTokenConsumesAuthorityDiscoveryMenuState(t *te
 	}
 }
 
+func TestNaturalDurableAgentReportTokenRequiresExactResourceObservation(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, _ := newNaturalDurableAgentRequestRuntime(t, cfg, store, provider, sender)
+	key := session.SessionKey{ChatID: 9407, UserID: 0, Scope: telegramDMScopeRef(9407)}
+	shapeHash := session.AuthorityShapeHash(session.AuthorityShapeInput{
+		Tool:          "durable_agent",
+		Action:        "wake_once",
+		LeaseClass:    session.ContinuationLeaseClassChildWake,
+		ResourceClass: "durable_agent",
+	})
+	if _, _, err := store.RecordIdentificationLedgerObservation(session.IdentificationLedgerEntryInput{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		StepRef:     "continuation_recovery:ambiguous-child-wake",
+		ShapeHash:   shapeHash,
+		LabelRef:    "crc-ambiguous-child-wake",
+		Status:      session.IdentificationLedgerStatusProposed,
+	}, session.IdentificationLedgerObservationInput{
+		Method:      session.IdentificationObservationCollision,
+		Property:    session.IdentificationPropertyApprovalClass,
+		Value:       string(session.ContinuationLeaseClassChildWake),
+		EvidenceRef: "next_action:ambiguous-child-wake",
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerObservation() err = %v", err)
+	}
+
+	text := "tell me which jobs the email agent recommends"
+	tokens, err := rt.compileNaturalDurableAgentMenu(key, core.DurableAgent{AgentID: "idolum-email"}, text)
+	if err != nil {
+		t.Fatalf("compileNaturalDurableAgentMenu() err = %v", err)
+	}
+	if len(tokens) != 1 {
+		t.Fatalf("tokens = %#v, want one report token", tokens)
+	}
+	if tokens[0].AuthorityState != AuthorityDiscoveryTokenUnknown {
+		t.Fatalf("token = %#v, want missing resource observation to remain unknown for child-specific wake", tokens[0])
+	}
+	if base := durableAgentNaturalReportTokenScore(text); tokens[0].Score != base {
+		t.Fatalf("token score = %d, want unboosted base score %d without exact child resource", tokens[0].Score, base)
+	}
+}
+
 func TestNaturalIdolumEmailRequestWithApprovalBundleLanguageBypassesStaleBlockedPhase(t *testing.T) {
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
 	rt, _ := newNaturalDurableAgentRequestRuntime(t, cfg, store, provider, sender)

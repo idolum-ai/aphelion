@@ -103,6 +103,7 @@ func ensureScopedDecisionColumns(tx *sql.Tx) error {
 			{table: "pending_decisions", column: "scope_kind", statement: `ALTER TABLE pending_decisions ADD COLUMN scope_kind TEXT NOT NULL DEFAULT ''`},
 			{table: "pending_decisions", column: "scope_id", statement: `ALTER TABLE pending_decisions ADD COLUMN scope_id TEXT NOT NULL DEFAULT ''`},
 			{table: "pending_decisions", column: "durable_agent_id", statement: `ALTER TABLE pending_decisions ADD COLUMN durable_agent_id TEXT NOT NULL DEFAULT ''`},
+			{table: "pending_decisions", column: "metadata_json", statement: `ALTER TABLE pending_decisions ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'`},
 		}},
 		{table: "pending_artifact_retention", columns: []schemaColumnMigration{
 			{table: "pending_artifact_retention", column: "session_id", statement: `ALTER TABLE pending_artifact_retention ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`},

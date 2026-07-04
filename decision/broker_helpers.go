@@ -52,10 +52,30 @@ func normalizeRequest(req Request) Request {
 	req.DurableAgentID = strings.TrimSpace(req.DurableAgentID)
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	req.Details = strings.TrimSpace(req.Details)
+	req.Metadata = normalizeRequestMetadata(req.Metadata)
 	if req.Timeout == 0 {
 		req.Timeout = 30 * time.Second
 	}
 	return req
+}
+
+func normalizeRequestMetadata(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func containsChoice(choices []Choice, id string) bool {

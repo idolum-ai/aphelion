@@ -30,6 +30,7 @@ type operatorAutoApprovalRequest struct {
 	ProposalID      string
 	Summary         string
 	Details         string
+	Metadata        map[string]string
 	WorkMode        WorkMode
 }
 
@@ -144,6 +145,7 @@ func (r *Runtime) AutoResolveDecision(ctx context.Context, pending decision.Pend
 		DecisionID:      strings.TrimSpace(pending.ID),
 		Summary:         strings.TrimSpace(pending.Prompt),
 		Details:         strings.TrimSpace(pending.Details),
+		Metadata:        pending.Metadata,
 	})
 	if err != nil || !ok {
 		return decision.AutoResolution{}, err
@@ -301,8 +303,12 @@ func (r *Runtime) consumeOperatorAutoApproval(ctx context.Context, req operatorA
 		if !ok {
 			continue
 		}
-		r.recordOperatorAutoApprovalEvent(req.ChatID, core.ExecutionEventAutoApprovalUsed, "used", used, map[string]any{
-			"auto_mode_source": strings.TrimSpace(gate.Source),
+		autoModeSource := strings.TrimSpace(gate.Source)
+		if strings.TrimSpace(used.Reason) == defaultApprovalWindowReason {
+			autoModeSource = defaultApprovalWindowEventSource
+		}
+		eventPayload := map[string]any{
+			"auto_mode_source": autoModeSource,
 			"auto_mode_scope":  strings.TrimSpace(gate.Scope),
 			"request_kind":     strings.TrimSpace(req.Kind),
 			"choice":           strings.TrimSpace(req.Choice),
@@ -311,7 +317,19 @@ func (r *Runtime) consumeOperatorAutoApproval(ctx context.Context, req operatorA
 			"summary":          truncatePreview(strings.TrimSpace(req.Summary), 220),
 			"details":          truncatePreview(strings.TrimSpace(req.Details), 220),
 			"work_mode":        strings.TrimSpace(string(req.WorkMode)),
-		})
+		}
+		for key, value := range req.Metadata {
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+			if key == "" || value == "" {
+				continue
+			}
+			if _, exists := eventPayload[key]; exists {
+				continue
+			}
+			eventPayload[key] = value
+		}
+		r.recordOperatorAutoApprovalEvent(req.ChatID, core.ExecutionEventAutoApprovalUsed, "used", used, eventPayload)
 		_ = ctx
 		return used, true, nil
 	}
