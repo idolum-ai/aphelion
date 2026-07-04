@@ -478,6 +478,69 @@ func TestWorkResultEffectAttemptFallsBackToWorkPreDispatchPerMissingCommand(t *t
 	}
 }
 
+func TestWorkResultEffectAttemptDedupesSameHashEvidenceWithoutSecondPreDispatchRow(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7009, UserID: 0, Scope: telegramDMScopeRef(7009)}
+	req := WorkRequest{
+		OperationID: "op-effect-same-hash-evidence",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-same-hash-evidence",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-same-hash-evidence", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-same-hash-evidence",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-same-hash-evidence",
+				LeaseID: "lease-effect-same-hash-evidence",
+			}}},
+		},
+	}
+	command := "mkdir -p generated/reports"
+	commandVariant := "mkdir   -p   generated/reports"
+	if session.EffectAttemptCommandHash(command) != session.EffectAttemptCommandHash(commandVariant) {
+		t.Fatalf("test fixture hashes differ: %s vs %s", session.EffectAttemptCommandHash(command), session.EffectAttemptCommandHash(commandVariant))
+	}
+	now := time.Now().UTC()
+	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    "eff-same-hash-evidence-predispatch",
+		Key:          key,
+		OperationID:  req.OperationID,
+		PhaseID:      "phase-effect-same-hash-evidence",
+		LeaseID:      req.LeaseID,
+		ProposalID:   req.State.ActionProposal.ID,
+		WorkMode:     string(req.Mode),
+		Executor:     "native",
+		Tool:         "work_executor",
+		Command:      command,
+		EffectKind:   string(commandeffect.KindWorkspaceMutation),
+		EffectReason: "mkdir filesystem mutation",
+		Status:       session.EffectAttemptStatusAttempted,
+		StartedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertEffectAttempt() err = %v", err)
+	}
+
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{
+		ExecutorName: "native",
+		Commands:     []string{command, commandVariant},
+	}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v, want duplicate same-hash evidence not to require a second pre-dispatch row", err)
+	}
+	if len(attempts) != 1 || attempts[0].AttemptID != "eff-same-hash-evidence-predispatch" {
+		t.Fatalf("attempts = %#v, want one advanced effect attempt", attempts)
+	}
+}
+
 func TestWorkResultEffectAttemptDedupesEventChannelReplay(t *testing.T) {
 	t.Parallel()
 

@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/decision"
@@ -282,6 +283,115 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	defer sender.mu.Unlock()
 	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Text, "patched tests") || !strings.Contains(sender.sent[0].Text, "runtime/work_executor.go") || !strings.Contains(sender.sent[0].Text, "commit_requires_separate_lease") {
 		t.Fatalf("sent = %#v, want visible work executor summary", sender.sent)
+	}
+}
+
+func TestNativeWorkContinuationDoesNotBlockOnDuplicateEffectEvidence(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	command := "mkdir -p generated/reports"
+	commandVariant := "mkdir   -p   generated/reports"
+	if session.EffectAttemptCommandHash(command) != session.EffectAttemptCommandHash(commandVariant) {
+		t.Fatalf("test fixture hashes differ: %s vs %s", session.EffectAttemptCommandHash(command), session.EffectAttemptCommandHash(commandVariant))
+	}
+	work := &fakeWorkExecutor{
+		name:  "native",
+		ready: true,
+		resultHook: func(req WorkRequest) WorkResult {
+			key := workRequestEffectAttemptKey(req)
+			now := time.Now().UTC()
+			effect := commandeffect.Classify(command)
+			if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+				AttemptID:    "eff-continuation-duplicate-evidence-predispatch",
+				Key:          key,
+				OperationID:  firstNonEmptyContinuation(req.OperationID, req.Operation.ID),
+				PhaseID:      effectAttemptPhaseID(req),
+				LeaseID:      req.LeaseID,
+				ProposalID:   req.State.ActionProposal.ID,
+				WorkMode:     string(req.Mode),
+				Executor:     "native",
+				Tool:         "work_executor",
+				Command:      command,
+				EffectKind:   string(effect.Kind),
+				EffectReason: effect.Reason,
+				Status:       session.EffectAttemptStatusAttempted,
+				StartedAt:    now,
+				UpdatedAt:    now,
+			}); err != nil {
+				t.Fatalf("UpsertEffectAttempt() err = %v", err)
+			}
+			return WorkResult{
+				Summary:       "Generated reports directory.",
+				Commands:      []string{command, commandVariant},
+				SideEffects:   true,
+				ToolSuccesses: 1,
+			}
+		},
+	}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "native"}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8198, UserID: 0, Scope: telegramDMScopeRef(8198)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "duplicate-effect-evidence",
+		Objective:      "Generate reports directory.",
+		StageSummary:   "Run one approved workspace command.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-duplicate-effect-evidence",
+			Summary:        "Generate reports directory",
+			BoundedEffect:  "Run one approved workspace command and report evidence.",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"execute_bounded_proposal_once", "workspace_write"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:duplicate-effect-evidence",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-duplicate-effect-evidence",
+			ProposalID:     "aprop-duplicate-effect-evidence",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: []string{"execute_bounded_proposal_once", "workspace_write"},
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:duplicate-effect-evidence",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-duplicate-effect-evidence",
+		Objective: "Generate reports directory.",
+		Status:    session.OperationStatusActive,
+		PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+			ID:      "phase-duplicate-effect-evidence",
+			LeaseID: "lease-duplicate-effect-evidence",
+		}}},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v, want duplicate same-hash evidence not to block continuation", err)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 80)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if hasExecutionEventPayload(events, core.ExecutionEventContinuationBlocked, "effect_attempt_record_failed") {
+		t.Fatalf("events = %#v, want no effect-attempt recording block for duplicate same-hash evidence", events)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
+		t.Fatalf("events = %#v, want work executor success", events)
 	}
 }
 

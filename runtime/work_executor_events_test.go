@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/coder/websocket"
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/pipeline"
@@ -448,6 +449,78 @@ func TestAttachNativeWorkTurnEvidenceUsesTypedExecEffectWhenPreviewIsTruncated(t
 	}
 	if !result.SideEffects {
 		t.Fatal("SideEffects = false, want typed exec-effect side effect retained")
+	}
+}
+
+func TestAttachNativeWorkTurnEvidenceDedupesCommandsByCommandHash(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 8825, UserID: 0, Scope: telegramDMScopeRef(8825)}
+	run, err := store.BeginTurnRun(key, session.TurnRunKindInteractive, "run generated report command")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	command := "mkdir -p generated/reports"
+	commandVariant := "mkdir   -p   generated/reports"
+	if session.EffectAttemptCommandHash(command) != session.EffectAttemptCommandHash(commandVariant) {
+		t.Fatalf("test fixture hashes differ: %s vs %s", session.EffectAttemptCommandHash(command), session.EffectAttemptCommandHash(commandVariant))
+	}
+	now := time.Now().UTC()
+	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    "eff-native-duplicate-command-predispatch",
+		Key:          key,
+		TurnRunID:    run.ID,
+		Executor:     "turn",
+		Tool:         "exec",
+		Command:      command,
+		EffectKind:   string(commandeffect.KindWorkspaceMutation),
+		EffectReason: "mkdir filesystem mutation",
+		Status:       session.EffectAttemptStatusAttempted,
+		StartedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertEffectAttempt() err = %v", err)
+	}
+	if _, err := store.AppendExecutionEvents(key, []session.ExecutionEventInput{
+		{
+			EventType: core.ExecutionEventToolStarted,
+			Stage:     "tool",
+			Status:    "started",
+			PayloadJSON: fmt.Sprintf(
+				`{"run_id":%d,"tool":"exec","preview":%q,"exec_effect":{"command":%q,"kind":"workspace_mutation","side_effects":true}}`,
+				run.ID,
+				fmt.Sprintf(`{"cmd":%q}`, commandVariant),
+				commandVariant,
+			),
+			CreatedAt: now.Add(time.Second),
+		},
+		{
+			EventType: core.ExecutionEventToolSucceeded,
+			Stage:     "tool",
+			Status:    "succeeded",
+			PayloadJSON: fmt.Sprintf(
+				`{"run_id":%d,"tool":"exec","result_preview":"","exec_effect":{"command":%q,"kind":"workspace_mutation","side_effects":true}}`,
+				run.ID,
+				commandVariant,
+			),
+			CreatedAt: now.Add(2 * time.Second),
+		},
+	}); err != nil {
+		t.Fatalf("AppendExecutionEvents() err = %v", err)
+	}
+
+	result := WorkResult{TurnRunID: run.ID}
+	rt.attachNativeWorkTurnEvidence(key, WorkRequest{}, &result)
+	if len(result.Commands) != 1 {
+		t.Fatalf("commands = %#v, want one logical command deduped by command hash", result.Commands)
+	}
+	if session.EffectAttemptCommandHash(result.Commands[0]) != session.EffectAttemptCommandHash(command) {
+		t.Fatalf("command hash = %s, want %s", session.EffectAttemptCommandHash(result.Commands[0]), session.EffectAttemptCommandHash(command))
 	}
 }
 
