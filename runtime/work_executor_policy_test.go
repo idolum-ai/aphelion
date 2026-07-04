@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -392,6 +393,88 @@ func TestWorkResultEffectAttemptConvergesWithMonitorStartRow(t *testing.T) {
 	}
 	if after[0].OperationID != "op-effect-converge" || after[0].PhaseID != "phase-effect-converge" || after[0].Status != session.EffectAttemptStatusExecuted {
 		t.Fatalf("after attempt = %#v, want work metadata and executed status", after[0])
+	}
+}
+
+func TestWorkResultEffectAttemptFallsBackToWorkPreDispatchPerMissingCommand(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7008, UserID: 0, Scope: telegramDMScopeRef(7008)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "run command", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	defer monitor.Finish(context.Background(), nil)
+
+	req := WorkRequest{
+		OperationID: "op-effect-mixed-source",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-mixed-source",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-mixed-source", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-mixed-source",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-mixed-source",
+				LeaseID: "lease-effect-mixed-source",
+			}}},
+		},
+	}
+	now := time.Now().UTC()
+	unrelatedTurnCommand := "touch unrelated-generated.txt"
+	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    "eff-unrelated-turn-command",
+		Key:          key,
+		TurnRunID:    monitor.runID,
+		Executor:     "turn",
+		Tool:         "exec",
+		Command:      unrelatedTurnCommand,
+		EffectKind:   string(commandeffect.KindWorkspaceMutation),
+		EffectReason: "touch filesystem mutation",
+		Status:       session.EffectAttemptStatusAttempted,
+		StartedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertEffectAttempt(unrelated turn command) err = %v", err)
+	}
+	workCommand := "set -u\ncd /home/sadasant_gmail_com/code/github.com/CopilotKit/CopilotKit\npnpm --filter @copilotkit/react-core test > /tmp/copilotkit-a2ui-recovery.log 2>&1"
+	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    "eff-work-command-predispatch",
+		Key:          key,
+		OperationID:  req.OperationID,
+		PhaseID:      "phase-effect-mixed-source",
+		LeaseID:      req.LeaseID,
+		ProposalID:   req.State.ActionProposal.ID,
+		WorkMode:     string(req.Mode),
+		Executor:     "native",
+		Tool:         "work_executor",
+		Command:      workCommand,
+		EffectKind:   string(commandeffect.KindUnknown),
+		EffectReason: "multiple authority effects require effect plan",
+		Status:       session.EffectAttemptStatusAttempted,
+		StartedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertEffectAttempt(work command) err = %v", err)
+	}
+
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{
+		ExecutorName: "native",
+		TurnRunID:    monitor.runID,
+		Commands:     []string{workCommand},
+	}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v, want work-scoped pre-dispatch fallback for missing command", err)
+	}
+	if len(attempts) != 1 || attempts[0].AttemptID != "eff-work-command-predispatch" {
+		t.Fatalf("attempts = %#v, want work-scoped pre-dispatch row advanced", attempts)
 	}
 }
 
