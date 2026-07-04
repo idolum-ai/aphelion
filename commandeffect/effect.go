@@ -334,6 +334,8 @@ func RepresentativeEffect(plan EffectPlan) Effect {
 }
 
 func NormalizeCommand(command string) string {
+	// This is a compact presentation/correlation form, not a shell-semantic
+	// identity function. It also collapses whitespace inside quoted strings.
 	return strings.Join(strings.Fields(strings.TrimSpace(command)), " ")
 }
 

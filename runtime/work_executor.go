@@ -60,6 +60,7 @@ type WorkResult struct {
 	Recovery         *core.TurnRecovery
 	ChangedFiles     []string
 	Commands         []string
+	CommandEvidence  []WorkCommandEvidence
 	CodexEvents      []session.WorkCodexEvent
 	PatchPreview     string
 	CommitLaneStatus string
@@ -70,6 +71,14 @@ type WorkResult struct {
 	ToolFailures     int
 	ToolFailure      string
 	ToolFailureTexts []string
+}
+
+type WorkCommandEvidence struct {
+	Command         string
+	CommandHash     string
+	EffectAttemptID string
+	Source          string
+	EvidenceRefs    []string
 }
 
 type WorkAvailability struct {
@@ -446,7 +455,8 @@ func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, req WorkR
 	if r == nil || r.store == nil || result == nil || result.TurnRunID <= 0 {
 		return
 	}
-	r.attachEffectAttemptsToWorkResult(key, req, result)
+	attempts := r.attachEffectAttemptsToWorkResult(key, req, result)
+	eventAttemptIDsByHash := workEffectAttemptIDQueuesByHash(attempts)
 	if run, err := r.store.TurnRun(result.TurnRunID); err == nil && run != nil {
 		if failure := strings.TrimSpace(run.LastToolError); failure != "" {
 			result.ToolFailureTexts = appendUniqueRuntimeWorkString(result.ToolFailureTexts, failure)
@@ -484,7 +494,14 @@ func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, req WorkR
 				result.SideEffects = true
 			}
 			if cmd := successfulExecCommandFromToolEvent(event, startedExecPreviews); cmd != "" {
-				result.Commands = appendUniqueRuntimeWorkString(result.Commands, cmd)
+				evidence := WorkCommandEvidence{
+					Command:         cmd,
+					CommandHash:     runtimeWorkCommandHash(cmd),
+					EffectAttemptID: consumeWorkEffectAttemptIDByHash(eventAttemptIDsByHash, runtimeWorkCommandHash(cmd), nil),
+					Source:          workCommandEvidenceSourceExecutionEvent,
+					EvidenceRefs:    []string{executionEventEvidenceRef(event)},
+				}
+				appendWorkCommandEvidence(result, evidence)
 				if commandeffect.Classify(cmd).SideEffects {
 					result.SideEffects = true
 				}
@@ -504,6 +521,13 @@ func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, req WorkR
 			}
 		}
 	}
+}
+
+func executionEventEvidenceRef(event session.ExecutionEvent) string {
+	if event.ID <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("execution_event:%d", event.ID)
 }
 
 func successfulExecCommandFromToolEvent(event session.ExecutionEvent, startedExecPreviews map[string][]string) string {
@@ -831,7 +855,7 @@ func (e codexWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResult
 	}
 	result, err := client.StreamTurnWithOptions(ctx, threadID, turnID, runtimecodex.StreamOptions{FirstNotificationTimeout: e.firstNotificationWait()})
 	if err != nil {
-		partial := WorkResult(runtimecodex.WorkResultFromAppServer(codexWorkRequest(req), threadID, turnID, runtimecodex.Result{
+		partial := workResultFromCodex(runtimecodex.WorkResultFromAppServer(codexWorkRequest(req), threadID, turnID, runtimecodex.Result{
 			ThreadID:     threadID,
 			TurnID:       turnID,
 			ApprovalLog:  client.ApprovalLog(),
@@ -840,7 +864,35 @@ func (e codexWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResult
 		}))
 		return partial, err
 	}
-	return WorkResult(runtimecodex.WorkResultFromAppServer(codexWorkRequest(req), threadID, turnID, result)), nil
+	return workResultFromCodex(runtimecodex.WorkResultFromAppServer(codexWorkRequest(req), threadID, turnID, result)), nil
+}
+
+func workResultFromCodex(result runtimecodex.WorkResult) WorkResult {
+	return WorkResult{
+		ExecutorName:     result.ExecutorName,
+		TurnRunID:        result.TurnRunID,
+		ThreadID:         result.ThreadID,
+		TurnID:           result.TurnID,
+		Summary:          result.Summary,
+		RecoveryKind:     result.RecoveryKind,
+		RecoverySummary:  result.RecoverySummary,
+		RecoveryDelivery: result.RecoveryDelivery,
+		ProviderFailure:  result.ProviderFailure,
+		ProviderEvents:   result.ProviderEvents,
+		Recovery:         result.Recovery,
+		ChangedFiles:     result.ChangedFiles,
+		Commands:         result.Commands,
+		CodexEvents:      result.CodexEvents,
+		PatchPreview:     result.PatchPreview,
+		CommitLaneStatus: result.CommitLaneStatus,
+		ApprovalLog:      result.ApprovalLog,
+		CompletionKind:   result.CompletionKind,
+		SideEffects:      result.SideEffects,
+		ToolSuccesses:    result.ToolSuccesses,
+		ToolFailures:     result.ToolFailures,
+		ToolFailure:      result.ToolFailure,
+		ToolFailureTexts: result.ToolFailureTexts,
+	}
 }
 
 func (e codexWorkExecutor) withRPCTimeout(ctx context.Context, call func(context.Context) error) error {
