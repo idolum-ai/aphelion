@@ -23,6 +23,11 @@ as context. Predictive interception makes the goal a versioned acceptance
 contract, evaluates it against attested evidence, and re-aims the disposable
 plan when evidence says the current path is no longer the cheapest valid path.
 
+The analogy should stay in its lane. Radar is the attention surface: what live
+track deserves the operator now? Interception is the pursuit controller: after a
+track is selected, what route should Aphelion propose next so the goal becomes
+true with evidence?
+
 ## Relationship To Attention Radar
 
 [`attention-radar.md`](attention-radar.md) tracks live recommendable surfaces.
@@ -39,6 +44,9 @@ attention radar
 
 Radar decides what deserves attention. Interception decides how to close the
 goal gap once the operator chooses a track or starts a pursuit.
+
+This keeps the recommendation system from becoming a goal executor. A track can
+say "this looks live." It cannot say "done," amend the goal, or spend authority.
 
 ## Non-Goals
 
@@ -74,6 +82,25 @@ evidence snapshot -> goal projection -> trend / attribution
 
 The controller may change what is proposed and when. It must not change whether
 authority is required.
+
+## Interception Mechanics
+
+The dragonfly image becomes useful only when each mechanic maps to a runtime
+constraint:
+
+| Interception mechanic | Aphelion counterpart | Constraint |
+| --- | --- | --- |
+| Target | Versioned goal acceptance contract | The reference is governed, not prompt memory |
+| Bearing update | Evidence projection | New evidence can improve, regress, or invalidate the path |
+| Intercept point | Cheapest valid evidence-satisfying plan | Shortcut and repair are the same operation |
+| Course correction | Re-aim decision | Changes proposal shape, not gate semantics |
+| Missed intercept | Stalled, halted-cost, or indeterminate state | Stop usefully instead of spinning |
+| Pilot confirmation | Operator acceptance | Evaluator satisfaction is not final consent |
+
+The controller is event-triggered, not continuous theater. It wakes on meaningful
+evidence changes, boundary decisions, plan invalidation, or goal-reference
+events. It should not burn tokens recomputing a smoother-looking path when no
+typed event changed the pursuit state.
 
 ## Typed Acceptance Contract
 
@@ -264,6 +291,42 @@ I cannot tell whether the notes criterion is wrong or the work regressed.
 
 The surface remains Telegram and CLI. Predictive interception adds a clearer
 projection, not a dashboard.
+
+## Where Aphelion Is Already Strong
+
+The current tree already has several pieces of the controller:
+
+- `MissionState` carries an objective, success criteria, evidence checklist,
+  authority contract, and budget.
+- Phase and work completion already require evidence rather than model claims.
+- Outcome reconciliation and supersession already retire stale approvals when
+  the world changes.
+- Continuation budgets and auto-approval leases already provide bounded
+  autonomy below fixed authority.
+- The evidence ledger already distinguishes observed, attested, projected, and
+  gap-like records.
+- Re-entry recommendations and Attention Radar provide the eventual entry point:
+  select a live track, then pursue its goal.
+
+Predictive interception should reuse those pieces. It should not introduce a
+second scheduler or a new authority membrane.
+
+## Where Aphelion Is Weak
+
+The missing pieces are goal-specific, not general orchestration:
+
+- Goal acceptance criteria are still too often free text.
+- No deterministic evaluator answers "is this goal satisfied by attested
+  evidence?"
+- No independent eval oracle checks the evaluator.
+- Plans can be repaired, but are not yet routinely re-aimed toward a governed
+  goal when new evidence reveals a shortcut.
+- Criteria amendments are not yet governed like boundary operations.
+- Operator cards do not yet distinguish evaluator satisfaction, controller
+  convergence, and human acceptance.
+
+Those gaps should be closed in that order. The controller comes after the
+contract and evaluator, not before.
 
 ## Validation
 
