@@ -15,7 +15,10 @@ const (
 	AuthorityWorkActionDeploy         = "deploy"
 )
 
-const AuthorityClassLocalSecretMetadataReadLiveConfigRead = "local_secret_metadata_read_live_config_read"
+const (
+	AuthorityClassExternalRead                          = "external_read"
+	AuthorityClassLocalSecretMetadataReadLiveConfigRead = "local_secret_metadata_read_live_config_read"
+)
 
 type AuthorityContract struct {
 	Key                    string
@@ -122,6 +125,20 @@ func authorityClassificationPriority() []authorityClassificationGroup {
 			"rank_private_material",
 			"scout_public_opportunities",
 		}},
+		{Key: AuthorityClassExternalRead, Tokens: []string{
+			AuthorityClassExternalRead,
+			"external_network_read",
+			"network_read",
+			"network_access_read",
+			"external_network_contact",
+			"network_contact",
+			"fetch",
+			"fetch_remote",
+			"git_fetch",
+			"git_fetch_read_refs",
+			"git_ls_remote",
+			"ls_remote",
+		}},
 		{Key: "data_access", Tokens: []string{"data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access", "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "credential_state_check", "credential_metadata", "credential_metadata_check", "token_health_check", "run_external_account_auth_status_or_identity_check"}},
 		{Key: "repo_publication", Tokens: []string{"repo_publication", "remote_repo_mutation", "git_push", "push_remote"}},
 		{Key: "commit", Tokens: []string{"commit", "git_commit", "git_commit_validated_slices", "repo_history_mutation", "workspace_commit", "workspace_commit_then_repo_write_bounded"}},
@@ -194,6 +211,51 @@ func actionListImpliesRepoPublication(actions []string) bool {
 func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 	key := normalizeEnumValue(token)
 	switch key {
+	case AuthorityClassExternalRead, "external_network_read", "network_read", "network_access_read", "external_network_contact", "network_contact", "fetch", "fetch_remote", "git_fetch", "git_fetch_read_refs", "git_ls_remote", "ls_remote":
+		return AuthorityContract{
+			Key:        AuthorityClassExternalRead,
+			LeaseClass: ContinuationLeaseClassDataAccess,
+			WorkAction: AuthorityWorkActionReadOnly,
+			AllowedActions: []string{
+				AuthorityWorkActionReadOnly,
+				AuthorityClassExternalRead,
+				"external_network_contact",
+				"network_contact",
+				"fetch",
+				"fetch_remote",
+				"git_fetch",
+				"git_fetch_read_refs",
+				"git_ls_remote",
+				"ls_remote",
+				"report_fetch_evidence",
+				"report_evidence",
+			},
+			ForbiddenActions: []string{
+				"workspace_write",
+				"edit_files",
+				"commit",
+				"git_commit",
+				"repo_history_mutation",
+				"repo_publication",
+				"git_push",
+				"push_remote",
+				"github_pr_create",
+				"github_pr_update",
+				"external_account_action",
+				"credential_token_output",
+				"read_or_print_credentials",
+				"deploy",
+				"restart_service",
+				"external_effect_outside_bounded_effect",
+			},
+			ValidationPlan: []string{
+				"run only the approved external read or fetch command",
+				"record remote/ref evidence and stop before workspace edits, commits, pushes, PR metadata, deploys, restarts, or credential output",
+			},
+			AutoApprovalAllowed:    true,
+			RequiresInlineApproval: true,
+			ExternalEffectsAllowed: true,
+		}, true
 	case AuthorityClassLocalSecretMetadataReadLiveConfigRead:
 		return AuthorityContract{
 			Key:        AuthorityClassLocalSecretMetadataReadLiveConfigRead,

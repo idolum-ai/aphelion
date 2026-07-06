@@ -208,6 +208,46 @@ func TestAuthorizeCommandRejectsExternalAccountWhenContractDisallowsExternalEffe
 	}
 }
 
+func TestAuthorizeCommandAllowsGitFetchWithExternalReadContract(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	decision := AuthorizeCommand(CommandRequest{
+		State: testContinuationState(session.AuthorityClassExternalRead, []string{
+			"git_fetch_origin_main_prune",
+			"report_fetch_evidence",
+		}, false, now),
+		Command: "git fetch origin main --prune",
+		Now:     now,
+	})
+	if !decision.Active || decision.Boundary || !decision.Allowed {
+		t.Fatalf("decision = %#v, want git fetch allowed by external_read envelope", decision)
+	}
+	if decision.RequiredAction != "fetch" {
+		t.Fatalf("required action = %q, want fetch", decision.RequiredAction)
+	}
+}
+
+func TestAuthorizeCommandRejectsGitFetchWorkspaceWriteContractAsInvalid(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	decision := AuthorizeCommand(CommandRequest{
+		State: testContinuationState("workspace_write", []string{
+			"git_fetch_origin_main_prune",
+			"report_fetch_evidence",
+		}, false, now),
+		Command: "git fetch origin main --prune",
+		Now:     now,
+	})
+	if !decision.Active || decision.Allowed {
+		t.Fatalf("decision = %#v, want invalid workspace_write fetch contract denial", decision)
+	}
+	if decision.Reason != reasonInvalidAuthorityContract {
+		t.Fatalf("reason = %q, want %q", decision.Reason, reasonInvalidAuthorityContract)
+	}
+}
+
 func TestAuthorizeCommandAllowsExternalAccountStatusCheckOnly(t *testing.T) {
 	t.Parallel()
 

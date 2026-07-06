@@ -165,7 +165,7 @@ func requestApprovalToolDefinition() agent.ToolDef {
 						"id": {"type": "string", "description": "Optional stable phase id; generated when omitted"},
 						"summary": {"type": "string", "description": "Approval-card summary / next step"},
 						"status": {"type": "string", "enum": ["pending"], "description": "Must be pending when supplied"},
-						"authority_class": {"type": "string", "description": "Authority/risk class such as read_only_review, workspace_write, commit, deploy, or system_change"},
+						"authority_class": {"type": "string", "description": "Authority/risk class such as read_only_review, external_read, workspace_write, commit, deploy, or system_change"},
 						"why_now": {"type": "string", "description": "Why this approval should be offered now"},
 						"bounded_effect": {"type": "string", "description": "What approval permits, including stop conditions"},
 						"allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Allowed action labels for this approval"},

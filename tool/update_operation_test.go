@@ -1379,6 +1379,101 @@ func TestRequestApprovalToolRejectsPushProseWhenGitPushForbidden(t *testing.T) {
 	}
 }
 
+func TestRequestApprovalToolRejectsWorkspaceWriteFetchPreflight(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"request_approval",
+		json.RawMessage(`{
+			"objective":"Refresh release evidence from origin/main.",
+			"phase":{
+				"id":"fresh-phase-1-fetch-origin-main",
+				"summary":"Fresh external-read/fetch approval for origin/main.",
+				"authority_class":"workspace_write",
+				"gate_reason_code":"workspace_write",
+				"why_now":"The prior continuation could not dispatch git fetch.",
+				"bounded_effect":"Run git fetch origin main --prune, then read refs and report evidence.",
+				"allowed_actions":["git_fetch_origin_main_prune","git_rev_parse_origin_main","report_fetch_evidence"],
+				"forbidden_actions":["external_effect_without_separate_grant","commit","git_push","deploy","restart_service"],
+				"validation_plan":["report fetch result and origin/main hash"]
+			}
+		}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(request_approval) err = nil, want fetch/workspace_write preflight rejection")
+	}
+	if !strings.Contains(err.Error(), "request_approval authority contract invalid") || !strings.Contains(err.Error(), session.AuthorityContradictionReasonProposalRequiresForbiddenExternalEffect) {
+		t.Fatalf("err = %v, want external-effect preflight diagnostic", err)
+	}
+	state, stateErr := store.OperationState(key)
+	if stateErr != nil {
+		t.Fatalf("OperationState() err = %v", stateErr)
+	}
+	if state.Stage == "approval_request" || state.PhasePlan.CurrentPhaseID == "fresh-phase-1-fetch-origin-main" {
+		t.Fatalf("operation state = %#v, want rejected preflight not persisted as approval request", state)
+	}
+}
+
+func TestRequestApprovalToolPersistsExternalReadFetchApproval(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"request_approval",
+		json.RawMessage(`{
+			"objective":"Refresh release evidence from origin/main.",
+			"phase":{
+				"id":"fresh-phase-1-fetch-origin-main",
+				"summary":"Fetch origin/main and report remote ref evidence.",
+				"authority_class":"external_read",
+				"gate_reason_code":"external_read",
+				"why_now":"The release check needs current remote refs.",
+				"bounded_effect":"Run only git fetch origin main --prune, then read refs and report evidence.",
+				"allowed_actions":["git_fetch_origin_main_prune","git_rev_parse_origin_main","report_fetch_evidence"],
+				"forbidden_actions":["workspace_write","commit","git_push","deploy","restart_service"],
+				"validation_plan":["report fetch result and origin/main hash"]
+			}
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval) err = %v", err)
+	}
+	if !strings.Contains(out, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("output = %q, want approval request render", out)
+	}
+	state, stateErr := store.OperationState(key)
+	if stateErr != nil {
+		t.Fatalf("OperationState() err = %v", stateErr)
+	}
+	if state.Status != session.OperationStatusBlocked || state.Stage != "approval_request" {
+		t.Fatalf("operation status/stage = %q/%q, want blocked approval_request", state.Status, state.Stage)
+	}
+	if state.PhasePlan.CurrentPhaseID != "fresh-phase-1-fetch-origin-main" || len(state.PhasePlan.Phases) != 1 {
+		t.Fatalf("phase plan = %#v, want external-read fetch approval phase", state.PhasePlan)
+	}
+	phase := state.PhasePlan.Phases[0]
+	if phase.AuthorityClass != session.AuthorityClassExternalRead || !phase.RequiresApproval {
+		t.Fatalf("phase = %#v, want external_read manual approval phase", phase)
+	}
+}
+
 func TestOperationCompletionEvidenceStatusExplainsMismatch(t *testing.T) {
 	t.Parallel()
 
