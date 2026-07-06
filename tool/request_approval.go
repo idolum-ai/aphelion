@@ -31,6 +31,34 @@ func (e RequestApprovalContinuationConflictError) Error() string {
 	return fmt.Sprintf("request_approval continuation lease conflicts with existing %s continuation %s", e.ExistingLeaseStatus, strings.TrimSpace(e.ExistingLeaseID))
 }
 
+type requestApprovalAuthorityContractInvalidError struct {
+	diagnostic string
+}
+
+func newRequestApprovalAuthorityContractInvalidError(compilation session.AuthorityContractCompilation) requestApprovalAuthorityContractInvalidError {
+	diagnostic := strings.TrimSpace(session.AuthorityContractCompilationSummary(compilation))
+	if diagnostic == "" {
+		diagnostic = "invalid authority contract"
+	}
+	return requestApprovalAuthorityContractInvalidError{diagnostic: diagnostic}
+}
+
+func (e requestApprovalAuthorityContractInvalidError) Error() string {
+	return "request_approval authority contract invalid: " + strings.TrimSpace(e.diagnostic)
+}
+
+func (e requestApprovalAuthorityContractInvalidError) SafeToolFailureClass() string {
+	return "authority_contract_invalid"
+}
+
+func (e requestApprovalAuthorityContractInvalidError) SafeToolFailureSummary() string {
+	return session.RedactEvidenceText(e.Error()).Text
+}
+
+func (e requestApprovalAuthorityContractInvalidError) SafeToolFailureRetryPolicy() string {
+	return "revise_approval_contract"
+}
+
 func (r *Registry) requestApproval(ctx context.Context, input json.RawMessage, key session.SessionKey, p principal.Principal) (string, error) {
 	if r.store == nil {
 		return "", fmt.Errorf("request_approval requires transcript store")
@@ -92,7 +120,7 @@ func (r *Registry) requestApproval(ctx context.Context, input json.RawMessage, k
 	phase.ForbiddenActions = append([]string(nil), proposal.ForbiddenActions...)
 	compilation := session.CompileActionProposalAuthorityContract(proposal)
 	if compilation.Invalid() {
-		return "", fmt.Errorf("request_approval authority contract invalid: %s", session.AuthorityContractCompilationSummary(compilation))
+		return "", newRequestApprovalAuthorityContractInvalidError(compilation)
 	}
 
 	current, err := r.store.OperationState(key)

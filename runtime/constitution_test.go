@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,10 +13,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/prompt"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 	"github.com/idolum-ai/aphelion/turn"
 )
@@ -39,6 +42,36 @@ func TestTurnAuditRecorderPairsSameNameToolFinishesByInput(t *testing.T) {
 	}
 	if got[`{"path":"a.md"}`] != "a output" || got[`{"path":"b.md"}`] != "b output" {
 		t.Fatalf("tool outputs by input = %#v, want stable same-name pairing", got)
+	}
+}
+
+func TestTurnAuditRecorderDetectsRequestApprovalAuthorityContractInvalidFeedback(t *testing.T) {
+	t.Parallel()
+
+	audit := newTurnAuditRecorder(session.SessionKey{ChatID: 9102, UserID: 1001}, "telegram", "admin", "approval repair")
+	audit.ToolStarted("request_approval", `{"phase":{"authority_class":"workspace_write"}}`)
+	audit.ToolFinished(
+		"request_approval",
+		`{"phase":{"authority_class":"workspace_write"}}`,
+		"",
+		"request_approval authority contract invalid: invalid authority contract allowed_action=git_fetch_origin_main_prune forbidden_action=external_effect_without_separate_grant reason=proposal_requires_external_effect_but_contract_forbids_external_effect",
+	)
+
+	feedback := audit.requestApprovalAuthorityContractInvalidFeedback()
+	for _, want := range []string{
+		"request_approval failed typed authority preflight",
+		"proposal_requires_external_effect_but_contract_forbids_external_effect",
+		"do not repeat the same request_approval payload",
+	} {
+		if !strings.Contains(feedback, want) {
+			t.Fatalf("feedback = %q, want %q", feedback, want)
+		}
+	}
+
+	other := newTurnAuditRecorder(session.SessionKey{ChatID: 9103, UserID: 1001}, "telegram", "admin", "ordinary tool failure")
+	other.ToolFinished("request_approval", `{}`, "", "request_approval requires session context")
+	if got := other.requestApprovalAuthorityContractInvalidFeedback(); got != "" {
+		t.Fatalf("ordinary request_approval feedback = %q, want empty", got)
 	}
 }
 
@@ -766,6 +799,185 @@ func TestHandleInboundBrokerageFallsBackWhenContractStabilizes(t *testing.T) {
 	}
 	if audit.BrokerageStopReason != turn.BrokerageStopStableContract || audit.BrokerageStopRound != 2 {
 		t.Fatalf("brokerage stop = reason:%q round:%d, want stable_contract at 2", audit.BrokerageStopReason, audit.BrokerageStopRound)
+	}
+}
+
+func TestHandleInboundRoutesRequestApprovalAuthorityInvalidBackToBrokerageRevision(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	provider.proposalReplyText = strings.Join([]string{
+		"INSPECT: yes",
+		"QUESTION: no",
+		"ANSWER: yes",
+		"PUSH:",
+		"- Request a bounded approval to fetch origin/main.",
+	}, "\n")
+	provider.brokerageReplyText = strings.Join([]string{
+		"INSPECT: yes",
+		"QUESTION: no",
+		"ANSWER: yes",
+		"PUSH:",
+		"- Request external_read approval for git fetch origin main --prune, then report ref evidence.",
+		"CONTINUATION_SCHEMA_VERSION: 1",
+		"CONTINUATION_INTENT: continue",
+		"CONTINUATION_RATIONALE: The previous request_approval payload compiled to a local workspace contract that forbade external fetch.",
+		"CONTINUATION_NEXT_STEP: Ask for external_read fetch approval.",
+		"CONTINUATION_CONFIDENCE: high",
+	}, "\n")
+	provider.planningReplies = []string{
+		strings.Join([]string{
+			"CONTINUATION_SCHEMA_VERSION: 1",
+			"INSPECT: yes",
+			"QUESTION: no",
+			"ANSWER: yes",
+			"RATIFICATION: accept",
+			"PLAN:",
+			"- Request the first bounded fetch approval.",
+			"CONTINUATION_INTENT: continue",
+			"CONTINUATION_RATIONALE: Initial approval contract looks specific enough before tool preflight.",
+			"CONTINUATION_RATIFIED: yes",
+			"CONTINUATION_NEXT_STEP: Request approval.",
+			"CONTINUATION_CONSTRAINTS: Stop if request_approval rejects the typed contract.",
+			"CONTINUATION_CONFIDENCE: high",
+		}, "\n"),
+		strings.Join([]string{
+			"CONTINUATION_SCHEMA_VERSION: 1",
+			"INSPECT: yes",
+			"QUESTION: no",
+			"ANSWER: yes",
+			"RATIFICATION: accept",
+			"PLAN:",
+			"- Request external_read fetch approval.",
+			"CONTINUATION_INTENT: continue",
+			"CONTINUATION_RATIONALE: The revised contract matches the compiler diagnostic.",
+			"CONTINUATION_RATIFIED: yes",
+			"CONTINUATION_NEXT_STEP: Request corrected approval.",
+			"CONTINUATION_CONSTRAINTS: Only external_read fetch and ref evidence.",
+			"CONTINUATION_CONFIDENCE: high",
+		}, "\n"),
+	}
+	provider.governorResponses = []agent.Response{
+		{ToolCalls: []agent.ToolCall{{
+			ID:   "bad-approval",
+			Name: "request_approval",
+			Input: json.RawMessage(`{
+				"objective":"Refresh release evidence from origin/main.",
+				"phase":{
+					"id":"fresh-phase-1-fetch-origin-main",
+					"summary":"Fresh external-read/fetch approval for origin/main.",
+					"authority_class":"workspace_write",
+					"gate_reason_code":"workspace_write",
+					"why_now":"The release check needs current remote refs.",
+					"bounded_effect":"Run git fetch origin main --prune, then read refs and report evidence.",
+					"allowed_actions":["git_fetch_origin_main_prune","git_rev_parse_origin_main","report_fetch_evidence"],
+					"forbidden_actions":["external_effect_without_separate_grant","commit","git_push","deploy","restart_service"],
+					"validation_plan":["report fetch result and origin/main hash"]
+				}
+			}`),
+		}}},
+		{Content: "The request_approval payload failed typed authority preflight; revise the approval contract."},
+		{ToolCalls: []agent.ToolCall{{
+			ID:   "good-approval",
+			Name: "request_approval",
+			Input: json.RawMessage(`{
+				"objective":"Refresh release evidence from origin/main.",
+				"phase":{
+					"id":"fresh-phase-1-fetch-origin-main",
+					"summary":"Fetch origin/main and report remote ref evidence.",
+					"authority_class":"external_read",
+					"gate_reason_code":"external_read",
+					"why_now":"The release check needs current remote refs.",
+					"bounded_effect":"Run only git fetch origin main --prune, then read refs and report evidence.",
+					"allowed_actions":["git_fetch_origin_main_prune","git_rev_parse_origin_main","report_fetch_evidence"],
+					"forbidden_actions":["workspace_write","commit","git_push","deploy","restart_service"],
+					"validation_plan":["report fetch result and origin/main hash"]
+				}
+			}`),
+		}}},
+		{Content: "Corrected approval requested."},
+	}
+	provider.faceReplyText = "Corrected approval requested."
+	provider.streamFaceText = "Corrected approval requested."
+
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	var audit TurnAudit
+	rt.SetTurnAuditSink(func(got TurnAudit) {
+		audit = got
+	})
+
+	if _, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     9007,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "fetch origin/main before continuing the release check",
+		MessageID:  1,
+	}); err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+
+	provider.mu.Lock()
+	seenBrokerage := append([]string(nil), provider.seenBrokerageSystem...)
+	seenPlanning := append([]string(nil), provider.seenPlanningSystem...)
+	provider.mu.Unlock()
+	if len(seenBrokerage) == 0 {
+		t.Fatal("seenBrokerageSystem empty, want post-failure revision prompt")
+	}
+	revisionPrompt := seenBrokerage[len(seenBrokerage)-1]
+	if !strings.Contains(revisionPrompt, "## Execution Contract Feedback") ||
+		!strings.Contains(revisionPrompt, "request_approval authority contract invalid") ||
+		!strings.Contains(revisionPrompt, "proposal_requires_external_effect_but_contract_forbids_external_effect") {
+		t.Fatalf("revision brokerage prompt = %q, want typed request_approval compiler feedback", revisionPrompt)
+	}
+	if len(seenPlanning) < 2 {
+		t.Fatalf("seenPlanningSystem len = %d, want initial and revised ratification", len(seenPlanning))
+	}
+
+	var requestApprovalCalls []TurnToolAudit
+	for _, call := range audit.ToolCalls {
+		if call.Name == "request_approval" {
+			requestApprovalCalls = append(requestApprovalCalls, call)
+		}
+	}
+	if len(requestApprovalCalls) != 2 {
+		t.Fatalf("request_approval calls = %#v, want bad attempt then repaired retry", requestApprovalCalls)
+	}
+	if !strings.Contains(requestApprovalCalls[0].Error, "request_approval authority contract invalid") {
+		t.Fatalf("first request_approval error = %q, want authority contract invalid", requestApprovalCalls[0].Error)
+	}
+	if requestApprovalCalls[1].Error != "" || !strings.Contains(requestApprovalCalls[1].OutputPreview, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("second request_approval = %#v, want successful approval request", requestApprovalCalls[1])
+	}
+
+	opState, err := store.OperationState(session.SessionKey{ChatID: 9007, UserID: 0, Scope: telegramDMScopeRef(9007)})
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if opState.Status != session.OperationStatusBlocked || opState.PhasePlan.CurrentPhaseID != "fresh-phase-1-fetch-origin-main" || len(opState.PhasePlan.Phases) != 1 {
+		t.Fatalf("operation state = %#v, want corrected approval request phase", opState)
+	}
+	phase := opState.PhasePlan.Phases[0]
+	if phase.AuthorityClass != session.AuthorityClassExternalRead || !phase.RequiresApproval {
+		t.Fatalf("phase = %#v, want external_read approval phase", phase)
 	}
 }
 

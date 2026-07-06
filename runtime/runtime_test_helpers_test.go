@@ -37,6 +37,7 @@ type fakeProvider struct {
 	doctorSummaryReplyText  string
 	interpretationReplyText string
 	interpretationReplies   []string
+	governorResponses       []agent.Response
 	streamFaceText          string
 	faceErr                 error
 	proposalErr             error
@@ -190,6 +191,14 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, too
 			}
 			return &agent.Response{Content: reply, Usage: f.responseUsage}, nil
 		}
+	}
+
+	if len(f.governorResponses) > 0 {
+		resp := f.governorResponses[0]
+		f.governorResponses = append(f.governorResponses[:0], f.governorResponses[1:]...)
+		resp.ToolCalls = append([]agent.ToolCall(nil), resp.ToolCalls...)
+		resp.Media = append([]core.Media(nil), resp.Media...)
+		return &resp, nil
 	}
 
 	return &agent.Response{

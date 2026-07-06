@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -1413,6 +1414,19 @@ func TestRequestApprovalToolRejectsWorkspaceWriteFetchPreflight(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "request_approval authority contract invalid") || !strings.Contains(err.Error(), session.AuthorityContradictionReasonProposalRequiresForbiddenExternalEffect) {
 		t.Fatalf("err = %v, want external-effect preflight diagnostic", err)
+	}
+	var safeFailure interface {
+		SafeToolFailureClass() string
+		SafeToolFailureSummary() string
+		SafeToolFailureRetryPolicy() string
+	}
+	if !errors.As(err, &safeFailure) {
+		t.Fatalf("err = %T, want model-safe projected failure diagnostic", err)
+	}
+	if safeFailure.SafeToolFailureClass() != "authority_contract_invalid" ||
+		safeFailure.SafeToolFailureRetryPolicy() != "revise_approval_contract" ||
+		!strings.Contains(safeFailure.SafeToolFailureSummary(), session.AuthorityContradictionReasonProposalRequiresForbiddenExternalEffect) {
+		t.Fatalf("safe failure = class:%q retry:%q summary:%q, want contract repair diagnostic", safeFailure.SafeToolFailureClass(), safeFailure.SafeToolFailureRetryPolicy(), safeFailure.SafeToolFailureSummary())
 	}
 	state, stateErr := store.OperationState(key)
 	if stateErr != nil {

@@ -333,116 +333,172 @@ func (r *Runtime) executeTurnCoordinator(ctx context.Context, input turnCoordina
 	tools := monitor.observeTools(input.Tools)
 	r.markSessionTurnPhase(input.Key, "governor", "running governor and tool loop")
 
-	systemCount := 1
-	if strings.TrimSpace(systemPrompt) == "" {
-		systemCount = 0
-	}
 	extraSystemMessages := append([]agent.Message(nil), input.ExtraSystemMessages...)
 	if recall := r.maybeAggressivePrefetchSystemMessage(ctx, input.Key, monitor.runID, input.Scope, runKind, input.Prepared.LedgerText, time.Now().UTC()); strings.TrimSpace(recall) != "" {
 		extraSystemMessages = append(extraSystemMessages, agent.Message{Role: "system", Content: recall})
 	}
 
-	turnInput := make([]agent.Message, 0, len(history)+2+len(extraSystemMessages)+systemCount)
-	if systemPrompt != "" {
-		turnInput = append(turnInput, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
+	buildGovernorTurnInput := func(systemPrompt string, systemBlocks []agent.SystemBlock, brokerage turnBrokerage) []agent.Message {
+		systemCount := 0
+		if strings.TrimSpace(systemPrompt) != "" {
+			systemCount = 1
+		}
+		turnInput := make([]agent.Message, 0, len(history)+2+len(extraSystemMessages)+systemCount)
+		if systemPrompt != "" {
+			turnInput = append(turnInput, agent.Message{Role: "system", Content: systemPrompt, SystemBlocks: systemBlocks})
+		}
+		turnInput = append(turnInput, extraSystemMessages...)
+		if advisory := brokerageContextForGovernor(input.FaceName, brokerage); advisory != "" {
+			turnInput = append(turnInput, agent.Message{Role: "system", Content: advisory})
+		}
+		turnInput = append(turnInput, history...)
+		turnInput = append(turnInput, agent.Message{Role: "user", Content: input.Prepared.UserText, Media: input.Prepared.AgentMedia})
+		return turnInput
 	}
-	turnInput = append(turnInput, extraSystemMessages...)
-	if advisory := brokerageContextForGovernor(input.FaceName, brokerage); advisory != "" {
-		turnInput = append(turnInput, agent.Message{Role: "system", Content: advisory})
-	}
-	turnInput = append(turnInput, history...)
-	turnInput = append(turnInput, agent.Message{Role: "user", Content: input.Prepared.UserText, Media: input.Prepared.AgentMedia})
+	runGovernorAttempt := func(turnInput []agent.Message, systemBlocks []agent.SystemBlock) (*core.TurnResult, []agent.Message, error) {
+		providerStarted := time.Now()
+		perceptionBudget := buildTurnPerceptionBudgetContract(turnPerceptionBudgetInput{
+			RunKind:       runKind,
+			HiddenInputs:  input.HiddenInputs,
+			PromptContext: input.PromptContext,
+			SystemBlocks:  systemBlocks,
+			ExtraSystem:   extraSystemMessages,
+			History:       history,
+			UserText:      input.Prepared.UserText,
+			ArtifactRefs:  input.Prepared.ArtifactRefs,
+		})
+		if err := r.recordPerceptionBudgetJudgmentUse(input.Key, monitor.runID, perceptionBudget, time.Now().UTC()); err != nil {
+			return nil, nil, err
+		}
+		providerAttemptPayload := mergePerceptionBudgetPayload(map[string]any{
+			"backend":       strings.TrimSpace(input.Exec.Backend),
+			"provider":      strings.TrimSpace(input.Exec.ProviderName),
+			"model":         strings.TrimSpace(input.Exec.ModelName),
+			"provider_path": strings.Join(input.Exec.ProviderPath, ","),
+			"history_count": len(history),
+			"tool_count":    len(toolManifestForRunKind(tools, runKind)),
+		}, perceptionBudget)
+		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptStarted, "provider", "started", providerAttemptPayload, time.Now().UTC())
 
-	providerStarted := time.Now()
-	perceptionBudget := buildTurnPerceptionBudgetContract(turnPerceptionBudgetInput{
-		RunKind:       runKind,
-		HiddenInputs:  input.HiddenInputs,
-		PromptContext: input.PromptContext,
-		SystemBlocks:  systemBlocks,
-		ExtraSystem:   extraSystemMessages,
-		History:       history,
-		UserText:      input.Prepared.UserText,
-		ArtifactRefs:  input.Prepared.ArtifactRefs,
-	})
-	if err := r.recordPerceptionBudgetJudgmentUse(input.Key, monitor.runID, perceptionBudget, time.Now().UTC()); err != nil {
-		return turnCoordinatorExecuteOutput{}, err
+		runOpts := r.reasoningOptionsForRun(runKind)
+		if runOpts == nil {
+			runOpts = &agent.CompleteOptions{}
+		}
+		runOpts.Observer = monitor
+		runOpts.ContextBudget = r.providerContextBudget()
+		turnResult, outHistory, runErr := agent.RunTurn(ctx, input.Exec.Provider, tools, tokenAwareTurnBudget(r.cfg.Agent.MaxIterations, runOpts), runOpts, turnInput)
+		if runErr != nil {
+			failureKind := core.ProviderFailureKind(runErr)
+			r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptFailed, "provider", "failed", map[string]any{
+				"backend":              strings.TrimSpace(input.Exec.Backend),
+				"provider":             strings.TrimSpace(input.Exec.ProviderName),
+				"model":                strings.TrimSpace(input.Exec.ModelName),
+				"error":                trimError(runErr.Error()),
+				"failure_kind":         failureKind,
+				"retryable":            core.ProviderFailureRetryable(failureKind),
+				"failover_eligible":    core.ProviderFailureFailoverEligible(failureKind),
+				"provider_duration_ms": durationMillis(time.Since(providerStarted)),
+			}, time.Now().UTC())
+			if !suppressTurnCoordinatorProviderOperationalAlert(input) {
+				r.reportOperationalIssueAsync("provider", runErr)
+			}
+			return nil, nil, fmt.Errorf("%s: %w", firstNonEmpty(strings.TrimSpace(input.RunErrPrefix), "run turn"), runErr)
+		}
+		r.recordProviderAttemptEvents(input.Key, input.Exec, turnResult)
+		if turnResult != nil {
+			r.warnProviderFailovers(ctx, input.Key, turnResult.ProviderEvents)
+		}
+		if turnResult != nil && strings.TrimSpace(turnResult.ProviderFailure) != "" {
+			providerFailure := strings.TrimSpace(turnResult.ProviderFailure)
+			failureKind := core.ProviderFailureKind(fmt.Errorf("%s", providerFailure))
+			r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptFailed, "provider", "failed", map[string]any{
+				"backend":              strings.TrimSpace(input.Exec.Backend),
+				"provider":             strings.TrimSpace(input.Exec.ProviderName),
+				"model":                strings.TrimSpace(input.Exec.ModelName),
+				"error":                trimError(providerFailure),
+				"failure_kind":         failureKind,
+				"retryable":            core.ProviderFailureRetryable(failureKind),
+				"failover_eligible":    core.ProviderFailureFailoverEligible(failureKind),
+				"provider_duration_ms": durationMillis(time.Since(providerStarted)),
+			}, time.Now().UTC())
+			if !suppressTurnCoordinatorProviderOperationalAlert(input) {
+				r.reportOperationalIssueAsync("provider", fmt.Errorf("%s", strings.TrimSpace(turnResult.ProviderFailure)))
+			}
+		} else {
+			providerName := strings.TrimSpace(input.Exec.ProviderName)
+			if turnResult != nil {
+				providerName = providerNameAfterProviderEvents(providerName, turnResult.ProviderEvents)
+			}
+			payload := map[string]any{
+				"backend":              strings.TrimSpace(input.Exec.Backend),
+				"provider":             providerName,
+				"model":                strings.TrimSpace(input.Exec.ModelName),
+				"provider_duration_ms": durationMillis(time.Since(providerStarted)),
+			}
+			if turnResult != nil {
+				appendTokenUsagePayload(payload, turnResult.TokenUsage)
+			}
+			r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptSucceeded, "provider", "succeeded", payload, time.Now().UTC())
+		}
+		if len(outHistory) < len(turnInput) {
+			return nil, nil, fmt.Errorf("%s: history shrank from %d to %d", firstNonEmpty(strings.TrimSpace(input.InvalidOutputPrefix), "invalid turn output"), len(turnInput), len(outHistory))
+		}
+		r.maybeInvalidateStablePromptCacheForToolHistory(input.Scope, outHistory[len(turnInput):])
+		return turnResult, outHistory, nil
 	}
-	providerAttemptPayload := mergePerceptionBudgetPayload(map[string]any{
-		"backend":       strings.TrimSpace(input.Exec.Backend),
-		"provider":      strings.TrimSpace(input.Exec.ProviderName),
-		"model":         strings.TrimSpace(input.Exec.ModelName),
-		"provider_path": strings.Join(input.Exec.ProviderPath, ","),
-		"history_count": len(history),
-		"tool_count":    len(toolManifestForRunKind(tools, runKind)),
-	}, perceptionBudget)
-	r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptStarted, "provider", "started", providerAttemptPayload, time.Now().UTC())
 
-	runOpts := r.reasoningOptionsForRun(runKind)
-	if runOpts == nil {
-		runOpts = &agent.CompleteOptions{}
-	}
-	runOpts.Observer = monitor
-	runOpts.ContextBudget = r.providerContextBudget()
-	turnResult, outHistory, runErr := agent.RunTurn(ctx, input.Exec.Provider, tools, tokenAwareTurnBudget(r.cfg.Agent.MaxIterations, runOpts), runOpts, turnInput)
+	turnInput := buildGovernorTurnInput(systemPrompt, systemBlocks, brokerage)
+	turnResult, outHistory, runErr := runGovernorAttempt(turnInput, systemBlocks)
 	if runErr != nil {
-		failureKind := core.ProviderFailureKind(runErr)
-		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptFailed, "provider", "failed", map[string]any{
-			"backend":              strings.TrimSpace(input.Exec.Backend),
-			"provider":             strings.TrimSpace(input.Exec.ProviderName),
-			"model":                strings.TrimSpace(input.Exec.ModelName),
-			"error":                trimError(runErr.Error()),
-			"failure_kind":         failureKind,
-			"retryable":            core.ProviderFailureRetryable(failureKind),
-			"failover_eligible":    core.ProviderFailureFailoverEligible(failureKind),
-			"provider_duration_ms": durationMillis(time.Since(providerStarted)),
-		}, time.Now().UTC())
-		if !suppressTurnCoordinatorProviderOperationalAlert(input) {
-			r.reportOperationalIssueAsync("provider", runErr)
-		}
-		monitorErr = fmt.Errorf("%s: %w", firstNonEmpty(strings.TrimSpace(input.RunErrPrefix), "run turn"), runErr)
+		monitorErr = runErr
 		return out, monitorErr
 	}
-	r.recordProviderAttemptEvents(input.Key, input.Exec, turnResult)
-	if turnResult != nil {
-		r.warnProviderFailovers(ctx, input.Key, turnResult.ProviderEvents)
+	if feedback := input.Audit.requestApprovalAuthorityContractInvalidFeedback(); feedback != "" && requestFaceNote != nil {
+		r.markSessionTurnPhase(input.Key, "brokerage", "revising approval contract after typed preflight failure")
+		revised, usage, ok := r.reviseBrokerageAfterRequestApprovalAuthorityFailure(
+			ctx,
+			input.Exec,
+			baseGovernorAwareness,
+			systemBlocks,
+			history,
+			input.Prepared.UserText,
+			brokerage,
+			requestFaceNote,
+			input.Audit,
+			feedback,
+			func(ctx context.Context, text string) {
+				if progress != nil {
+					progress.Surface(ctx, text)
+				}
+			},
+		)
+		extraUsage = addTokenUsage(extraUsage, usage)
+		if ok {
+			brokerage = revised
+			if err := r.recordBrokerageControlFlowJudgment(input.Key, brokerage, time.Now().UTC()); err != nil {
+				return turnCoordinatorExecuteOutput{}, err
+			}
+			promptOperationState := sess.OperationState
+			if input.PromptOperationSet {
+				promptOperationState = input.PromptOperationState
+			}
+			governorAwareness := turn.ApplyOperationAwareness(
+				turn.ApplyPlanAwareness(baseGovernorAwareness, sess.PlanState),
+				promptOperationState,
+			)
+			governorAwareness = turn.ApplyContinuationAwareness(governorAwareness, sess.ContinuationState)
+			promptState = r.buildTurnCoordinatorGovernorPrompt(input, governorAwareness, brokerage)
+			systemBlocks = promptState.SystemBlocks
+			systemPrompt = promptState.SystemPrompt
+			sess.SystemPrompt = systemPrompt
+			turnInput = buildGovernorTurnInput(systemPrompt, systemBlocks, brokerage)
+			turnResult, outHistory, runErr = runGovernorAttempt(turnInput, systemBlocks)
+			if runErr != nil {
+				monitorErr = runErr
+				return out, monitorErr
+			}
+		}
 	}
-	if turnResult != nil && strings.TrimSpace(turnResult.ProviderFailure) != "" {
-		providerFailure := strings.TrimSpace(turnResult.ProviderFailure)
-		failureKind := core.ProviderFailureKind(fmt.Errorf("%s", providerFailure))
-		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptFailed, "provider", "failed", map[string]any{
-			"backend":              strings.TrimSpace(input.Exec.Backend),
-			"provider":             strings.TrimSpace(input.Exec.ProviderName),
-			"model":                strings.TrimSpace(input.Exec.ModelName),
-			"error":                trimError(providerFailure),
-			"failure_kind":         failureKind,
-			"retryable":            core.ProviderFailureRetryable(failureKind),
-			"failover_eligible":    core.ProviderFailureFailoverEligible(failureKind),
-			"provider_duration_ms": durationMillis(time.Since(providerStarted)),
-		}, time.Now().UTC())
-		if !suppressTurnCoordinatorProviderOperationalAlert(input) {
-			r.reportOperationalIssueAsync("provider", fmt.Errorf("%s", strings.TrimSpace(turnResult.ProviderFailure)))
-		}
-	} else {
-		providerName := strings.TrimSpace(input.Exec.ProviderName)
-		if turnResult != nil {
-			providerName = providerNameAfterProviderEvents(providerName, turnResult.ProviderEvents)
-		}
-		payload := map[string]any{
-			"backend":              strings.TrimSpace(input.Exec.Backend),
-			"provider":             providerName,
-			"model":                strings.TrimSpace(input.Exec.ModelName),
-			"provider_duration_ms": durationMillis(time.Since(providerStarted)),
-		}
-		if turnResult != nil {
-			appendTokenUsagePayload(payload, turnResult.TokenUsage)
-		}
-		r.recordExecutionEvent(input.Key, core.ExecutionEventProviderAttemptSucceeded, "provider", "succeeded", payload, time.Now().UTC())
-	}
-	if len(outHistory) < len(turnInput) {
-		monitorErr = fmt.Errorf("%s: history shrank from %d to %d", firstNonEmpty(strings.TrimSpace(input.InvalidOutputPrefix), "invalid turn output"), len(turnInput), len(outHistory))
-		return out, monitorErr
-	}
-	r.maybeInvalidateStablePromptCacheForToolHistory(input.Scope, outHistory[len(turnInput):])
 
 	turnResult.Media, monitorErr = materializeGeneratedReplyMedia(input.Scope, turnResult.Media)
 	if monitorErr != nil {
