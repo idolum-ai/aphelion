@@ -974,6 +974,39 @@ func TestDiscoveredEffectRecoveryMaterializesApprovalAndExactExecRetry(t *testin
 	if !retry.Active() || retry.Tool != "exec" || retry.OperationKind != session.ContinuationRecoveryRetryExecExactCommand || !strings.Contains(retry.InputJSON, strconv.Quote(command)) {
 		t.Fatalf("pending retry operation = %#v, want exact exec retry", retry)
 	}
+	var retryInput struct {
+		Command string `json:"command"`
+		Workdir string `json:"workdir"`
+	}
+	if err := json.Unmarshal([]byte(retry.InputJSON), &retryInput); err != nil {
+		t.Fatalf("decode retry input %q: %v", retry.InputJSON, err)
+	}
+	if retryInput.Command != command || retryInput.Workdir != pending.ContinuationLease.Constraints["workdir"] || retryInput.Workdir != filepath.Clean(cfg.Agent.ExecRoot) {
+		t.Fatalf("retry input = %#v constraints=%#v, want exact command/workdir from recovery contract", retryInput, pending.ContinuationLease.Constraints)
+	}
+	retryInputJSON := func(command string, workdir string) string {
+		t.Helper()
+		raw, err := json.Marshal(map[string]string{
+			"command": command,
+			"workdir": workdir,
+		})
+		if err != nil {
+			t.Fatalf("marshal tampered retry input: %v", err)
+		}
+		return string(raw)
+	}
+	changedCommand := pending
+	changedCommand.ContinuationLease.RetryOperation = retry
+	changedCommand.ContinuationLease.RetryOperation.InputJSON = retryInputJSON("git fetch origin release --prune", retryInput.Workdir)
+	if _, ok, err := approvedContinuationRetryOperation(changedCommand); err == nil || ok || !strings.Contains(err.Error(), "exact approved command") {
+		t.Fatalf("approvedContinuationRetryOperation(changed command) = ok:%t err:%v, want exact command rejection", ok, err)
+	}
+	changedWorkdir := pending
+	changedWorkdir.ContinuationLease.RetryOperation = retry
+	changedWorkdir.ContinuationLease.RetryOperation.InputJSON = retryInputJSON(command, filepath.Join(cfg.Agent.ExecRoot, "other"))
+	if _, ok, err := approvedContinuationRetryOperation(changedWorkdir); err == nil || ok || !strings.Contains(err.Error(), "workdir mismatch") {
+		t.Fatalf("approvedContinuationRetryOperation(changed workdir) = ok:%t err:%v, want workdir mismatch rejection", ok, err)
+	}
 	sender.mu.Lock()
 	inlineCount := len(sender.inline)
 	inlineText := ""
@@ -1045,14 +1078,41 @@ func TestDiscoveredEffectRecoveryMaterializesApprovalAndExactExecRetry(t *testin
 	if current.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed || current.RemainingTurns != 0 {
 		t.Fatalf("continuation after trigger = %#v, want consumed one-turn retry", current)
 	}
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey(reuse consumed retry) err = %v", err)
+	}
+	opState, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState(after trigger) err = %v", err)
+	}
+	if opState.Stage != "approved_retry_completed" || opState.Status != session.OperationStatusCompleted {
+		t.Fatalf("operation state = %#v, want approved_retry_completed", opState)
+	}
 	events, err := store.ExecutionEventsBySession(key, 0, 200)
 	if err != nil {
 		t.Fatalf("ExecutionEventsBySession() err = %v", err)
 	}
+	execStarts := 0
 	for _, event := range events {
+		if event.EventType == core.ExecutionEventToolStarted {
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+				t.Fatalf("decode tool started payload %q: %v", event.PayloadJSON, err)
+			}
+			if payload["tool"] == "exec" {
+				execStarts++
+				effect, _ := payload["exec_effect"].(map[string]any)
+				if effect["command"] != retryInput.Command || effect["workdir"] != retryInput.Workdir {
+					t.Fatalf("exec started payload = %#v, want exact retry command/workdir %#v", payload, retryInput)
+				}
+			}
+		}
 		if event.EventType == core.ExecutionEventToolStarted && strings.Contains(event.PayloadJSON, `"tool":"request_approval"`) {
 			t.Fatalf("events include request_approval after discovered-effect approval: %#v", event)
 		}
+	}
+	if execStarts != 1 {
+		t.Fatalf("exec ToolStarted count = %d events=%#v, want consumed approved retry to execute exactly once", execStarts, events)
 	}
 }
 

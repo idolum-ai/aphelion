@@ -33,17 +33,27 @@ func ContinuationExecAuthorityFromContext(ctx context.Context) (session.Continua
 }
 
 func ContinuationExecAuthorityDecisionForCommand(state session.ContinuationState, command string, now time.Time) ContinuationExecAuthorityDecision {
+	return ContinuationExecAuthorityDecisionForCommandInWorkdir(state, command, "", now)
+}
+
+func ContinuationExecAuthorityDecisionForCommandInWorkdir(state session.ContinuationState, command string, workdir string, now time.Time) ContinuationExecAuthorityDecision {
 	return effectauth.AuthorizeCommand(effectauth.CommandRequest{
 		State:   state,
 		Command: command,
+		Workdir: workdir,
 		Now:     now,
 	})
 }
 
 func ContinuationExecAuthorityDecisionForPlan(state session.ContinuationState, command string, plan commandeffect.EffectPlan, now time.Time) ContinuationExecAuthorityDecision {
+	return ContinuationExecAuthorityDecisionForPlanInWorkdir(state, command, "", plan, now)
+}
+
+func ContinuationExecAuthorityDecisionForPlanInWorkdir(state session.ContinuationState, command string, workdir string, plan commandeffect.EffectPlan, now time.Time) ContinuationExecAuthorityDecision {
 	return effectauth.AuthorizePlan(effectauth.PlanRequest{
 		State:   state,
 		Command: command,
+		Workdir: workdir,
 		Plan:    plan,
 		Now:     now,
 	})

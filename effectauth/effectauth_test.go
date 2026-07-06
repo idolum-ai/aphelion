@@ -265,6 +265,37 @@ func TestAuthorizeCommandDiscoveredEffectFetchRejectsDifferentRef(t *testing.T) 
 	}
 }
 
+func TestAuthorizeCommandDiscoveredEffectFetchRejectsDifferentWorkdir(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := testDiscoveredEffectFetchState(now)
+	state.ContinuationLease.Constraints["workdir"] = "/repo"
+
+	allowed := AuthorizeCommand(CommandRequest{
+		State:   state,
+		Command: "git fetch origin main --prune",
+		Workdir: "/repo/.",
+		Now:     now,
+	})
+	if !allowed.Active || !allowed.Allowed {
+		t.Fatalf("allowed decision = %#v, want same normalized workdir allowed", allowed)
+	}
+
+	denied := AuthorizeCommand(CommandRequest{
+		State:   state,
+		Command: "git fetch origin main --prune",
+		Workdir: "/repo-other",
+		Now:     now,
+	})
+	if !denied.Active || denied.Allowed {
+		t.Fatalf("denied decision = %#v, want different workdir rejected", denied)
+	}
+	if denied.Reason != "discovered_effect_constraints_mismatch" {
+		t.Fatalf("reason = %q, want discovered_effect_constraints_mismatch", denied.Reason)
+	}
+}
+
 func TestAuthorizeCommandRejectsGitFetchWorkspaceWriteContractAsInvalid(t *testing.T) {
 	t.Parallel()
 

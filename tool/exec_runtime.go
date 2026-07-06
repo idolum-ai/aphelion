@@ -257,7 +257,7 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 	var continuationDecision ContinuationExecAuthorityDecision
 	var continuationErr error
 	if state, ok := ContinuationExecAuthorityFromContext(ctx); ok {
-		continuationDecision = ContinuationExecAuthorityDecisionForPlan(state, in.Command, plan, time.Now().UTC())
+		continuationDecision = ContinuationExecAuthorityDecisionForPlanInWorkdir(state, in.Command, workdir, plan, time.Now().UTC())
 		continuationErr = ContinuationExecAuthorityError(continuationDecision)
 	}
 	dispatchErr := validateExecEffectPlanDispatchable(plan)
@@ -335,7 +335,7 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 	if err != nil {
 		return "", preDispatchExecError(err)
 	}
-	if err := r.recordExecPreDispatchAttempt(ctx, p, key, "exec", in.Command, shellJudgment, plan, approvalGround); err != nil {
+	if err := r.recordExecPreDispatchAttempt(ctx, p, key, "exec", in.Command, workdir, shellJudgment, plan, approvalGround); err != nil {
 		return "", preDispatchExecError(err)
 	}
 
@@ -397,7 +397,7 @@ func (r *Registry) runAdminApprovedExactExec(ctx context.Context, in execInput, 
 		DecisionID: decision.DecisionID,
 		Choice:     decision.Choice,
 	}
-	if err := r.recordExecPreDispatchAttempt(ctx, p, key, "exec", command, shellJudgment, dispatchPlan, approvalGround); err != nil {
+	if err := r.recordExecPreDispatchAttempt(ctx, p, key, "exec", command, workdir, shellJudgment, dispatchPlan, approvalGround); err != nil {
 		return "", preDispatchExecError(err)
 	}
 	return r.dispatchExecCommand(ctx, in, scope, workdir)
@@ -520,7 +520,7 @@ type execQualificationGround struct {
 	ApprovedBy int64
 }
 
-func (r *Registry) recordExecPreDispatchAttempt(ctx context.Context, p principal.Principal, key session.SessionKey, toolName string, command string, shellJudgment session.Judgment, plan commandeffect.EffectPlan, approvalGround execQualificationGround) error {
+func (r *Registry) recordExecPreDispatchAttempt(ctx context.Context, p principal.Principal, key session.SessionKey, toolName string, command string, workdir string, shellJudgment session.Judgment, plan commandeffect.EffectPlan, approvalGround execQualificationGround) error {
 	rawCommand := strings.TrimSpace(command)
 	if rawCommand == "" {
 		return nil
@@ -557,7 +557,7 @@ func (r *Registry) recordExecPreDispatchAttempt(ctx context.Context, p principal
 		UpdatedAt:    now,
 	}
 	irreversible := execEffectRequiresPreCommitQualification(effect.Kind, effect.Reason, boundaryKind)
-	qualification, qualificationReason, qualificationDeps, err := r.qualifyExecJudgmentUse(ctx, p, key, rawCommand, plan, shellJudgment, irreversible, approvalGround)
+	qualification, qualificationReason, qualificationDeps, err := r.qualifyExecJudgmentUse(ctx, p, key, rawCommand, workdir, plan, shellJudgment, irreversible, approvalGround)
 	if err != nil {
 		return err
 	}
@@ -727,7 +727,7 @@ func execEffectRequiresPreCommitQualification(kind commandeffect.Kind, reason st
 	}
 }
 
-func (r *Registry) qualifyExecJudgmentUse(ctx context.Context, _ principal.Principal, _ session.SessionKey, command string, plan commandeffect.EffectPlan, shellJudgment session.Judgment, irreversible bool, approvalGround execQualificationGround) (session.JudgmentUseQualificationStatus, string, []session.JudgmentDependencyRef, error) {
+func (r *Registry) qualifyExecJudgmentUse(ctx context.Context, _ principal.Principal, _ session.SessionKey, command string, workdir string, plan commandeffect.EffectPlan, shellJudgment session.Judgment, irreversible bool, approvalGround execQualificationGround) (session.JudgmentUseQualificationStatus, string, []session.JudgmentDependencyRef, error) {
 	if !irreversible {
 		return session.JudgmentUseQualificationQualified, "exec effect plan recorded before dispatch", nil, nil
 	}
@@ -753,7 +753,7 @@ func (r *Registry) qualifyExecJudgmentUse(ctx context.Context, _ principal.Princ
 		return qualification.Status, qualification.Reason, refs, qualifyErr
 	}
 	if state, ok := ContinuationExecAuthorityFromContext(ctx); ok {
-		decision := ContinuationExecAuthorityDecisionForPlan(state, command, plan, time.Now().UTC())
+		decision := ContinuationExecAuthorityDecisionForPlanInWorkdir(state, command, workdir, plan, time.Now().UTC())
 		if decision.Allowed {
 			ground := execQualificationGround{
 				Kind:       "continuation_authority",
@@ -909,12 +909,12 @@ func preDispatchExecError(err error) error {
 	return fmt.Errorf("%w: %v", ErrExecRejectedBeforeDispatch, err)
 }
 
-func (r *Registry) validateContinuationExecAuthority(ctx context.Context, command string, plan commandeffect.EffectPlan) error {
+func (r *Registry) validateContinuationExecAuthority(ctx context.Context, command string, workdir string, plan commandeffect.EffectPlan) error {
 	state, ok := ContinuationExecAuthorityFromContext(ctx)
 	if !ok {
 		return nil
 	}
-	decision := ContinuationExecAuthorityDecisionForPlan(state, command, plan, time.Now().UTC())
+	decision := ContinuationExecAuthorityDecisionForPlanInWorkdir(state, command, workdir, plan, time.Now().UTC())
 	return ContinuationExecAuthorityError(decision)
 }
 

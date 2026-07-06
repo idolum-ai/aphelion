@@ -239,7 +239,10 @@ command, effect kind/action/provider, workdir, and retry operation; the command
 hash is evidence for correlation, not authority identity. Approval materializes
 through `request_approval action=request_continuation_lease`, and the approved
 retry bypasses generic work-executor routing so the exact `exec` invocation runs
-once under the approved continuation authority.
+once under the approved continuation authority. Once the lease exists,
+discovered-effect mismatches fail closed: a different command, effect identity,
+or workdir is not recoverable under the same approved context and must be
+discovered as a separate blocked effect before it can request authority.
 
 ## Effective Authority
 
