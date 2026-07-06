@@ -57,6 +57,10 @@ that a child runtime has:
 - bounded output and artifact contracts,
 - and an authority ceiling enforced by Aphelion before the runtime starts.
 
+A runtime source reference is descriptive until the runtime is attested. A child
+does not become wake-eligible merely because a git ref, binary path, or image
+name exists in the spec.
+
 ![Durable external runtimes](diagrams/07-durable-external-runtimes.svg)
 
 ## Authority Boundary
@@ -83,6 +87,42 @@ The Telegram child-bot runner is the closest current precedent: it gives one
 durable child a narrow Telegram bot process, but token presence is not
 authority. Hermes and OpenClaw should generalize that shape to richer runtimes,
 not weaken it.
+
+### Process Environment Boundary
+
+Runtime adapters MUST launch external child runtimes with a sterile, allowlisted
+environment. Parent process environment, parent `HOME`, parent working
+directory, repo-local `.env` files, login-shell profiles, provider credentials,
+channel credentials, and operator tokens are not inherited by default.
+
+Every adapter invocation MUST set:
+
+- an explicit child-local home/state/config root;
+- an explicit working directory;
+- an explicit environment allowlist derived from the normalized runtime spec and
+  active child secret scopes;
+- and no provider, channel, GitHub, Telegram, or shell credential variables
+  unless an active child-scoped grant names them.
+
+Adapter preflight must fail closed when the runtime would resolve implicit
+parent state, implicit parent config, repo-local `.env` files, inherited
+sensitive environment variables, or parent-owned credential stores.
+
+### Install, Probe, And Drift Boundary
+
+Durable external runtimes should reuse the external-tool lifecycle shape even
+when they are not exposed as ordinary tools:
+
+`request -> provision/install -> audit -> probe -> verify -> register -> wake/start -> observe -> renew/revoke`
+
+Wake eligibility requires install/provision evidence, adapter audit, adapter
+probe, executable/source fingerprinting, dependency/runtime baseline capture,
+and a verified status whose anchors match the normalized runtime spec hash. Any
+source, executable, dependency, entrypoint, config, or service drift fails
+closed before adapter invocation.
+
+This keeps runtime installation from becoming a weaker parallel path beside
+the existing external-tool install/probe/drift vocabulary.
 
 ## Runtime Modes
 
@@ -124,6 +164,18 @@ require an explicit `gateway_presence` grant that names:
 The gateway may receive messages directly, but Aphelion still owns whether those
 messages become durable parent-observed events, review artifacts, or accepted
 child outputs.
+
+### Remote Service Mode
+
+`remote_service` is a reserved mode for a child runtime hosted outside the
+parent process host. It must fail closed until the implementation defines:
+
+- mutually authenticated parent/child control traffic;
+- parent-issued task packets;
+- result signing or equivalent integrity evidence;
+- bounded artifact fetch;
+- explicit revocation and stop semantics;
+- and no parent-message acknowledgement outside accepted typed results.
 
 ## User Flows
 
@@ -170,6 +222,23 @@ child outputs.
    upward as bounded results, review artifacts, or typed blockers.
 6. Revocation stops the gateway, marks authority inactive, and prevents future
    restarts until a fresh grant exists.
+
+## Network Classes
+
+Runtime specs and task packets should not use a single broad network switch.
+Hermes and OpenClaw may need model-provider egress without needing public web or
+channel presence. The parent should name the smallest active network class:
+
+| Class | Meaning | Authority source |
+| --- | --- | --- |
+| `none` | No network. | Runtime/task default. |
+| `provider_egress` | Model/provider calls using child-scoped credentials. | Child bootstrap or capability grant. |
+| `runtime_control_local` | Loopback socket/WebSocket to a child-owned local gateway. | Runtime spec plus verified adapter status. |
+| `public_channel_presence` | Standing external ingress and outbound channel delivery. | Explicit `gateway_presence` grant. |
+| `public_web` | Arbitrary web fetch/browse/search behavior. | Separate public-web/tool capability. |
+
+Provider egress, local runtime control, public channel presence, and public web
+must remain independently grantable and independently revocable.
 
 ## Proposed Schemas
 
@@ -279,7 +348,7 @@ Minimum operations:
   "limits": {
     "deadline": "2026-07-06T19:45:00Z",
     "max_output_bytes": 65536,
-    "network": "none"
+    "network_classes": ["provider_egress"]
   },
   "expected_result": {
     "kind": "review_artifact",
@@ -295,7 +364,15 @@ Minimum operations:
   "schema": "aphelion.child_task_result.v1",
   "agent_id": "research-child",
   "wake_id": "wake_01J...",
+  "task_packet_id": "packet_01J...",
+  "attempt_id": "attempt_01J...",
+  "lease_generation": "lease_generation_3",
+  "input_packet_hash": "sha256:...",
+  "runtime_spec_hash": "sha256:...",
+  "adapter_run_id": "adapter_run_01J...",
   "status": "completed",
+  "started_at": "2026-07-06T19:40:00Z",
+  "completed_at": "2026-07-06T19:42:11Z",
   "summary": "The release notes miss the external runtime roadmap.",
   "acknowledged_parent_message_ids": ["parent_msg_123"],
   "artifacts": [
@@ -305,6 +382,12 @@ Minimum operations:
     }
   ],
   "blocker": null,
+  "exit_code": 0,
+  "protocol_completion": "completed",
+  "artifact_manifest_hash": "sha256:...",
+  "truncated": false,
+  "stdout_ref": "artifact:durable-child/research-child/stdout-01J...",
+  "stderr_ref": "artifact:durable-child/research-child/stderr-01J...",
   "runtime": {
     "kind": "openclaw",
     "source_ref": "c7295e417d5daec76c18fb452d117f7b8eadc4d6",
@@ -324,6 +407,13 @@ Minimum operations:
 Blocked/failed results must include typed `blocker` data so parent plans can
 stop usefully instead of looping on prose.
 
+Parent acknowledgement is parent-computed. A child result may claim consumed
+parent message IDs, but Aphelion acknowledges only packet-provided IDs that are
+accepted under the current task packet, attempt, lease generation or fencing
+token, runtime spec hash, and committed result. Unknown IDs, stale IDs,
+cross-child IDs, duplicate IDs, and late claims are recorded as projections and
+do not acknowledge parent conversation messages.
+
 ### GatewayPresenceContract
 
 ```json
@@ -334,6 +424,18 @@ stop usefully instead of looping on prose.
     "account": "support-line",
     "inbound_mode": "paired_contacts_only",
     "outbound_mode": "reply_with_parent_review",
+    "allowed_sender_ids": ["+15551234567"],
+    "pairing_policy": "required_for_unknown_senders",
+    "unknown_sender_behavior": "pairing_only_no_memory",
+    "memory_admission": "after_parent_review",
+    "inbound_event_evidence": {
+      "transport_message_id": "wamid.HBg...",
+      "sender_id": "+15551234567",
+      "channel_id": "whatsapp:support-line",
+      "adapter_timestamp": "2026-07-06T19:30:00Z",
+      "raw_payload_hash": "sha256:..."
+    },
+    "outbound_delivery_policy": "review_first",
     "credential_scope": "secret_scope:child:research-child:whatsapp",
     "state_root": "/var/lib/aphelion/children/research/hermes",
     "review_target_chat_id": 123456789,
@@ -344,6 +446,11 @@ stop usefully instead of looping on prose.
 
 This contract belongs in a capability request/grant path. It should not be
 silently inferred from a runtime kind or channel name.
+
+Gateway contracts must encode sender identity and memory admission explicitly.
+Adapter-local pairing or allowlist defaults are defense-in-depth, not the
+parent authority contract. Unknown senders must not become child-memory
+contaminants unless the grant permits that memory admission path.
 
 ## Adapter Profiles
 
@@ -379,7 +486,15 @@ OpenClaw exposes:
 
 Preferred Aphelion mapping:
 
-- Use gateway-backed oneshot wake mode first.
+- Use an ephemeral child-local gateway for initial oneshot wake mode: start an
+  isolated OpenClaw gateway with channels disabled, loopback-only binding,
+  child-local state/config roots, and a short-lived local token; run one
+  `openclaw agent --message ...` or `openclaw acp` turn; collect the result;
+  then stop the gateway.
+- Pass gateway tokens by child-scoped env or token files, not command-line
+  arguments that can appear in process listings.
+- Treat a long-lived child-local OpenClaw gateway as a separate supervised
+  `runtime_control_local` service mode, not the default oneshot path.
 - Set `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` to child-local paths.
 - Treat OpenClaw pairing/allowlist mechanisms as child-side defense-in-depth,
   not as parent authority.
@@ -421,7 +536,8 @@ health traces, but those projections must keep source attribution.
 Define durable runtime spec normalization, validation, status projection, and
 operator display without naming Hermes or OpenClaw in core logic. The contract
 should be able to describe a local executable, source reference, child state
-root, workspace root, entrypoint kind, and mode.
+root, workspace root, entrypoint kind, mode, process environment allowlist, and
+network classes.
 
 ### 2. Adapter Registry
 
@@ -443,6 +559,10 @@ backoff, and artifact refs under the existing durable child runtime-state
 pattern. Reuse current loop-shedding and recovery-contract behavior so repeated
 runtime failures stop with actionable blockers.
 
+Runtime status must include verified install/probe anchors, dependency baseline,
+entrypoint fingerprint, runtime spec hash, and stale reason when any anchor
+drifts.
+
 ### 5. Hermes Adapter
 
 Implement Hermes support over the generic adapter contract. Start with
@@ -452,8 +572,10 @@ only after the generic gateway-presence contract exists.
 ### 6. OpenClaw Adapter
 
 Implement OpenClaw support over the same contract. Start with gateway-backed
-oneshot mode and child-local `OPENCLAW_STATE_DIR`/`OPENCLAW_CONFIG_PATH`; add
-gateway mode later under the same generic gateway-presence contract.
+oneshot mode by launching an ephemeral loopback gateway per wake with channels
+disabled and child-local `OPENCLAW_STATE_DIR`/`OPENCLAW_CONFIG_PATH`; add
+long-lived gateway modes later under `runtime_control_local` or
+`gateway_presence` contracts.
 
 ### 7. Gateway Presence
 
@@ -481,13 +603,15 @@ temporary child state root, not public gateway delivery by default.
 | --- | --- |
 | Runtime spec | Valid Hermes/OpenClaw specs, missing roots, unknown kind, invalid source, env containment. |
 | Wake authority | Missing `child_wake` lease blocks before adapter invocation; active lease invokes exactly once. |
-| Result acceptance | Projection cannot grant authority; accepted result records typed status and artifacts. |
-| Parent conversation | Messages acknowledged only after successful adapter consumption. |
-| Runtime failures | Missing executable, timeout, stale source, failed preflight, repeated same blocker/backoff. |
-| Gateway presence | Start requires explicit grant; revoked grant stops runtime and prevents restart. |
+| Process environment | Fake runtime sees explicit cwd/home/state roots and does not see parent `HOME`, cwd, `.env`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `GITHUB_TOKEN`, or shell profile env unless granted. |
+| Install/probe/drift | Runtime is not wake-eligible until install/provision, audit, probe, verify, fingerprint, and dependency baseline anchors match the runtime spec hash; drift blocks before invocation. |
+| Result acceptance | Projection cannot grant authority; accepted result records typed status, artifact hashes, fencing fields, and artifacts. |
+| Parent conversation | Messages acknowledged only by parent-computed intersection after successful adapter consumption under current attempt/fencing token. |
+| Runtime failures | Missing executable, timeout, stale source, failed preflight, repeated same blocker/backoff, late result after timeout, duplicate result after retry. |
+| Gateway presence | Start requires explicit grant; revoked grant stops runtime and prevents restart; unknown senders follow grant-defined pairing/memory admission. |
 | Secret isolation | Parent Telegram/GitHub/provider tokens are not inherited unless named in child scope. |
 | Hermes profile | Child-local `HERMES_HOME`, pinned source, ACP/oneshot preflight, gateway gated. |
-| OpenClaw profile | Child-local `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`, oneshot preflight, gateway gated. |
+| OpenClaw profile | Ephemeral loopback gateway per oneshot wake, child-local `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`, token not exposed in argv, public channels disabled, long-lived gateway gated. |
 
 ## Design Constraints
 
@@ -497,6 +621,8 @@ temporary child state root, not public gateway delivery by default.
   WhatsApp access, network access, file access, or public reply authority.
 - Do not let child gateways acknowledge parent conversation messages by mere
   process start. Acknowledgement belongs to the wake/result contract.
+- Do not trust child-claimed acknowledgements directly. Parent acknowledgement
+  is computed from accepted task/result evidence and current fencing data.
 - Do not treat child runtime local memory as parent memory. Promotion into
   parent memory remains a separate governed event.
 - Do not make the parent a Hermes/OpenClaw configuration editor. The parent
