@@ -228,6 +228,29 @@ func TestAuthorizeCommandAllowsGitFetchWithExternalReadContract(t *testing.T) {
 	}
 }
 
+func TestAuthorizeCommandExternalReadFetchDoesNotAuthorizeGenericNetworkContact(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	decision := AuthorizeCommand(CommandRequest{
+		State: testContinuationState(session.AuthorityClassExternalRead, []string{
+			"git_fetch_origin_main_prune",
+			"report_fetch_evidence",
+		}, false, now),
+		Command: "curl https://example.com/releases.json",
+		Now:     now,
+	})
+	if !decision.Active || decision.Boundary || decision.Allowed {
+		t.Fatalf("decision = %#v, want external_read fetch envelope to reject generic network contact", decision)
+	}
+	if decision.RequiredAction != "external_contact" {
+		t.Fatalf("required action = %q, want external_contact", decision.RequiredAction)
+	}
+	if decision.Reason != "action_not_allowed_by_continuation_envelope" {
+		t.Fatalf("reason = %q, want action_not_allowed_by_continuation_envelope", decision.Reason)
+	}
+}
+
 func TestAuthorizeCommandRejectsGitFetchWorkspaceWriteContractAsInvalid(t *testing.T) {
 	t.Parallel()
 

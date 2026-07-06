@@ -255,7 +255,7 @@ func decisionForNonBoundaryEffect(state session.ContinuationState, decision Deci
 }
 
 func nonBoundaryEffectActions(effect commandeffect.Effect) []string {
-	if exact := exactEffectActions(effect, externalEffectAliases(effect)...); len(exact) > 0 {
+	if exact := exactEffectActions(effect); len(exact) > 0 {
 		return exact
 	}
 	switch effect.Kind {
@@ -280,20 +280,6 @@ func nonBoundaryEffectActions(effect commandeffect.Effect) []string {
 	default:
 		return nil
 	}
-}
-
-func externalEffectAliases(effect commandeffect.Effect) []string {
-	if effect.Kind != commandeffect.KindExternal {
-		return nil
-	}
-	aliases := []string{"external_network_contact", "network_contact"}
-	switch normalizeAuthorityAction(effect.Action) {
-	case "fetch":
-		aliases = append(aliases, "fetch_remote", "git_fetch")
-	case "ls_remote":
-		aliases = append(aliases, "git_ls_remote")
-	}
-	return aliases
 }
 
 func exactEffectActions(effect commandeffect.Effect, aliases ...string) []string {
