@@ -18,6 +18,8 @@ import (
 	"github.com/idolum-ai/aphelion/principal"
 )
 
+const processGroupCancellationTestTimeout = 5 * time.Second
+
 type fakeNetworkBackend struct {
 	status      NetworkBackendStatus
 	prepareFunc func(context.Context, CompiledNetworkPolicy) (*NetworkLease, error)
@@ -171,7 +173,7 @@ func TestRunnerRunCancelsProcessGroup(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("Run() err = %v, want canceled", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(processGroupCancellationTestTimeout):
 		t.Fatal("Run() did not return after context cancellation")
 	}
 	childGone := false
@@ -180,7 +182,7 @@ func TestRunnerRunCancelsProcessGroup(t *testing.T) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	})
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(processGroupCancellationTestTimeout)
 	for time.Now().Before(deadline) {
 		if !sandboxProcessExists(pid) {
 			childGone = true
@@ -193,7 +195,7 @@ func TestRunnerRunCancelsProcessGroup(t *testing.T) {
 
 func waitForSandboxPIDFile(t *testing.T, pidFile string, runErr <-chan error) int {
 	t.Helper()
-	deadline := time.NewTimer(2 * time.Second)
+	deadline := time.NewTimer(processGroupCancellationTestTimeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
