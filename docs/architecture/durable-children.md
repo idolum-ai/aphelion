@@ -28,6 +28,11 @@ but they remain subordinate to parent governance and policy boundaries.
   messages pending for a later wake.
 - The default install recipe can create one example scheduled child (`idolum-daily-review`) using the same durable wake substrate: it stages yesterday's transcript into child-local files and starts a plain scheduled check-in chat upward. The runtime does not recreate this child if the target install removes or disables it; the install owns whether the recipe is present. A read-only Codex app-server external-channel adapter is also available for remote child status heartbeats through the same wake substrate.
 - All wake-driven durable work runs through one child-turn substrate (prompt context + governor/face loop + principal-scoped tools), either in-process or isolated (`durable-agent child-run --agent ...`) when bootstrap/isolation is configured.
+- A proposed next adapter class lets a promoted durable child delegate its child
+  turn to a supervised external runtime such as Hermes or OpenClaw while keeping
+  parent authority, wake leases, review artifacts, and result acceptance in
+  Aphelion. See
+  [`durable-external-runtimes.md`](./durable-external-runtimes.md).
 - Durable wake polling fans out through a small bounded worker pool. Each child
   wake gets its own deadline, so a blocked remote or isolated child records its
   own failure without starving unrelated children.

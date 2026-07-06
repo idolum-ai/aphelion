@@ -30,7 +30,8 @@ Render all diagrams from `docs/architecture/diagrams/`:
 
 ```bash
 for n in 01-package-map 02-interactive-turn-sequence 03-constitutional-flow \
-         04-durable-topology 05-state-surfaces 06-delivery-polymorphism; do
+         04-durable-topology 05-state-surfaces 06-delivery-polymorphism \
+         07-durable-external-runtimes; do
   mmdc -i "src/${n}.mmd" -o "${n}.svg"
 done
 ```

@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="680" viewBox="0 0 1180 680" role="img" aria-labelledby="title desc">
+  <title id="title">Durable External Runtimes</title>
+  <desc id="desc">Parent Aphelion compiles bounded child task packets through a generic runtime adapter to Hermes or OpenClaw child runtimes. Results return as evidence and review artifacts.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <style>
+      text { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .box { fill: #f8fafc; stroke: #64748b; stroke-width: 1.4; rx: 8; }
+      .group { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.4; rx: 10; }
+      .title { font-size: 16px; font-weight: 700; }
+      .label { font-size: 13px; font-weight: 600; }
+      .small { font-size: 12px; fill: #334155; }
+      .edge { fill: none; stroke: #475569; stroke-width: 1.5; marker-end: url(#arrow); }
+      .dash { fill: none; stroke: #64748b; stroke-width: 1.4; stroke-dasharray: 6 5; marker-end: url(#arrow); }
+      .store { fill: #eef2ff; stroke: #6366f1; stroke-width: 1.4; rx: 18; }
+      .warn { fill: #fff7ed; stroke: #f97316; stroke-width: 1.4; rx: 8; }
+    </style>
+  </defs>
+
+  <rect class="group" x="40" y="58" width="300" height="540"/>
+  <text class="title" x="60" y="88">Parent Aphelion</text>
+  <rect class="box" x="70" y="122" width="230" height="56"/>
+  <text class="label" x="92" y="146">Durable agent registry</text>
+  <text class="small" x="92" y="164">identity, policy, review target</text>
+  <rect class="box" x="70" y="205" width="230" height="56"/>
+  <text class="label" x="92" y="229">Durable runtime spec</text>
+  <text class="small" x="92" y="247">kind, mode, source, roots</text>
+  <rect class="warn" x="70" y="288" width="230" height="60"/>
+  <text class="label" x="92" y="312">Wake compiler</text>
+  <text class="small" x="92" y="330">ChildTaskPacket + authority refs</text>
+  <rect class="box" x="70" y="375" width="230" height="56"/>
+  <text class="label" x="92" y="399">Runtime adapter registry</text>
+  <text class="small" x="92" y="417">generic dispatch by runtime kind</text>
+  <rect class="store" x="70" y="458" width="230" height="56"/>
+  <text class="label" x="92" y="482">TES / session evidence</text>
+  <text class="small" x="92" y="500">accepted typed child result</text>
+  <rect class="store" x="70" y="535" width="230" height="40"/>
+  <text class="label" x="104" y="559">Review artifacts</text>
+
+  <rect class="box" x="400" y="90" width="180" height="58"/>
+  <text class="label" x="425" y="114">Operator thread</text>
+  <text class="small" x="425" y="132">or /agents surface</text>
+  <rect class="warn" x="400" y="190" width="180" height="70"/>
+  <text class="label" x="424" y="214">child_wake lease</text>
+  <text class="small" x="424" y="232">+ capability grants</text>
+  <text class="small" x="424" y="248">consumed at boundary</text>
+
+  <rect class="group" x="390" y="308" width="300" height="210"/>
+  <text class="title" x="415" y="338">Generic Runtime Adapter</text>
+  <rect class="box" x="420" y="365" width="230" height="40"/>
+  <text class="label" x="458" y="390">preflight / status</text>
+  <rect class="box" x="420" y="425" width="230" height="40"/>
+  <text class="label" x="480" y="450">wake oneshot</text>
+  <rect class="warn" x="420" y="485" width="230" height="40"/>
+  <text class="label" x="456" y="510">gateway start / stop</text>
+
+  <rect class="group" x="760" y="58" width="360" height="540"/>
+  <text class="title" x="785" y="88">Child Runtime Process</text>
+  <rect class="box" x="800" y="122" width="270" height="62"/>
+  <text class="label" x="830" y="146">Hermes</text>
+  <text class="small" x="830" y="164">hermes-acp or gateway</text>
+  <rect class="box" x="800" y="215" width="270" height="62"/>
+  <text class="label" x="830" y="239">OpenClaw</text>
+  <text class="small" x="830" y="257">agent/acp or gateway</text>
+  <rect class="store" x="800" y="315" width="270" height="62"/>
+  <text class="label" x="830" y="339">Child-local state</text>
+  <text class="small" x="830" y="357">HERMES_HOME / OPENCLAW_STATE_DIR</text>
+  <rect class="store" x="800" y="408" width="270" height="50"/>
+  <text class="label" x="830" y="438">Child-scoped secrets</text>
+  <rect class="warn" x="800" y="490" width="270" height="62"/>
+  <text class="label" x="830" y="514">Optional public channel</text>
+  <text class="small" x="830" y="532">Telegram / WhatsApp / etc.</text>
+
+  <path class="edge" d="M300 150 C330 150 360 119 400 119"/>
+  <path class="edge" d="M185 178 L185 205"/>
+  <path class="edge" d="M185 261 L185 288"/>
+  <path class="edge" d="M400 225 C345 225 310 290 300 318"/>
+  <path class="edge" d="M300 318 C335 318 360 354 390 388"/>
+  <path class="edge" d="M300 403 L390 403"/>
+  <path class="edge" d="M650 385 C700 335 745 170 800 153"/>
+  <path class="edge" d="M650 445 C710 390 745 250 800 246"/>
+  <path class="edge" d="M650 505 C700 500 745 520 800 521"/>
+  <path class="edge" d="M935 184 L935 315"/>
+  <path class="edge" d="M935 277 L935 315"/>
+  <path class="edge" d="M935 377 L935 408"/>
+  <path class="edge" d="M800 346 C720 346 700 430 650 445"/>
+  <path class="edge" d="M420 445 C365 445 335 474 300 486"/>
+  <path class="edge" d="M420 505 C360 530 335 548 300 555"/>
+  <path class="dash" d="M800 521 C675 585 510 585 490 260"/>
+  <text class="small" x="530" y="608">gateway presence requires explicit grant</text>
+</svg>

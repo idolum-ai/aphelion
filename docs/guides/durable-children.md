@@ -13,6 +13,11 @@ keeps governance and evidence; the child works inside the policy it was given.
 | External-channel child | Another local adapter should observe or report status without becoming a house principal. | Create an external-channel child and keep adapter state under child runtime state. |
 | Tailnet remote child | The child should run its own Aphelion service on a Linux Tailnet host. | Configure Tailnet, dry-run `durable-agent provision`, then apply over Tailscale SSH. |
 
+A proposed architecture for future Hermes/OpenClaw-backed children is documented
+in [Durable External Runtimes](../architecture/durable-external-runtimes.md).
+That path is still governed as a durable child: runtime presence is not
+authority, and public gateway mode requires explicit grants.
+
 ## Shared Setup Shape
 
 Every child setup should leave the same trail:
