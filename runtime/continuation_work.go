@@ -461,6 +461,7 @@ func (r *Runtime) TriggerContinuationForKey(ctx context.Context, key session.Ses
 
 type approvedContinuationReservation struct {
 	State                 session.ContinuationState
+	ApprovedState         session.ContinuationState
 	Actor                 principal.Principal
 	ExecutionActor        principal.Principal
 	ApprovedBy            int64
@@ -609,6 +610,7 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 	}
 	return state, &approvedContinuationReservation{
 		State:                 state,
+		ApprovedState:         approvedState,
 		Actor:                 actor,
 		ExecutionActor:        executionActor,
 		ApprovedBy:            approvedBy,
@@ -649,6 +651,10 @@ func directContinuationAuthorityAdmission(key session.SessionKey, actor principa
 
 func (r *Runtime) shouldRouteContinuationThroughWorkExecutor(state session.ContinuationState) bool {
 	if r == nil || r.workExecutor == nil {
+		return false
+	}
+	state = session.NormalizeContinuationState(state)
+	if session.NormalizeContinuationRetryOperation(state.ContinuationLease.RetryOperation).Active() {
 		return false
 	}
 	if continuationRequiresApprovedUserSandbox(state) {
@@ -697,6 +703,7 @@ func (r *Runtime) reserveApprovedWorkContinuationTurnLocked(key session.SessionK
 	}, time.Now().UTC())
 	return state, &approvedContinuationReservation{
 		State:          state,
+		ApprovedState:  approvedState,
 		Actor:          actor,
 		ExecutionActor: executionActor,
 		ApprovedBy:     approvedBy,
@@ -709,7 +716,7 @@ func (r *Runtime) runReservedApprovedContinuation(ctx context.Context, key sessi
 	if reservation.WorkRequest != nil {
 		return r.runReservedApprovedWorkContinuation(ctx, key, reservation)
 	}
-	if retry, ok, err := approvedContinuationRetryOperation(reservation.State); err != nil {
+	if retry, ok, err := approvedContinuationRetryOperation(reservation.ApprovedState); err != nil {
 		return err
 	} else if ok {
 		return r.runReservedApprovedRetryOperation(ctx, key, reservation, retry)
@@ -751,6 +758,26 @@ func approvedContinuationRetryOperation(state session.ContinuationState) (sessio
 		if strings.TrimSpace(input.Action) != "wake_once" || strings.TrimSpace(input.AgentID) == "" || strings.TrimSpace(input.AgentID) != agentID {
 			return session.ContinuationRetryOperation{}, false, fmt.Errorf("child_wake continuation retry must target exact approved child")
 		}
+	case session.ContinuationLeaseClassDataAccess:
+		if !session.ContinuationConstraintsAreDiscoveredEffect(lease.Constraints) {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("approved continuation retry is not supported for lease class %q", lease.LeaseClass)
+		}
+		if retry.Tool != "exec" || retry.OperationKind != session.ContinuationRecoveryRetryExecExactCommand {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("discovered_effect continuation retry must invoke exec exact command")
+		}
+		var input struct {
+			Command string `json:"command"`
+			Workdir string `json:"workdir"`
+		}
+		if err := json.Unmarshal([]byte(retry.InputJSON), &input); err != nil {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("decode discovered_effect retry input: %w", err)
+		}
+		if strings.TrimSpace(input.Command) == "" || strings.TrimSpace(input.Command) != strings.TrimSpace(lease.Constraints["command"]) {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("discovered_effect continuation retry must target exact approved command")
+		}
+		if want := strings.TrimSpace(lease.Constraints["workdir"]); want != "" && strings.TrimSpace(input.Workdir) != want {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("discovered_effect continuation retry workdir mismatch")
+		}
 	default:
 		return session.ContinuationRetryOperation{}, false, fmt.Errorf("approved continuation retry is not supported for lease class %q", lease.LeaseClass)
 	}
@@ -778,6 +805,9 @@ func (r *Runtime) runReservedApprovedRetryOperation(ctx context.Context, key ses
 
 	toolCtx := monitor.Context()
 	input := json.RawMessage(retry.InputJSON)
+	if retry.Tool == "exec" && session.ContinuationConstraintsAreDiscoveredEffect(reservation.ApprovedState.ContinuationLease.Constraints) {
+		toolCtx = toolpkg.WithContinuationExecAuthority(toolCtx, reservation.ApprovedState)
+	}
 	toolCtx = monitor.ToolInvocationContext(toolCtx, retry.Tool, input)
 	monitor.ToolStarted(toolCtx, retry.Tool, input)
 	out, execErr := tools.Execute(toolCtx, retry.Tool, input)

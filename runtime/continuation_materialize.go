@@ -825,8 +825,11 @@ func (r *Runtime) recoveryApprovalContinuationContractExecutable(key session.Ses
 	if strings.TrimSpace(contract.SessionID) != "" && contract.SessionID != session.SessionIDForKey(key) {
 		return false, true, nil
 	}
-	if strings.TrimSpace(contract.SubjectKind) != "continuation_lease_request" ||
-		strings.TrimSpace(contract.SubjectRef) == "" {
+	if strings.TrimSpace(contract.SubjectRef) == "" {
+		return false, true, nil
+	}
+	if strings.TrimSpace(contract.SubjectKind) != "continuation_lease_request" &&
+		!session.ContinuationRecoveryContractIsDiscoveredEffect(contract) {
 		return false, true, nil
 	}
 	return true, false, nil

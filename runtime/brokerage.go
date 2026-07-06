@@ -385,6 +385,56 @@ func (r *Runtime) convergeTurnBrokerage(
 	})
 }
 
+func (r *Runtime) reviseBrokerageAfterRequestApprovalAuthorityFailure(
+	ctx context.Context,
+	exec pipeline.TurnExecutionContract,
+	baseAwareness prompt.RuntimeAwareness,
+	systemBlocks []agent.SystemBlock,
+	history []agent.Message,
+	userText string,
+	brokerage turnBrokerage,
+	requestFaceNote brokerageFaceRequester,
+	audit *turnAuditRecorder,
+	feedback string,
+	emitSurface func(ctx context.Context, text string),
+) (turnBrokerage, core.TokenUsage, bool) {
+	if requestFaceNote == nil || strings.TrimSpace(feedback) == "" {
+		return brokerage, core.TokenUsage{}, false
+	}
+	revisionAwareness := turn.ApplyBrokerageAwareness(baseAwareness, brokerage.toTurnAwareness())
+	revisionAwareness.ArtifactMode = "scene"
+	prior := firstNonEmptyContinuation(
+		strings.TrimSpace(brokerage.IdolumNote),
+		"The governor attempted request_approval, but typed authority preflight rejected the proposed approval contract.",
+	)
+	revisedNote, usage, err := requestFaceNote(ctx, "brokerage", revisionAwareness, prior, feedback)
+	totalUsage := usage
+	if err != nil || strings.TrimSpace(revisedNote) == "" {
+		return brokerage, totalUsage, false
+	}
+	revised := seedTurnBrokerageFromFaceNote(revisedNote)
+	if !revised.Active {
+		return brokerage, totalUsage, false
+	}
+	if revised.Phase != "brokerage" {
+		return revised, totalUsage, true
+	}
+	converged, convergenceUsage := r.convergeTurnBrokerage(
+		ctx,
+		exec,
+		baseAwareness,
+		systemBlocks,
+		history,
+		userText,
+		revised,
+		requestFaceNote,
+		audit,
+		emitSurface,
+	)
+	totalUsage = addTokenUsage(totalUsage, convergenceUsage)
+	return converged, totalUsage, true
+}
+
 func (r *Runtime) brokerageConvergencePolicy() turn.BrokerageConvergencePolicy {
 	policy := turn.DefaultBrokerageConvergencePolicy()
 	if r == nil || r.cfg == nil {

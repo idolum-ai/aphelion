@@ -83,6 +83,110 @@ func TestExecContinuationAuthorityRejectsAutoApprovalWidening(t *testing.T) {
 	}
 }
 
+func TestExecContinuationAuthorityPublishesDiscoveredEffectContract(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: false}
+	key := adminSessionKey()
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+	command := "git fetch origin main --prune"
+	state := continuationExecAuthorityTestState("read_only_review", []string{"read_only", "inspect_code", "report_findings"}, false, time.Now().UTC())
+	ctx := WithContinuationExecAuthority(context.Background(), state)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		ctx,
+		"exec",
+		json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if err == nil {
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want missing continuation lease")
+	}
+	var safeFailure interface {
+		SafeToolFailureClass() string
+		SafeToolFailureSummary() string
+		SafeToolFailureRetryPolicy() string
+	}
+	if !errors.As(err, &safeFailure) {
+		t.Fatalf("err = %v, want safe missing-lease failure", err)
+	}
+	if safeFailure.SafeToolFailureClass() != "authority_rejected" || safeFailure.SafeToolFailureRetryPolicy() != "request_approval" {
+		t.Fatalf("safe failure = class:%q retry:%q summary:%q, want request_approval missing lease", safeFailure.SafeToolFailureClass(), safeFailure.SafeToolFailureRetryPolicy(), safeFailure.SafeToolFailureSummary())
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want discovered-effect contract before admin exact shell fallback", approver.called)
+	}
+
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one discovered-effect continuation request", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionBlockedNeedsAuthority ||
+		action.SubjectKind != "continuation_lease_request" ||
+		action.RequiredAuthority != string(session.ContinuationLeaseClassDataAccess) ||
+		action.ResourceBlocker != "missing_continuation_lease" ||
+		action.OperationKind != "continuation_lease_request" ||
+		action.OperationTool != "request_approval" {
+		t.Fatalf("next action = %#v, want request_approval continuation lease blocker", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["action"] != "request_continuation_lease" {
+		t.Fatalf("operation input = %#v, want request_continuation_lease action", input)
+	}
+	contractID, _ := input["contract_id"].(string)
+	if strings.TrimSpace(contractID) == "" {
+		t.Fatalf("operation input = %#v, want contract_id", input)
+	}
+
+	contract, ok, err := store.ContinuationRecoveryContract(contractID)
+	if err != nil {
+		t.Fatalf("ContinuationRecoveryContract(%q) err = %v", contractID, err)
+	}
+	if !ok {
+		t.Fatalf("ContinuationRecoveryContract(%q) ok=false", contractID)
+	}
+	if contract.SubjectKind != session.ContinuationRecoverySubjectKindDiscoveredEffect ||
+		contract.LeaseClass != session.ContinuationLeaseClassDataAccess ||
+		contract.Tool != "exec" ||
+		contract.ToolAction != session.ContinuationRecoveryRetryExecExactCommand {
+		t.Fatalf("contract = %#v, want discovered-effect exact exec data-access contract", contract)
+	}
+	constraints := contract.Constraints
+	if constraints["contract_kind"] != session.ContinuationRecoveryContractKindDiscoveredEffect ||
+		constraints["effect_kind"] != string(commandeffect.KindExternal) ||
+		constraints["effect_action"] != "fetch" ||
+		constraints["effect_provider"] != "git" ||
+		constraints["git_subcommand"] != "fetch" ||
+		constraints["command"] != command ||
+		constraints["command_hash"] != session.EffectAttemptCommandHash(command) {
+		t.Fatalf("contract constraints = %#v, want exact discovered git fetch identity", constraints)
+	}
+	if !stringSliceContainsForTest(contract.AllowedActions, "fetch") ||
+		!stringSliceContainsForTest(contract.AllowedActions, "git_fetch_origin_main_prune") ||
+		!stringSliceContainsForTest(contract.AllowedActions, "report_fetch_evidence") {
+		t.Fatalf("allowed actions = %#v, want discovered fetch action vocabulary", contract.AllowedActions)
+	}
+	retry := session.NormalizeContinuationRetryOperation(contract.RetryOperation)
+	if retry.OperationKind != session.ContinuationRecoveryRetryExecExactCommand || retry.Tool != "exec" || retry.SubjectKind != session.ContinuationRecoverySubjectKindDiscoveredEffect {
+		t.Fatalf("retry operation = %#v, want discovered-effect exact exec retry", retry)
+	}
+	var retryInput map[string]any
+	if err := json.Unmarshal([]byte(retry.InputJSON), &retryInput); err != nil {
+		t.Fatalf("unmarshal retry input %q: %v", retry.InputJSON, err)
+	}
+	if retryInput["command"] != command {
+		t.Fatalf("retry input = %#v, want exact command", retryInput)
+	}
+}
+
 func TestExecContinuationAuthorityRunsForNonProposalSideEffects(t *testing.T) {
 	t.Parallel()
 
@@ -272,6 +376,7 @@ func TestExecPreDispatchUsesCanonicalRepresentativeEffectForAudit(t *testing.T) 
 		key,
 		"exec",
 		command,
+		"",
 		judgment,
 		plan,
 		execQualificationGround{Kind: "operator_approval", ProposalID: "proposal-mixed-impact", DecisionID: "decision-mixed-impact", Choice: "approve"},
@@ -437,6 +542,7 @@ func TestExecIrreversibleUseRejectsCorrelatedQualificationGround(t *testing.T) {
 		key,
 		"exec",
 		"git push origin main",
+		"",
 		shellJudgment,
 		commandeffect.PlanCommand("git push origin main"),
 		execQualificationGround{Kind: "operator_approval", ProposalID: "proposal-correlated", DecisionID: "decision-correlated", Choice: "approve"},
@@ -470,6 +576,7 @@ func TestExecIrreversibleUseRejectsApprovalWithoutDecisionGround(t *testing.T) {
 		key,
 		"exec",
 		"git push origin main",
+		"",
 		judgment,
 		plan,
 		execQualificationGround{Kind: "operator_approval", ProposalID: "proposal-incomplete", Choice: "approve"},
@@ -509,6 +616,7 @@ func TestExecIrreversibleUseRejectsContinuationWithoutOperatorApprovalGround(t *
 		key,
 		"exec",
 		"git push origin main",
+		"",
 		judgment,
 		plan,
 		execQualificationGround{},
@@ -535,6 +643,7 @@ func TestExecIrreversibleUseWithoutGroundIsRejectedBeforeCommitment(t *testing.T
 		key,
 		"exec",
 		"git push origin main",
+		"",
 		judgment,
 		plan,
 		execQualificationGround{},

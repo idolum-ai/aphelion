@@ -62,7 +62,7 @@ func (r *Registry) requestContinuationLeaseApproval(in requestApprovalInput, key
 		UpdatedAt:        now,
 	}
 	proposal = session.ReconcileActionProposalAuthority(proposal)
-	if compilation := session.CompileActionProposalAuthorityContract(proposal); compilation.Invalid() {
+	if compilation := requestApprovalContinuationLeaseAuthorityCompilation(proposal, requirement, expiresAt); compilation.Invalid() {
 		return "", fmt.Errorf("request_approval continuation lease authority contract invalid: %s", session.AuthorityContractCompilationSummary(compilation))
 	}
 	lease := session.ContinuationLease{
@@ -148,6 +148,24 @@ func (r *Registry) requestContinuationLeaseApproval(in requestApprovalInput, key
 		return "", err
 	}
 	return renderOperationState("[APPROVAL_REQUESTED]", current), nil
+}
+
+func requestApprovalContinuationLeaseAuthorityCompilation(proposal session.ActionProposal, requirement missingContinuationLeaseRequirement, expiresAt time.Time) session.AuthorityContractCompilation {
+	if !session.ContinuationConstraintsAreDiscoveredEffect(requirement.Constraints) {
+		return session.CompileActionProposalAuthorityContract(proposal)
+	}
+	return session.CompileContinuationAuthorityContract(session.ContinuationState{
+		Status:         session.ContinuationStatusApproved,
+		ActionProposal: proposal,
+		ContinuationLease: session.ContinuationLease{
+			Status:         session.ContinuationLeaseStatusActive,
+			RemainingTurns: 1,
+			LeaseClass:     requirement.LeaseClass,
+			Constraints:    requestApprovalContinuationLeaseConstraints(requirement),
+			AllowedActions: append([]string(nil), requirement.AllowedActions...),
+			ExpiresAt:      expiresAt,
+		},
+	})
 }
 
 func requestApprovalContinuationStateMatchesRequestIdentity(state session.ContinuationState, requirement missingContinuationLeaseRequirement, leaseID string) bool {

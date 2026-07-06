@@ -208,6 +208,114 @@ func TestAuthorizeCommandRejectsExternalAccountWhenContractDisallowsExternalEffe
 	}
 }
 
+func TestAuthorizeCommandAllowsGitFetchWithDiscoveredEffectContract(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := testDiscoveredEffectFetchState(now)
+	decision := AuthorizeCommand(CommandRequest{
+		State:   state,
+		Command: "git fetch origin main --prune",
+		Now:     now,
+	})
+	if !decision.Active || decision.Boundary || !decision.Allowed {
+		t.Fatalf("decision = %#v, want git fetch allowed by discovered-effect envelope", decision)
+	}
+	if decision.RequiredAction != "fetch" {
+		t.Fatalf("required action = %q, want fetch", decision.RequiredAction)
+	}
+}
+
+func TestAuthorizeCommandDiscoveredEffectFetchDoesNotAuthorizeGenericNetworkContact(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := testDiscoveredEffectFetchState(now)
+	decision := AuthorizeCommand(CommandRequest{
+		State:   state,
+		Command: "curl https://example.com/releases.json",
+		Now:     now,
+	})
+	if !decision.Active || decision.Boundary || decision.Allowed {
+		t.Fatalf("decision = %#v, want discovered-effect fetch envelope to reject generic network contact", decision)
+	}
+	if decision.RequiredAction != "external_contact" {
+		t.Fatalf("required action = %q, want external_contact", decision.RequiredAction)
+	}
+	if decision.Reason != "discovered_effect_constraints_mismatch" {
+		t.Fatalf("reason = %q, want discovered_effect_constraints_mismatch", decision.Reason)
+	}
+}
+
+func TestAuthorizeCommandDiscoveredEffectFetchRejectsDifferentRef(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := testDiscoveredEffectFetchState(now)
+	decision := AuthorizeCommand(CommandRequest{
+		State:   state,
+		Command: "git fetch origin release --prune",
+		Now:     now,
+	})
+	if !decision.Active || decision.Allowed {
+		t.Fatalf("decision = %#v, want different fetch ref rejected", decision)
+	}
+	if decision.Reason != "discovered_effect_constraints_mismatch" {
+		t.Fatalf("reason = %q, want discovered_effect_constraints_mismatch", decision.Reason)
+	}
+}
+
+func TestAuthorizeCommandDiscoveredEffectFetchRejectsDifferentWorkdir(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := testDiscoveredEffectFetchState(now)
+	state.ContinuationLease.Constraints["workdir"] = "/repo"
+
+	allowed := AuthorizeCommand(CommandRequest{
+		State:   state,
+		Command: "git fetch origin main --prune",
+		Workdir: "/repo/.",
+		Now:     now,
+	})
+	if !allowed.Active || !allowed.Allowed {
+		t.Fatalf("allowed decision = %#v, want same normalized workdir allowed", allowed)
+	}
+
+	denied := AuthorizeCommand(CommandRequest{
+		State:   state,
+		Command: "git fetch origin main --prune",
+		Workdir: "/repo-other",
+		Now:     now,
+	})
+	if !denied.Active || denied.Allowed {
+		t.Fatalf("denied decision = %#v, want different workdir rejected", denied)
+	}
+	if denied.Reason != "discovered_effect_constraints_mismatch" {
+		t.Fatalf("reason = %q, want discovered_effect_constraints_mismatch", denied.Reason)
+	}
+}
+
+func TestAuthorizeCommandRejectsGitFetchWorkspaceWriteContractAsInvalid(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	decision := AuthorizeCommand(CommandRequest{
+		State: testContinuationState("workspace_write", []string{
+			"git_fetch_origin_main_prune",
+			"report_fetch_evidence",
+		}, false, now),
+		Command: "git fetch origin main --prune",
+		Now:     now,
+	})
+	if !decision.Active || decision.Allowed {
+		t.Fatalf("decision = %#v, want invalid workspace_write fetch contract denial", decision)
+	}
+	if decision.Reason != reasonInvalidAuthorityContract {
+		t.Fatalf("reason = %q, want %q", decision.Reason, reasonInvalidAuthorityContract)
+	}
+}
+
 func TestAuthorizeCommandAllowsExternalAccountStatusCheckOnly(t *testing.T) {
 	t.Parallel()
 
@@ -504,4 +612,20 @@ func testContinuationState(riskClass string, allowedActions []string, capability
 		},
 		ContinuationLease: lease,
 	}
+}
+
+func testDiscoveredEffectFetchState(now time.Time) session.ContinuationState {
+	state := testContinuationState("data_access", []string{"fetch", "git_fetch_origin_main_prune", "report_fetch_evidence"}, false, now)
+	state.ContinuationLease.LeaseClass = session.ContinuationLeaseClassDataAccess
+	state.ContinuationLease.Constraints = map[string]string{
+		"contract_kind":      session.ContinuationRecoveryContractKindDiscoveredEffect,
+		"effect_kind":        "network_or_external_contact",
+		"effect_action":      "fetch",
+		"effect_provider":    "git",
+		"git_subcommand":     "fetch",
+		"command":            "git fetch origin main --prune",
+		"command_hash":       session.EffectAttemptCommandHash("git fetch origin main --prune"),
+		"normalized_command": "git fetch origin main --prune",
+	}
+	return state
 }
