@@ -4,11 +4,16 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
+	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
 
 func TestBundledPlanApprovalCreatesRequiredCapabilityGrant(t *testing.T) {
@@ -876,5 +881,149 @@ func TestRevokeContinuationRevokesOnlyMintedRequiredCapabilityGrants(t *testing.
 	}
 	if _, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github-revoke-existing", "telegram:1001", "write"); err != nil || !ok {
 		t.Fatalf("ActiveCapabilityGrant(existing after revoke) ok=%t err=%v, want existing grant still active", ok, err)
+	}
+}
+
+func TestCapabilityRequestReviewApprovalWithGrantTermsActivatesGrantWithoutWake(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	_ = rt
+	_ = provider
+	_ = sender
+
+	key := session.SessionKey{ChatID: 9150, UserID: 1001, Scope: telegramDMScopeRef(9150)}
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-pr-282-push",
+		RequestedBy:    "telegram:1001",
+		RequestedFor:   "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github:idolum-ai/aphelion",
+		Purpose:        "Push one validated PR branch commit.",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-capability-review-wake",
+		Objective: "Commit and push validated PR branch work",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "waiting_for_capability_approval",
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	registry := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{"action":"request_review","request_id":"cap-pr-282-push","review_status":"approved","kind":"external_account","target_resource":"github:idolum-ai/aphelion","principal":"telegram:1001","allowed_actions":["write"],"rationale":"operator approved the exact GitHub write capability"}`)); err != nil {
+		t.Fatalf("capability_authority request_review approved err = %v", err)
+	}
+
+	if _, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github:idolum-ai/aphelion", "telegram:1001", "write"); err != nil || !ok {
+		t.Fatalf("approved capability request did not create active write grant: ok=%t err=%v", ok, err)
+	}
+	if cont, ok, err := store.ContinuationStateIfExists(key); err != nil {
+		t.Fatalf("ContinuationStateIfExists() err = %v", err)
+	} else if ok && strings.TrimSpace(cont.ContinuationLease.ID) != "" {
+		t.Fatalf("continuation state = %#v, want no child-wake lease for non-child capability grant", cont)
+	}
+}
+
+func TestCapabilityRequestReviewApprovalWithNextActionActivatesGrantAndResolvesBlocker(t *testing.T) {
+	cfg, store, _, _ := buildRuntimeFixtures(t)
+	key := session.SessionKey{ChatID: 9151, UserID: 1001, Scope: telegramDMScopeRef(9151)}
+	const requestID = "cap-pr-282-push-with-next-action"
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      requestID,
+		RequestedBy:    "telegram:1001",
+		RequestedFor:   "telegram:1001",
+		AdminPrincipal: "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "github:idolum-ai/aphelion",
+		Purpose:        "Push one validated PR branch commit.",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:               key,
+		State:             session.NextActionBlockedNeedsAuthority,
+		SubjectKind:       "capability_request",
+		SubjectRef:        requestID,
+		OperationKind:     "git_push",
+		OperationTool:     "github",
+		NextAction:        "push validated PR branch after capability approval",
+		RequiredAuthority: "github write",
+	}); err != nil {
+		t.Fatalf("RecordNextAction() err = %v", err)
+	}
+
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	resolver, err := sandbox.NewResolver(sandbox.Roots{GlobalRoot: cfg.Agent.PromptRoot, AdminExecRoot: cfg.Agent.ExecRoot, SharedMemoryRoot: cfg.Agent.SharedMemoryRoot, UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot, UserMemoryRoot: cfg.Agent.UserMemoryRoot}, sandbox.DefaultProfiles())
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	registry := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{"action":"request_review","request_id":"cap-pr-282-push-with-next-action","review_status":"approved","kind":"external_account","target_resource":"github:idolum-ai/aphelion","principal":"telegram:1001","allowed_actions":["write"],"rationale":"operator approved the exact GitHub write capability"}`)); err != nil {
+		t.Fatalf("capability_authority request_review approved err = %v", err)
+	}
+
+	open, err := store.OpenNextActionsBySessionSubject(key, "capability_request", requestID, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionSubject() err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("approved capability request left next action open = %#v", open)
+	}
+	if _, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github:idolum-ai/aphelion", "telegram:1001", "write"); err != nil || !ok {
+		t.Fatalf("approved capability request with next action did not create active write grant: ok=%t err=%v", ok, err)
+	}
+}
+
+func TestCapabilityGrantSetApprovedResolvesCapabilityNextAction(t *testing.T) {
+	cfg, store, _, _ := buildRuntimeFixtures(t)
+	key := session.SessionKey{ChatID: 9152, UserID: 1001, Scope: telegramDMScopeRef(9152)}
+	const requestID = "cap-pr-282-push-grant-set"
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{RequestID: requestID, RequestedBy: "telegram:1001", RequestedFor: "telegram:1001", AdminPrincipal: "telegram:1001", Kind: session.CapabilityKindExternalAccount, TargetResource: "github:idolum-ai/aphelion", Purpose: "Push one validated PR branch commit.", ReviewStatus: session.CapabilityReviewStatusApproved}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+	if _, err := store.RecordNextAction(session.NextActionInput{Key: key, State: session.NextActionBlockedNeedsAuthority, SubjectKind: "capability_request", SubjectRef: requestID, OperationKind: "git_push", OperationTool: "github", NextAction: "push validated PR branch after capability grant", RequiredAuthority: "github write"}); err != nil {
+		t.Fatalf("RecordNextAction() err = %v", err)
+	}
+
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	resolver, err := sandbox.NewResolver(sandbox.Roots{GlobalRoot: cfg.Agent.PromptRoot, AdminExecRoot: cfg.Agent.ExecRoot, SharedMemoryRoot: cfg.Agent.SharedMemoryRoot, UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot, UserMemoryRoot: cfg.Agent.UserMemoryRoot}, sandbox.DefaultProfiles())
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	registry := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{"action":"grant_set","request_id":"cap-pr-282-push-grant-set","kind":"external_account","target_resource":"github:idolum-ai/aphelion","principal":"telegram:1001","allowed_actions":["write"],"grant_status":"active","rationale":"activate approved GitHub write grant"}`)); err != nil {
+		t.Fatalf("capability_authority grant_set active err = %v", err)
+	}
+
+	if _, ok, err := store.ActiveCapabilityGrant(session.CapabilityKindExternalAccount, "github:idolum-ai/aphelion", "telegram:1001", "write"); err != nil || !ok {
+		t.Fatalf("grant_set did not create active write grant: ok=%t err=%v", ok, err)
+	}
+	open, err := store.OpenNextActionsBySessionSubject(key, "capability_request", requestID, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionSubject() err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("grant_set active left capability next action open = %#v", open)
 	}
 }

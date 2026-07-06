@@ -116,7 +116,7 @@ func TestBuildFacePromptIncludesIdolumFilesAndOrder(t *testing.T) {
 	if awarenessIdx == -1 || agencyIdx == -1 || routeIdx == -1 || stableIdx == -1 || dynamicIdx == -1 || floorIdx == -1 || userIdx == -1 {
 		t.Fatalf("face prompt missing expected layered sections: %q", got)
 	}
-	if !(awarenessIdx < agencyIdx && agencyIdx < routeIdx && routeIdx < stableIdx && stableIdx < dynamicIdx && dynamicIdx < floorIdx && floorIdx < userIdx) {
+	if !(agencyIdx < stableIdx && stableIdx < routeIdx && routeIdx < dynamicIdx && dynamicIdx < awarenessIdx && awarenessIdx < floorIdx && floorIdx < userIdx) {
 		t.Fatalf("face prompt sections are out of order: %q", got)
 	}
 }
@@ -287,24 +287,28 @@ func TestBuildFacePromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 	})
 
 	stableIdx := -1
+	routeIdx := -1
 	dynamicIdx := -1
 	for i, block := range blocks {
 		if strings.Contains(block.Text, "## Stable Face Files") {
 			stableIdx = i
 		}
+		if strings.Contains(block.Text, "## Route / Scene Contract") {
+			routeIdx = i
+		}
 		if strings.Contains(block.Text, "## Dynamic Face Files") {
 			dynamicIdx = i
 		}
 	}
-	if stableIdx == -1 || dynamicIdx == -1 {
+	if stableIdx == -1 || routeIdx == -1 || dynamicIdx == -1 {
 		t.Fatalf("missing stable/dynamic face file blocks: %#v", blocks)
 	}
 	breakpoints := 0
 	for i, block := range blocks {
 		if block.CacheBreakpoint {
 			breakpoints++
-			if i >= dynamicIdx {
-				t.Fatalf("face cache breakpoint crossed into dynamic section: idx=%d block=%#v", i, block)
+			if i >= routeIdx {
+				t.Fatalf("face cache breakpoint crossed into route/dynamic section: idx=%d block=%#v", i, block)
 			}
 		}
 	}
@@ -316,6 +320,58 @@ func TestBuildFacePromptBlocksMarksStableBoundaryForCaching(t *testing.T) {
 	}
 	if blocks[dynamicIdx].CacheBreakpoint {
 		t.Fatalf("dynamic face block should not be cache breakpoint: %#v", blocks[dynamicIdx])
+	}
+}
+
+func TestBuildFacePromptCacheAwareLookbackShapesDynamicFiles(t *testing.T) {
+	t.Parallel()
+
+	req := FaceRequest{
+		CacheStrategy: "hybrid",
+		CacheLookback: 2,
+		StableFiles: []workspace.LoadedFile{
+			{Path: "IDOLUM.md", Content: "stable persona"},
+		},
+		DynamicFiles: []workspace.LoadedFile{
+			{Path: "QUESTIONS-TO-IDOLUM.md", Content: "required questions"},
+			{Path: "memory/old.md", Content: "old face memory"},
+			{Path: "memory/middle.md", Content: "middle face memory"},
+			{Path: "memory/recent.md", Content: "recent face memory"},
+			{Path: "memory/latest.md", Content: "latest face memory"},
+		},
+		LatestUserInput: "hello",
+		FloorText:       "hi",
+	}
+	got := BuildFacePrompt(req)
+
+	for _, want := range []string{
+		"## Stable Face Files",
+		"## Dynamic Face Files",
+		"required questions",
+		"recent face memory",
+		"latest face memory",
+		"Cache-aware lookback omitted older dynamic files this turn: memory/old.md, memory/middle.md",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("cache-aware face prompt missing %q: %q", want, got)
+		}
+	}
+	for _, omitted := range []string{"old face memory", "middle face memory"} {
+		if strings.Contains(got, omitted) {
+			t.Fatalf("cache-aware face prompt includes omitted content %q: %q", omitted, got)
+		}
+	}
+
+	unshaped := BuildFacePrompt(FaceRequest{
+		CacheStrategy:   "off",
+		CacheLookback:   2,
+		StableFiles:     req.StableFiles,
+		DynamicFiles:    req.DynamicFiles,
+		LatestUserInput: "hello",
+		FloorText:       "hi",
+	})
+	if !strings.Contains(unshaped, "old face memory") || !strings.Contains(unshaped, "middle face memory") {
+		t.Fatalf("cache off should preserve full dynamic face prompt: %q", unshaped)
 	}
 }
 

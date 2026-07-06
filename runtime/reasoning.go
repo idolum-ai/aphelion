@@ -93,6 +93,20 @@ func (r *Runtime) reasoningOptionsForRun(kind session.TurnRunKind) *agent.Comple
 			}
 		}
 	}
+	switch kind {
+	case session.TurnRunKindHeartbeat:
+		if status, err := r.EffectiveModelSlot(core.ModelSlotHeartbeat); err == nil && status.Validation.Valid {
+			if effort := core.NormalizeModelEffort(status.Effective.Effort); effort != "" {
+				opts.Reasoning.Effort = agent.ReasoningEffort(effort)
+			}
+		}
+	case session.TurnRunKindCuriosity:
+		if status, err := r.EffectiveModelSlot(core.ModelSlotCuriosity); err == nil && status.Validation.Valid {
+			if effort := core.NormalizeModelEffort(status.Effective.Effort); effort != "" {
+				opts.Reasoning.Effort = agent.ReasoningEffort(effort)
+			}
+		}
+	}
 	return opts
 }
 

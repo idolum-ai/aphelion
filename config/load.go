@@ -74,6 +74,7 @@ func Load(path string) (*Config, error) {
 	if strings.TrimSpace(cfg.Autonomy.MaxOverrideDuration) == "" {
 		cfg.Autonomy.MaxOverrideDuration = "4h"
 	}
+	cfg.Autonomy.DefaultApprovalWindow = NormalizeAutonomyDefaultApprovalWindow(cfg.Autonomy.DefaultApprovalWindow)
 	cfg.Sandbox.Profiles.Admin = normalizeSandboxProfileConfig(cfg.Sandbox.Profiles.Admin)
 	cfg.Sandbox.Profiles.ApprovedUser = normalizeSandboxProfileConfig(cfg.Sandbox.Profiles.ApprovedUser)
 	cfg.Sandbox.Profiles.DurableAgent = normalizeSandboxProfileConfig(cfg.Sandbox.Profiles.DurableAgent)

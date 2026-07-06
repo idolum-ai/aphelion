@@ -3,7 +3,6 @@
 package tool
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -75,7 +74,9 @@ func TestDurableAgentExternalProcessToolRequiresIsolatedSandbox(t *testing.T) {
 	if toolDefExists(registry.DefinitionsForPrincipal(actor), "browse_page") {
 		t.Fatal("DefinitionsForPrincipal included process external tool without isolated sandbox")
 	}
-	_, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	_, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if !errors.Is(err, ErrSandboxRequired) {
 		t.Fatalf("ExecuteForSessionPrincipal() err = %v, want ErrSandboxRequired", err)
 	}

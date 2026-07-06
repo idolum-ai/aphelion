@@ -15,7 +15,10 @@ const (
 	AuthorityWorkActionDeploy         = "deploy"
 )
 
-const AuthorityClassLocalSecretMetadataReadLiveConfigRead = "local_secret_metadata_read_live_config_read"
+const (
+	AuthorityClassExternalRead                          = "external_read"
+	AuthorityClassLocalSecretMetadataReadLiveConfigRead = "local_secret_metadata_read_live_config_read"
+)
 
 type AuthorityContract struct {
 	Key                    string
@@ -31,6 +34,9 @@ type AuthorityContract struct {
 
 func AuthorityContractFor(riskClass string, allowedActions []string, boundedEffect string) (AuthorityContract, bool) {
 	_ = boundedEffect
+	if actionListImpliesRepoPublication(allowedActions) && !authorityRiskClassShouldDominateRepoPublication(riskClass) {
+		return AuthorityContractForToken("repo_publication")
+	}
 	if contract, ok := AuthorityContractForToken(riskClass); ok {
 		return contract, true
 	}
@@ -43,6 +49,9 @@ func AuthorityContractFor(riskClass string, allowedActions []string, boundedEffe
 
 func AuthorityInterpretationClaimFor(riskClass string, allowedActions []string, boundedEffect string) (core.InterpretationClaim, bool) {
 	_ = boundedEffect
+	if actionListImpliesRepoPublication(allowedActions) && !authorityRiskClassShouldDominateRepoPublication(riskClass) {
+		return authorityInterpretationClaim("repo_publication", "structured_authority_fields"), true
+	}
 	if contract, ok := AuthorityContractForToken(riskClass); ok {
 		return authorityInterpretationClaim(contract.Key, "risk_class"), true
 	}
@@ -81,7 +90,7 @@ type authorityClassificationGroup struct {
 
 func authorityClassificationPriority() []authorityClassificationGroup {
 	return []authorityClassificationGroup{
-		{Key: "deploy", Tokens: []string{"deploy", "live_deploy", "run_deploy", "system_change", "restart", "service_restart", "restart_aphelion_service", "systemctl_restart", "install_user_service", "make_install_user_service", "run_verify_deploy", "git_push", "push_remote"}},
+		{Key: "deploy", Tokens: []string{"deploy", "live_deploy", "run_deploy", "system_change", "restart", "service_restart", "restart_aphelion_service", "systemctl_restart", "install_user_service", "make_install_user_service", "run_verify_deploy"}},
 		{Key: "capability_grant", Tokens: []string{"capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority", "capability_access_check", "grant_or_revoke_capability", "capability_revoke"}},
 		{Key: "external_account_action", Tokens: []string{"external_account_action", "external_account_pr_create", "github_pr_create", "github_pr_open", "github_pr_update", "github_pr_metadata_update", "pull_request_create", "pull_request_open", "pull_request_update", "pull_request_metadata_update", "open_pull_request", "create_github_pr", "update_pull_request_title", "update_pull_request_body"}},
 		{Key: "child_wake", Tokens: []string{"child_wake", "durable_child_wake", "selected_child_wake", "durable_agent_wake"}},
@@ -117,6 +126,7 @@ func authorityClassificationPriority() []authorityClassificationGroup {
 			"scout_public_opportunities",
 		}},
 		{Key: "data_access", Tokens: []string{"data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access", "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "credential_state_check", "credential_metadata", "credential_metadata_check", "token_health_check", "run_external_account_auth_status_or_identity_check"}},
+		{Key: "repo_publication", Tokens: []string{"repo_publication", "remote_repo_mutation", "git_push", "push_remote"}},
 		{Key: "commit", Tokens: []string{"commit", "git_commit", "git_commit_validated_slices", "repo_history_mutation", "workspace_commit", "workspace_commit_then_repo_write_bounded"}},
 		{Key: "workspace_write", Tokens: []string{"workspace_write", "workspace", "code", "code_change", "code_changes", "repo_edit", "edit", "edit_files", "patch", "run_tests", "test", "tests", "focused_tests", "git_diff_check"}},
 		{Key: "read_only_review", Tokens: []string{"read_only", "read_only_review", "status_check", "inspect_readonly_state", "read_only_child_adapter_environment_inspection"}},
@@ -163,9 +173,78 @@ func normalizeAuthorityMatchText(text string) string {
 	return strings.Trim(text, "_")
 }
 
+func authorityRiskClassShouldDominateRepoPublication(riskClass string) bool {
+	key := normalizeAuthorityMatchText(riskClass)
+	switch key {
+	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "service_restart", "restart_aphelion_service", "systemctl_restart", "install_user_service", "make_install_user_service", "run_verify_deploy",
+		"capability_grant", "capability_acquisition", "grant_capability", "grant_set", "capability_authority",
+		"external_account_action", "external_account_pr_create", "github_pr_create", "github_pr_open", "github_pr_update", "github_pr_metadata_update", "pull_request_create", "pull_request_open", "pull_request_update", "pull_request_metadata_update", "open_pull_request", "create_github_pr", "update_pull_request_title", "update_pull_request_body":
+		return true
+	default:
+		return false
+	}
+}
+
+func actionListImpliesRepoPublication(actions []string) bool {
+	for _, action := range actions {
+		if authorityTokenImpliesGitPush(action) {
+			return true
+		}
+	}
+	return false
+}
+
 func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 	key := normalizeEnumValue(token)
 	switch key {
+	case AuthorityClassExternalRead:
+		// Deprecated compatibility for states persisted while PR #291 was a
+		// narrow bridge. New one-time external command authority should flow
+		// through discovered-effect continuation recovery contracts instead.
+		return AuthorityContract{
+			Key:        AuthorityClassExternalRead,
+			LeaseClass: ContinuationLeaseClassDataAccess,
+			WorkAction: AuthorityWorkActionReadOnly,
+			AllowedActions: []string{
+				AuthorityWorkActionReadOnly,
+				AuthorityClassExternalRead,
+				"external_network_contact",
+				"network_contact",
+				"fetch",
+				"fetch_remote",
+				"git_fetch",
+				"git_fetch_read_refs",
+				"git_ls_remote",
+				"ls_remote",
+				"report_fetch_evidence",
+				"report_evidence",
+			},
+			ForbiddenActions: []string{
+				"workspace_write",
+				"edit_files",
+				"commit",
+				"git_commit",
+				"repo_history_mutation",
+				"repo_publication",
+				"git_push",
+				"push_remote",
+				"github_pr_create",
+				"github_pr_update",
+				"external_account_action",
+				"credential_token_output",
+				"read_or_print_credentials",
+				"deploy",
+				"restart_service",
+				"external_effect_outside_bounded_effect",
+			},
+			ValidationPlan: []string{
+				"run only the approved external read or fetch command",
+				"record remote/ref evidence and stop before workspace edits, commits, pushes, PR metadata, deploys, restarts, or credential output",
+			},
+			AutoApprovalAllowed:    true,
+			RequiresInlineApproval: true,
+			ExternalEffectsAllowed: true,
+		}, true
 	case AuthorityClassLocalSecretMetadataReadLiveConfigRead:
 		return AuthorityContract{
 			Key:        AuthorityClassLocalSecretMetadataReadLiveConfigRead,
@@ -319,17 +398,45 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 				"report_commit_evidence",
 			},
 			ForbiddenActions: []string{
-				"git_push",
 				"deploy",
 				"restart_service",
 				"external_effect_without_separate_grant",
 			},
 			ValidationPlan: []string{
 				"verify tests and diff before commit",
-				"report commit hashes and do not push without separate authority",
+				"report commit hashes; push only when git_push is explicitly in the typed allowed actions",
 			},
 			AutoApprovalAllowed:    true,
 			RequiresInlineApproval: true,
+		}, true
+	case "repo_publication", "remote_repo_mutation", "git_push", "push_remote":
+		return AuthorityContract{
+			Key:        "repo_publication",
+			LeaseClass: ContinuationLeaseClassRepoPublication,
+			WorkAction: AuthorityWorkActionCommit,
+			AllowedActions: []string{
+				AuthorityWorkActionCommit,
+				"git_push",
+				"push_remote",
+				"report_push_evidence",
+			},
+			ForbiddenActions: []string{
+				"deploy",
+				"restart_service",
+				"github_pr_create",
+				"github_pr_update",
+				"external_account_action",
+				"credential_token_output",
+				"external_effect_without_separate_grant",
+			},
+			ValidationPlan: []string{
+				"verify intended local ref/commit before push",
+				"push only the approved branch/ref to the approved remote",
+				"record remote ref evidence after push and stop before PR metadata, deploy, restart, credentials, or unrelated external effects",
+			},
+			AutoApprovalAllowed:    true,
+			RequiresInlineApproval: true,
+			ExternalEffectsAllowed: true,
 		}, true
 	case "deploy", "live_deploy", "run_deploy", "system_change", "restart", "restart_service", "service_restart", "restart_aphelion_service", "systemctl_restart", "install_user_service", "make_install_user_service", "run_verify_deploy":
 		return AuthorityContract{
@@ -450,7 +557,7 @@ func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 }
 
 func ApplyAuthorityContractToActionProposal(proposal ActionProposal) ActionProposal {
-	proposal = SanitizeActionProposalAuthority(NormalizeActionProposal(proposal))
+	proposal = ReconcileActionProposalAuthority(SanitizeActionProposalAuthority(NormalizeActionProposal(proposal)))
 	compilation := CompileActionProposalAuthorityContract(proposal)
 	if strings.TrimSpace(compilation.Contract.Key) == "" {
 		return proposal

@@ -1,6 +1,7 @@
 {
   "name": "browse_page",
   "owner": "child-alpha",
+  "description": "Fetch a single governed page summary from a URL through the child-owned browser fixture.",
   "version": "pilot-fixture-v1",
   "execution": {
     "mode": "process",

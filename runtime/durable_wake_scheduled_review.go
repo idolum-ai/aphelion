@@ -4,6 +4,8 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -132,47 +134,52 @@ func (scheduledReviewDurableWakeAdapter) Prepare(_ context.Context, rt *Runtime,
 			lines = append(lines, durableParentConversationGovernorLines(pending)...)
 			return strings.Join(lines, "\n")
 		},
-		Finalize: func(turnSummary string) error {
-			turnSummary = strings.TrimSpace(turnSummary)
-			artifact := core.DurableReviewArtifact{
-				AgentID:       strings.TrimSpace(agent.AgentID),
-				Summary:       scheduledReviewArtifactSummary(cfg, reviewDate, turnSummary),
-				IntervalLabel: reviewDate,
-				LocalActions: []string{
-					fmt.Sprintf("Reviewed staged transcript for %s and drafted next-period actions.", reviewDate),
-				},
-				Questions: []string{cfg.GuidanceQuestion},
-				RiskFlags: []string{cfg.ArtifactKind},
-				Metadata: scheduledReviewArtifactMetadata(cfg, map[string]string{
-					"channel_kind":        scheduledReviewChannelKind,
-					"trigger_kinds":       cfg.ArtifactKind + ",scheduled_review",
-					"review_date":         reviewDate,
-					"window_start":        reviewStart.Format(time.RFC3339),
-					"window_end":          reviewEnd.Format(time.RFC3339),
-					"message_count":       strconv.Itoa(len(hits)),
-					"transcript_path":     transcriptPath,
-					"child_local_subject": "false",
-				}),
+		OutcomeIntents: func(status session.ChildTaskResultStatus, turnSummary string, cause error, intentAt time.Time) []session.ChildTaskOutcomeIntentInput {
+			payload := scheduledReviewOutcomeIntentPayload{
+				AgentID:        strings.TrimSpace(agent.AgentID),
+				Config:         cfg,
+				ReviewDate:     reviewDate,
+				WindowStart:    reviewStart.UTC().Format(time.RFC3339),
+				WindowEnd:      reviewEnd.UTC().Format(time.RFC3339),
+				MessageCount:   len(hits),
+				TranscriptPath: transcriptPath,
+				TurnSummary:    strings.TrimSpace(turnSummary),
+				Status:         "completed",
+				CreatedAt:      now.UTC().Format(time.RFC3339Nano),
 			}
-			if title := strings.TrimSpace(cfg.Title); title != "" {
-				artifact.Metadata["operator_title"] = title
-				artifact.Metadata["channel_label"] = title
+			if cause != nil || status == session.ChildTaskResultFailed {
+				payload.Status = "wake_failed"
+				if cause != nil {
+					payload.Error = trimError(cause.Error())
+				}
 			}
-			if _, err := durableagent.NewRuntime(rt.store).QueueReviewArtifact(agent, artifact); err != nil {
-				return fmt.Errorf("queue scheduled review artifact: %w", err)
-			}
-			if err := rt.recordScheduledReviewSuccess(agent.AgentID, reviewDate, now); err != nil {
-				return fmt.Errorf("record scheduled review success: %w", err)
-			}
-			if err := rt.markDurableScheduledReviewCursor(agent.AgentID, reviewDate); err != nil {
-				return fmt.Errorf("mark scheduled review cursor: %w", err)
-			}
-			return nil
+			raw, _ := json.Marshal(payload)
+			return []session.ChildTaskOutcomeIntentInput{{
+				Kind:        session.ChildTaskOutcomeIntentScheduledReview,
+				Sequence:    10,
+				PayloadJSON: string(raw),
+				ResultRef:   "scheduled_review:" + strings.TrimSpace(agent.AgentID),
+				CreatedAt:   intentAt,
+			}}
 		},
 		FinalizeFailure: func(turnSummary string, cause error) error {
 			return rt.recordScheduledReviewFailure(agent, cfg, reviewDate, turnSummary, cause, now, "wake_failed")
 		},
 	}, nil
+}
+
+type scheduledReviewOutcomeIntentPayload struct {
+	AgentID        string                `json:"agent_id"`
+	Config         scheduledReviewConfig `json:"config"`
+	ReviewDate     string                `json:"review_date"`
+	WindowStart    string                `json:"window_start"`
+	WindowEnd      string                `json:"window_end"`
+	MessageCount   int                   `json:"message_count"`
+	TranscriptPath string                `json:"transcript_path"`
+	TurnSummary    string                `json:"turn_summary"`
+	Status         string                `json:"status"`
+	Error          string                `json:"error,omitempty"`
+	CreatedAt      string                `json:"created_at"`
 }
 
 type scheduledReviewConfig struct {
@@ -520,7 +527,76 @@ func (r *Runtime) recordScheduledReviewSuccess(agentID string, reviewDate string
 	return err
 }
 
+func (r *Runtime) applyScheduledReviewOutcomeIntent(intent session.ChildTaskOutcomeIntent) error {
+	var payload scheduledReviewOutcomeIntentPayload
+	if err := json.Unmarshal([]byte(intent.PayloadJSON), &payload); err != nil {
+		return fmt.Errorf("parse scheduled review outcome intent payload: %w", err)
+	}
+	agentID := strings.TrimSpace(payload.AgentID)
+	if agentID == "" {
+		return fmt.Errorf("scheduled review outcome intent missing agent_id")
+	}
+	agent, err := r.store.DurableAgent(agentID)
+	if err != nil {
+		return fmt.Errorf("load scheduled review intent agent: %w", err)
+	}
+	now, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(payload.CreatedAt))
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	status := firstNonEmpty(strings.TrimSpace(payload.Status), "completed")
+	if status != "completed" {
+		cause := errors.New(firstNonEmpty(strings.TrimSpace(payload.Error), "scheduled review wake failed"))
+		return r.recordScheduledReviewFailureWithIdempotencyKey(*agent, payload.Config, payload.ReviewDate, payload.TurnSummary, cause, now, status, intent.IdempotencyKey)
+	}
+	reviewStart, _ := time.Parse(time.RFC3339, payload.WindowStart)
+	reviewEnd, _ := time.Parse(time.RFC3339, payload.WindowEnd)
+	artifact := scheduledReviewSuccessArtifact(*agent, payload.Config, payload.ReviewDate, reviewStart, reviewEnd, payload.TranscriptPath, payload.MessageCount, payload.TurnSummary)
+	if _, err := durableagent.NewRuntime(r.store).QueueReviewArtifactWithIdempotencyKey(*agent, artifact, intent.IdempotencyKey); err != nil {
+		return fmt.Errorf("queue scheduled review artifact: %w", err)
+	}
+	if err := r.recordScheduledReviewSuccess(agentID, payload.ReviewDate, now); err != nil {
+		return fmt.Errorf("record scheduled review success: %w", err)
+	}
+	if err := r.markDurableScheduledReviewCursor(agentID, payload.ReviewDate); err != nil {
+		return fmt.Errorf("mark scheduled review cursor: %w", err)
+	}
+	return nil
+}
+
+func scheduledReviewSuccessArtifact(agent core.DurableAgent, cfg scheduledReviewConfig, reviewDate string, reviewStart time.Time, reviewEnd time.Time, transcriptPath string, messageCount int, turnSummary string) core.DurableReviewArtifact {
+	artifact := core.DurableReviewArtifact{
+		AgentID:       strings.TrimSpace(agent.AgentID),
+		Summary:       scheduledReviewArtifactSummary(cfg, reviewDate, strings.TrimSpace(turnSummary)),
+		IntervalLabel: reviewDate,
+		LocalActions: []string{
+			fmt.Sprintf("Reviewed staged transcript for %s and drafted next-period actions.", reviewDate),
+		},
+		Questions: []string{cfg.GuidanceQuestion},
+		RiskFlags: []string{cfg.ArtifactKind},
+		Metadata: scheduledReviewArtifactMetadata(cfg, map[string]string{
+			"channel_kind":        scheduledReviewChannelKind,
+			"trigger_kinds":       cfg.ArtifactKind + ",scheduled_review",
+			"review_date":         reviewDate,
+			"window_start":        reviewStart.UTC().Format(time.RFC3339),
+			"window_end":          reviewEnd.UTC().Format(time.RFC3339),
+			"message_count":       strconv.Itoa(messageCount),
+			"transcript_path":     transcriptPath,
+			"child_local_subject": "false",
+		}),
+	}
+	if title := strings.TrimSpace(cfg.Title); title != "" {
+		artifact.Metadata["operator_title"] = title
+		artifact.Metadata["channel_label"] = title
+	}
+	return artifact
+}
+
 func (r *Runtime) recordScheduledReviewFailure(agent core.DurableAgent, cfg scheduledReviewConfig, reviewDate string, turnSummary string, cause error, now time.Time, status string) error {
+	return r.recordScheduledReviewFailureWithIdempotencyKey(agent, cfg, reviewDate, turnSummary, cause, now, status, "")
+}
+
+func (r *Runtime) recordScheduledReviewFailureWithIdempotencyKey(agent core.DurableAgent, cfg scheduledReviewConfig, reviewDate string, turnSummary string, cause error, now time.Time, status string, idempotencyKey string) error {
 	if r == nil || r.store == nil {
 		return nil
 	}
@@ -541,7 +617,7 @@ func (r *Runtime) recordScheduledReviewFailure(agent core.DurableAgent, cfg sche
 		return err
 	}
 	artifact := scheduledReviewFailureArtifact(agent, cfg, reviewDate, turnSummary, cause, updated, status)
-	if _, err := durableagent.NewRuntime(r.store).QueueReviewArtifact(agent, artifact); err != nil {
+	if _, err := durableagent.NewRuntime(r.store).QueueReviewArtifactWithIdempotencyKey(agent, artifact, idempotencyKey); err != nil {
 		return fmt.Errorf("queue scheduled review failure artifact: %w", err)
 	}
 	return nil

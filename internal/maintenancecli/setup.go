@@ -67,6 +67,12 @@ func RunInitCommand(args []string, deps SetupDeps) error {
 		return err
 	}
 
+	expiredGrants, err := expireActiveCapabilityGrantsForSetup(cfg, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "expired_capability_grants: %d\n", expiredGrants)
+
 	if deps.ReconcileDurableAgentsForConfig == nil {
 		return fmt.Errorf("init durable agent reconcile dependency is unavailable")
 	}
@@ -86,6 +92,18 @@ func RunInitCommand(args []string, deps SetupDeps) error {
 	fmt.Fprintf(os.Stdout, "status: ready\n")
 	fmt.Fprintf(os.Stdout, "next: run --check-config or start the service\n")
 	return nil
+}
+
+func expireActiveCapabilityGrantsForSetup(cfg *config.Config, now time.Time) (int64, error) {
+	if cfg == nil {
+		return 0, fmt.Errorf("init capability grant expiry requires config")
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		return 0, err
+	}
+	defer store.Close()
+	return store.ExpireActiveCapabilityGrants(now)
 }
 
 func RunPathsCommand(args []string, deps SetupDeps) error {

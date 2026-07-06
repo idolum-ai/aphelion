@@ -97,7 +97,9 @@ func TestTelegramExecApproverKeepsApprovalConfirmation(t *testing.T) {
 
 	sender := &decisionTestSender{}
 	var broker *decision.Broker
+	var pendingSeen decision.PendingDecision
 	broker = decision.NewBroker(func(ctx context.Context, pending decision.PendingDecision) (decision.Delivery, error) {
+		pendingSeen = pending
 		text := RenderPendingDecisionSummary(pending)
 		msgID, err := sender.SendInlineKeyboard(ctx, pending.ChatID, text, InlineButtonRows(pending), telegramcommands.ReplyToMessageID(pending.MessageID))
 		if err != nil {
@@ -126,6 +128,9 @@ func TestTelegramExecApproverKeepsApprovalConfirmation(t *testing.T) {
 	}
 	if !decisionResult.Approved {
 		t.Fatal("Approved = false, want true")
+	}
+	if pendingSeen.Metadata["approval_kind"] != "possible_delete_command" || pendingSeen.Metadata["command_hash"] == "" {
+		t.Fatalf("pending metadata = %#v, want structured exec approval provenance", pendingSeen.Metadata)
 	}
 	if len(sender.deletes) != 0 {
 		t.Fatalf("deletes = %#v, want no prompt delete on approval", sender.deletes)

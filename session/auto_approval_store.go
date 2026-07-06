@@ -383,6 +383,28 @@ func (s *SQLiteStore) LatestOperatorAutoApprovalLeaseForScope(chatID int64, admi
 	return lease, true, nil
 }
 
+func (s *SQLiteStore) LatestOperatorAutoApprovalLeaseForScopeAndReason(chatID int64, adminUserID int64, scopeKind string, scopeID string, reason string) (OperatorAutoApprovalLease, bool, error) {
+	if chatID == 0 || adminUserID <= 0 || strings.TrimSpace(reason) == "" {
+		return OperatorAutoApprovalLease{}, false, nil
+	}
+	row := s.db.QueryRow(`
+		SELECT lease_id, admin_user_id, chat_id, scope_kind, scope_id, scope, reason, max_uses, used_count,
+			created_at, expires_at, revoked_at, updated_at
+		FROM operator_auto_approvals
+		WHERE chat_id = ? AND admin_user_id = ? AND scope_kind = ? AND scope_id = ? AND reason = ?
+		ORDER BY updated_at DESC, created_at DESC, lease_id DESC
+		LIMIT 1
+	`, chatID, adminUserID, strings.TrimSpace(scopeKind), strings.TrimSpace(scopeID), strings.TrimSpace(reason))
+	lease, err := scanOperatorAutoApprovalLease(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return OperatorAutoApprovalLease{}, false, nil
+	}
+	if err != nil {
+		return OperatorAutoApprovalLease{}, false, err
+	}
+	return lease, true, nil
+}
+
 func (s *SQLiteStore) RevokeOperatorAutoApprovalLeasesForScope(chatID int64, adminUserID int64, scopeKind string, scopeID string, now time.Time) ([]OperatorAutoApprovalLease, error) {
 	if chatID == 0 || adminUserID <= 0 {
 		return nil, nil

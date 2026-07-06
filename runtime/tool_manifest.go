@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/idolum-ai/aphelion/agent"
@@ -142,9 +141,9 @@ func toolLaneAllowlist(runKind session.TurnRunKind) map[string]struct{} {
 	case session.TurnRunKindHeartbeat, session.TurnRunKindCron:
 		names = []string{"update_plan", "update_operation", "operation_artifact", "memory", "session_search", "semantic_search"}
 	case session.TurnRunKindDoctor:
-		names = []string{"read_file", "list_dir", "search", "session_search", "semantic_search", "operation_artifact"}
+		names = []string{"read_file", "list_dir", "search", "system_log_read", "session_search", "semantic_search", "operation_artifact"}
 	case session.TurnRunKindRecovery:
-		names = []string{"read_file", "operation_artifact"}
+		names = []string{"read_file", "system_log_read", "operation_artifact"}
 	case session.TurnRunKindCuriosity:
 		names = []string{"read_file", "session_search", "semantic_search", "operation_artifact", "fetch_url"}
 	default:
@@ -173,6 +172,5 @@ func renderToolManifest(defs []agent.ToolDef) string {
 	if len(names) == 0 {
 		return ""
 	}
-	sort.Strings(names)
 	return strings.Join(names, ", ")
 }

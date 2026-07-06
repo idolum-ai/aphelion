@@ -3,11 +3,14 @@
 package tool
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
@@ -93,12 +96,17 @@ func seedVerifiedExternalToolLifecycle(t *testing.T, registry *Registry, store *
 }
 
 func toolDefExists(defs []agent.ToolDef, name string) bool {
+	_, ok := toolDefByName(defs, name)
+	return ok
+}
+
+func toolDefByName(defs []agent.ToolDef, name string) (agent.ToolDef, bool) {
 	for _, def := range defs {
 		if def.Name == name {
-			return true
+			return def, true
 		}
 	}
-	return false
+	return agent.ToolDef{}, false
 }
 
 func grantToolInvoke(t *testing.T, store *session.SQLiteStore, toolName string, principal string) {
@@ -126,12 +134,37 @@ func grantToolInvoke(t *testing.T, store *session.SQLiteStore, toolName string, 
 func grantAuthorityUseLease(t *testing.T, store *session.SQLiteStore, key session.SessionKey) {
 	t.Helper()
 
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-authority-use-"+session.SessionIDForKey(key))
+}
+
+func authorityRunContextForPrincipal(t *testing.T, store *session.SQLiteStore, key session.SessionKey, actor principal.Principal) context.Context {
+	t.Helper()
+
+	leaseID := fmt.Sprintf("lease-authority-use-%s-%d", session.SessionIDForKey(key), time.Now().UnixNano())
+	grantAuthorityUseLeaseWithID(t, store, key, leaseID)
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, actor, leaseID, session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "test_tool_invocation")
+	return ctx
+}
+
+func adminAuthorityRunContext(t *testing.T, store *session.SQLiteStore, key session.SessionKey) context.Context {
+	t.Helper()
+	return authorityRunContextForPrincipal(t, store, key, principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001})
+}
+
+func durableAgentAuthorityRunContext(t *testing.T, store *session.SQLiteStore, key session.SessionKey, agentID string) context.Context {
+	t.Helper()
+	return authorityRunContextForPrincipal(t, store, key, principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: strings.TrimSpace(agentID)})
+}
+
+func grantAuthorityUseLeaseWithID(t *testing.T, store *session.SQLiteStore, key session.SessionKey, leaseID string) {
+	t.Helper()
+
 	now := time.Now().UTC()
 	if err := store.UpdateContinuationState(key, session.ContinuationState{
 		Status:         session.ContinuationStatusApproved,
 		RemainingTurns: 1,
 		ContinuationLease: session.ContinuationLease{
-			ID:             "lease-authority-use-" + session.SessionIDForKey(key),
+			ID:             leaseID,
 			Status:         session.ContinuationLeaseStatusActive,
 			MaxTurns:       1,
 			RemainingTurns: 1,

@@ -617,14 +617,18 @@ The surface should stay small and role-shaped:
 - `Main`: interactive and recovery governor work
 - `Health`: diagnostic work
 - `Children`: default durable-child bootstrap work
+- `Status`: readable status summaries
+- `Heartbeat`: heartbeat outreach and reflection work
+- `Curiosity`: silent curiosity observations
 
 Slot overrides persist until changed or cleared. Clearing a slot returns it to
 the configured default. Runtime overrides should not mutate recipe files,
 constitutional files, or the base config on disk.
 
-OpenAI slots may expose `speed=fast`, which maps to the provider's priority
-service tier. Standard speed omits a service tier. Non-OpenAI slots should not
-show speed controls or accept fast mode.
+Status, heartbeat, and curiosity expose a `Cheap` preset that restores the
+install's cheap-lane default. OpenAI slots may expose `speed=fast`, which maps
+to the provider's priority service tier. Standard speed omits a service tier.
+Non-OpenAI slots should not show speed controls or accept fast mode.
 
 ## Outbound Delivery
 

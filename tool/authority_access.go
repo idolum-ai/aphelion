@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,6 +22,15 @@ import (
 func (r *Registry) authorityManagedTool(name string) bool {
 	_, ok := r.externalManifestByName(strings.TrimSpace(name))
 	return ok
+}
+
+func nativeFileAccessToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "read_file", "write_file", "list_dir", "search":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Registry) toolAuthorityAccessAllowed(toolName string, p principal.Principal) (bool, error) {
@@ -45,31 +55,39 @@ func (r *Registry) toolAuthorityAccessAllowed(toolName string, p principal.Princ
 	return allowedByGrant, nil
 }
 
-func (r *Registry) requireAuthorityToolAccess(name string, p principal.Principal, key session.SessionKey, input json.RawMessage) (session.CapabilityGrant, bool, error) {
+type authorityInvocationPermit struct {
+	InvocationID int64
+	Grant        session.CapabilityGrant
+	Principal    string
+	Action       string
+	UseRef       session.AuthorityUseRef
+}
+
+func (r *Registry) requireAuthorityToolAccess(ctx context.Context, name string, p principal.Principal, key session.SessionKey, input json.RawMessage) (session.CapabilityGrant, *authorityInvocationPermit, bool, error) {
 	name = strings.TrimSpace(name)
 	if !r.authorityManagedTool(name) {
-		return session.CapabilityGrant{}, false, nil
+		return session.CapabilityGrant{}, nil, false, nil
 	}
 	if r.store == nil {
-		return session.CapabilityGrant{}, false, fmt.Errorf("%s requires transcript store", name)
+		return session.CapabilityGrant{}, nil, false, fmt.Errorf("%s requires transcript store", name)
 	}
 	registered, ok, err := r.store.RegisteredTool(name)
 	if err != nil {
-		return session.CapabilityGrant{}, false, err
+		return session.CapabilityGrant{}, nil, false, err
 	}
 	if !ok || !registered.Registered {
-		return session.CapabilityGrant{}, false, fmt.Errorf("tool %q is not registered", name)
+		return session.CapabilityGrant{}, nil, false, fmt.Errorf("tool %q is not registered", name)
 	}
 	if len(toolAuthorityPrincipalKeys(p)) == 0 {
-		return session.CapabilityGrant{}, false, fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
+		return session.CapabilityGrant{}, nil, false, fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
 	}
 	grant, allowedByGrant, err := r.capabilityGrantAllowsAuthorityToolAccess(name, p)
 	if err != nil {
-		return session.CapabilityGrant{}, false, err
+		return session.CapabilityGrant{}, nil, false, err
 	}
 	if allowedByGrant {
 		principalID := toolAuthorityPrincipalDisplay(p)
-		useRef, useRefErr := r.authorityUseRefForGrant(name, key)
+		useRef, useRefErr := r.authorityUseRefForGrant(ctx, name, key, p)
 		if useRefErr != nil {
 			if _, recordErr := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
 				GrantID:   grant.GrantID,
@@ -78,9 +96,9 @@ func (r *Registry) requireAuthorityToolAccess(name string, p principal.Principal
 				Status:    "blocked",
 				ErrorText: useRefErr.Error(),
 			}, useRef)); recordErr != nil {
-				return session.CapabilityGrant{}, false, recordErr
+				return session.CapabilityGrant{}, nil, false, recordErr
 			}
-			return session.CapabilityGrant{}, false, useRefErr
+			return session.CapabilityGrant{}, nil, false, useRefErr
 		}
 		if err := validateCapabilityToolInvocationInput(grant, input); err != nil {
 			if _, recordErr := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
@@ -90,21 +108,32 @@ func (r *Registry) requireAuthorityToolAccess(name string, p principal.Principal
 				Status:    "blocked",
 				ErrorText: err.Error(),
 			}, useRef)); recordErr != nil {
-				return session.CapabilityGrant{}, false, recordErr
+				return session.CapabilityGrant{}, nil, false, recordErr
 			}
-			return session.CapabilityGrant{}, false, err
+			return session.CapabilityGrant{}, nil, false, err
 		}
-		if _, err := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
+		invocation, err := r.store.RecordCapabilityInvocation(capabilityInvocationWithAuthorityUseRef(session.CapabilityInvocation{
 			GrantID:   grant.GrantID,
 			Principal: principalID,
 			Action:    "invoke",
 			Status:    "allowed",
-		}, useRef)); err != nil {
-			return session.CapabilityGrant{}, false, err
+		}, useRef))
+		if err != nil {
+			return session.CapabilityGrant{}, nil, false, err
 		}
-		return grant, true, nil
+		return grant, &authorityInvocationPermit{
+			InvocationID: invocation.InvocationID,
+			Grant:        grant,
+			Principal:    principalID,
+			Action:       "invoke",
+			UseRef:       useRef,
+		}, true, nil
 	}
-	return session.CapabilityGrant{}, false, fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
+	cause := fmt.Errorf("tool %q is not granted to principal %q", name, toolAuthorityPrincipalDisplay(p))
+	return session.CapabilityGrant{}, nil, false, missingGrantError{
+		contract: genericMissingGrantContractForTool(name, p),
+		cause:    cause,
+	}
 }
 
 func capabilityInvocationWithAuthorityUseRef(invocation session.CapabilityInvocation, ref session.AuthorityUseRef) session.CapabilityInvocation {
@@ -117,40 +146,268 @@ func capabilityInvocationWithAuthorityUseRef(invocation session.CapabilityInvoca
 	return invocation
 }
 
-func (r *Registry) authorityUseRefForGrant(toolName string, key session.SessionKey) (session.AuthorityUseRef, error) {
+func (r *Registry) recordAuthorityManagedToolOutcome(permit *authorityInvocationPermit, status string, errText string) error {
+	if r == nil || r.store == nil || permit == nil || permit.InvocationID <= 0 {
+		return nil
+	}
+	_, err := r.store.CompleteCapabilityInvocation(permit.InvocationID, strings.TrimSpace(status), strings.TrimSpace(errText), time.Now().UTC())
+	return err
+}
+
+func (r *Registry) authorityUseRefForGrant(ctx context.Context, toolName string, key session.SessionKey, p principal.Principal) (session.AuthorityUseRef, error) {
 	ref := session.AuthorityUseRef{}
 	if !toolSessionKeyHasIdentity(key) {
 		return ref, fmt.Errorf("tool %q requires active turn lease evidence", strings.TrimSpace(toolName))
 	}
-	ref.SessionID = session.SessionIDForKey(key)
-	now := time.Now().UTC()
-	sources := []string{}
-
-	if state, exists, err := r.store.ContinuationStateIfExists(key); err != nil {
-		return ref, fmt.Errorf("load continuation lease evidence: %w", err)
-	} else if exists {
-		lease := session.NormalizeContinuationLease(state.ContinuationLease)
-		if lease.ActiveAt(now) && strings.TrimSpace(lease.ID) != "" {
-			ref.ContinuationLeaseID = lease.ID
-			sources = append(sources, "continuation_lease")
+	sessionID := session.SessionIDForKey(key)
+	if contextRef, ok := AuthorityUseRefFromContext(ctx); ok {
+		contextRef, err := r.validateContextAuthorityUseRef(toolName, key, sessionID, contextRef, p, time.Now().UTC())
+		if err != nil {
+			return ref, err
+		}
+		if authorityUseRefHasLeaseEvidence(contextRef) {
+			return contextRef, nil
 		}
 	}
+	return ref, fmt.Errorf("tool %q requires durable run authority evidence", strings.TrimSpace(toolName))
+}
 
-	if _, operation, exists, err := r.store.PlanAndOperationStateIfExists(key); err != nil {
-		return ref, fmt.Errorf("load operation plan lease evidence: %w", err)
-	} else if exists {
-		lease := session.NormalizeOperationPlanLease(operation.PlanLease)
-		if operationPlanLeaseUsableForGrantUse(lease, now) {
-			ref.OperationPlanLeaseID = lease.ID
-			sources = append(sources, "operation_plan_lease")
+func (r *Registry) validateContextAuthorityUseRef(toolName string, key session.SessionKey, sessionID string, ref session.AuthorityUseRef, p principal.Principal, now time.Time) (session.AuthorityUseRef, error) {
+	ref = session.NormalizeAuthorityUseRef(ref)
+	sessionID = strings.TrimSpace(sessionID)
+	if strings.TrimSpace(ref.SessionID) == "" {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence must include a session_id", strings.TrimSpace(toolName))
+	}
+	if ref.SessionID != sessionID {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence belongs to session %q, not %q", strings.TrimSpace(toolName), strings.TrimSpace(ref.SessionID), sessionID)
+	}
+	if ref.TurnRunID <= 0 {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence must include turn_run_id", strings.TrimSpace(toolName))
+	}
+	record, ok, err := r.store.ExecutionRunAuthority(ref.TurnRunID)
+	if err != nil {
+		return session.AuthorityUseRef{}, fmt.Errorf("load execution run authority: %w", err)
+	}
+	if !ok {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q execution run authority %d is not durable", strings.TrimSpace(toolName), ref.TurnRunID)
+	}
+	if record.SessionID != sessionID {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q execution run authority belongs to session %q, not %q", strings.TrimSpace(toolName), record.SessionID, sessionID)
+	}
+	run, err := r.store.TurnRun(record.TurnRunID)
+	if err != nil {
+		return session.AuthorityUseRef{}, fmt.Errorf("load execution authority turn run: %w", err)
+	}
+	if run.SessionID != sessionID {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q execution authority turn run belongs to session %q, not %q", strings.TrimSpace(toolName), run.SessionID, sessionID)
+	}
+	if run.Status != session.TurnRunStatusRunning {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q execution authority turn run %d is %s", strings.TrimSpace(toolName), run.ID, run.Status)
+	}
+	if !executionRunAuthorityPrincipalMatches(record, p) {
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q execution run authority principal %q does not match %q", strings.TrimSpace(toolName), record.Principal, toolAuthorityPrincipalDisplay(p))
+	}
+	validated := session.AuthorityUseRef{SessionID: sessionID, TurnRunID: ref.TurnRunID}
+	switch record.LeaseKind {
+	case session.ExecutionAuthorityLeaseKindContinuation:
+		if strings.TrimSpace(ref.OperationPlanLeaseID) != "" {
+			return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence includes an operation plan lease outside the run authority", strings.TrimSpace(toolName))
+		}
+		if ref.ContinuationLeaseID != "" && ref.ContinuationLeaseID != record.ContinuationLeaseID {
+			return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence continuation lease does not match run authority", strings.TrimSpace(toolName))
+		}
+		if ref.AuthoritySource != "" && ref.AuthoritySource != session.ExecutionAuthorityLeaseKindContinuation {
+			return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence source does not match run authority", strings.TrimSpace(toolName))
+		}
+		if err := r.validateContinuationAuthorityUseRefForRun(key, record, now); err != nil {
+			return session.AuthorityUseRef{}, err
+		}
+		validated.ContinuationLeaseID = record.ContinuationLeaseID
+		validated.AuthoritySource = session.ExecutionAuthorityLeaseKindContinuation
+	case session.ExecutionAuthorityLeaseKindOperationPlan:
+		if strings.TrimSpace(ref.ContinuationLeaseID) != "" {
+			return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence includes a continuation lease outside the run authority", strings.TrimSpace(toolName))
+		}
+		if ref.OperationPlanLeaseID != "" && ref.OperationPlanLeaseID != record.OperationPlanLeaseID {
+			return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence operation plan lease does not match run authority", strings.TrimSpace(toolName))
+		}
+		if ref.AuthoritySource != "" && ref.AuthoritySource != session.ExecutionAuthorityLeaseKindOperationPlan {
+			return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence source does not match run authority", strings.TrimSpace(toolName))
+		}
+		if err := r.validateOperationPlanAuthorityUseRef(key, record.OperationPlanLeaseID, now); err != nil {
+			return session.AuthorityUseRef{}, err
+		}
+		validated.OperationPlanLeaseID = record.OperationPlanLeaseID
+		validated.AuthoritySource = session.ExecutionAuthorityLeaseKindOperationPlan
+	case session.ExecutionAuthorityLeaseKindChildTask:
+		if strings.TrimSpace(ref.ContinuationLeaseID) != "" || strings.TrimSpace(ref.OperationPlanLeaseID) != "" {
+			return session.AuthorityUseRef{}, fmt.Errorf("tool %q child task authority evidence must not include continuation or operation plan lease ids", strings.TrimSpace(toolName))
+		}
+		if ref.AuthoritySource != "" && ref.AuthoritySource != session.ExecutionAuthorityLeaseKindChildTask {
+			return session.AuthorityUseRef{}, fmt.Errorf("tool %q authority evidence source does not match run authority", strings.TrimSpace(toolName))
+		}
+		if err := r.validateChildTaskAttemptAuthorityUseRef(key, record, now); err != nil {
+			return session.AuthorityUseRef{}, err
+		}
+		validated.AuthoritySource = session.ExecutionAuthorityLeaseKindChildTask
+	default:
+		return session.AuthorityUseRef{}, fmt.Errorf("tool %q execution run authority has unsupported lease kind %q", strings.TrimSpace(toolName), record.LeaseKind)
+	}
+	return session.NormalizeAuthorityUseRef(validated), nil
+}
+
+func executionRunAuthorityPrincipalMatches(record session.ExecutionRunAuthority, p principal.Principal) bool {
+	want := strings.TrimSpace(record.Principal)
+	if want == "" {
+		return false
+	}
+	for _, candidate := range append(toolAuthorityPrincipalKeys(p), toolAuthorityPrincipalDisplay(p)) {
+		if strings.TrimSpace(candidate) == want {
+			return true
 		}
 	}
+	return false
+}
 
-	if len(sources) == 0 {
-		return ref, fmt.Errorf("tool %q requires active continuation or operation plan lease evidence", strings.TrimSpace(toolName))
+func toolAuthorityCanonicalPrincipal(p principal.Principal) string {
+	keys := toolAuthorityPrincipalKeys(p)
+	if len(keys) > 0 {
+		return strings.TrimSpace(keys[0])
 	}
-	ref.AuthoritySource = strings.Join(sources, "+")
-	return session.NormalizeAuthorityUseRef(ref), nil
+	return toolAuthorityPrincipalDisplay(p)
+}
+
+func (r *Registry) validateContinuationAuthorityUseRef(key session.SessionKey, leaseID string, now time.Time) error {
+	return r.validateContinuationAuthorityUseRefForRun(key, session.ExecutionRunAuthority{ContinuationLeaseID: leaseID}, now)
+}
+
+func (r *Registry) validateContinuationAuthorityUseRefForRun(key session.SessionKey, record session.ExecutionRunAuthority, now time.Time) error {
+	leaseID := strings.TrimSpace(record.ContinuationLeaseID)
+	state, exists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("load continuation lease evidence: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("continuation lease evidence %q is not durable for this session", strings.TrimSpace(leaseID))
+	}
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	if strings.TrimSpace(lease.ID) != strings.TrimSpace(leaseID) {
+		return fmt.Errorf("continuation lease evidence %q does not match current session lease", strings.TrimSpace(leaseID))
+	}
+	if continuationLeaseValidForExecutionRun(lease, record, now) {
+		return nil
+	}
+	return fmt.Errorf("continuation lease evidence %q is not active", strings.TrimSpace(leaseID))
+}
+
+func continuationLeaseValidForExecutionRun(lease session.ContinuationLease, record session.ExecutionRunAuthority, now time.Time) bool {
+	lease = session.NormalizeContinuationLease(lease)
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if !lease.ExpiresAt.IsZero() && !lease.ExpiresAt.After(now.UTC()) {
+		return false
+	}
+	if lease.ActiveAt(now) {
+		return true
+	}
+	if lease.Status != session.ContinuationLeaseStatusConsumed {
+		return false
+	}
+	if session.ContinuationLeaseStatus(record.LeaseStatus) != session.ContinuationLeaseStatusActive {
+		return false
+	}
+	if record.LeaseRemainingTurns <= 0 {
+		return false
+	}
+	return true
+}
+
+func (r *Registry) validateOperationPlanAuthorityUseRef(key session.SessionKey, leaseID string, now time.Time) error {
+	_, operation, exists, err := r.store.PlanAndOperationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("load operation plan lease evidence: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("operation plan lease evidence %q is not durable for this session", strings.TrimSpace(leaseID))
+	}
+	lease := session.NormalizeOperationPlanLease(operation.PlanLease)
+	if strings.TrimSpace(lease.ID) != strings.TrimSpace(leaseID) {
+		return fmt.Errorf("operation plan lease evidence %q does not match current session lease", strings.TrimSpace(leaseID))
+	}
+	if !operationPlanLeaseUsableForGrantUse(lease, now) {
+		return fmt.Errorf("operation plan lease evidence %q is not active", strings.TrimSpace(leaseID))
+	}
+	return nil
+}
+
+func (r *Registry) validateChildTaskAttemptAuthorityUseRef(key session.SessionKey, record session.ExecutionRunAuthority, now time.Time) error {
+	constraints := record.LeaseConstraints
+	packetID := strings.TrimSpace(constraints["packet_id"])
+	attemptID := strings.TrimSpace(constraints["attempt_id"])
+	leaseOwner := strings.TrimSpace(constraints["lease_owner"])
+	fencingToken := strings.TrimSpace(constraints["fencing_token"])
+	agentID := strings.TrimSpace(constraints["agent_id"])
+	leaseGeneration, err := parsePositiveInt64Constraint(constraints["lease_generation"])
+	if err != nil {
+		return fmt.Errorf("child task authority generation: %w", err)
+	}
+	packet, ok, err := r.store.ChildTaskPacket(packetID)
+	if err != nil {
+		return fmt.Errorf("load child task authority packet: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("child task authority packet %q is not durable", packetID)
+	}
+	if packet.SessionID != session.SessionIDForKey(key) {
+		return fmt.Errorf("child task authority packet %q belongs to session %q, not %q", packetID, packet.SessionID, session.SessionIDForKey(key))
+	}
+	if packet.AgentID != agentID {
+		return fmt.Errorf("child task authority packet %q belongs to agent %q, not %q", packetID, packet.AgentID, agentID)
+	}
+	if !childTaskAuthorityPacketLive(packet, attemptID, leaseOwner, leaseGeneration, fencingToken, now) {
+		return fmt.Errorf("child task authority packet %q attempt %q does not own a live task lease", packetID, attemptID)
+	}
+	return nil
+}
+
+func parsePositiveInt64Constraint(raw string) (int64, error) {
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("expected positive integer, got %q", strings.TrimSpace(raw))
+	}
+	return value, nil
+}
+
+func childTaskAuthorityPacketLive(packet session.ChildTaskPacket, attemptID string, leaseOwner string, leaseGeneration int64, fencingToken string, now time.Time) bool {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	if packet.Status != session.ChildTaskPacketInProgress {
+		return false
+	}
+	if packet.ActiveAttemptID != strings.TrimSpace(attemptID) ||
+		packet.LeaseOwner != strings.TrimSpace(leaseOwner) ||
+		packet.LeaseGeneration != leaseGeneration ||
+		packet.FencingToken != strings.TrimSpace(fencingToken) {
+		return false
+	}
+	return packet.LeaseReleasedAt.IsZero() &&
+		!packet.LeaseExpiresAt.IsZero() &&
+		packet.LeaseExpiresAt.After(now)
+}
+
+func authorityUseRefHasLeaseEvidence(ref session.AuthorityUseRef) bool {
+	ref = session.NormalizeAuthorityUseRef(ref)
+	if strings.TrimSpace(ref.AuthoritySource) == "" {
+		return false
+	}
+	if ref.AuthoritySource == session.ExecutionAuthorityLeaseKindChildTask {
+		return ref.TurnRunID > 0
+	}
+	return strings.TrimSpace(ref.ContinuationLeaseID) != "" || strings.TrimSpace(ref.OperationPlanLeaseID) != ""
 }
 
 func operationPlanLeaseUsableForGrantUse(lease session.OperationPlanLease, now time.Time) bool {
@@ -174,30 +431,7 @@ func toolSessionKeyHasIdentity(key session.SessionKey) bool {
 }
 
 func (r *Registry) capabilityGrantAllowsAuthorityToolAccess(toolName string, p principal.Principal) (session.CapabilityGrant, bool, error) {
-	if r == nil || r.store == nil {
-		return session.CapabilityGrant{}, false, nil
-	}
-	candidates := append([]string{}, toolAuthorityPrincipalKeys(p)...)
-	candidates = append(candidates, toolAuthorityPrincipalDisplay(p))
-	seen := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		if _, ok := seen[candidate]; ok {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		grant, ok, err := r.store.ActiveCapabilityGrant(session.CapabilityKindTool, toolName, candidate, "invoke")
-		if err != nil {
-			return session.CapabilityGrant{}, false, err
-		}
-		if ok {
-			return grant, true, nil
-		}
-	}
-	return session.CapabilityGrant{}, false, nil
+	return r.activeGrantForMissingGrantContract(genericMissingGrantContractForTool(toolName, p), nil)
 }
 
 func toolAuthorityPrincipalKeys(p principal.Principal) []string {
@@ -232,6 +466,10 @@ func toolAuthorityPrincipalKeys(p principal.Principal) []string {
 		out = append(out, key)
 	}
 	return out
+}
+
+func toolAuthorityPrincipalIDs(p principal.Principal) []string {
+	return normalizeUniqueStrings(append(toolAuthorityPrincipalKeys(p), toolAuthorityPrincipalDisplay(p)))
 }
 
 func toolAuthorityPrincipalDisplay(p principal.Principal) string {

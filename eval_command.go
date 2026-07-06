@@ -48,6 +48,8 @@ func runEvalCommandWithDeps(args []string, out io.Writer) error {
 		return runEvalListCommand(args[1:], out)
 	case "run":
 		return runEvalRunCommand(args[1:], out)
+	case "model-bakeoff":
+		return runEvalModelBakeoffCommand(args[1:], out)
 	case "attack-corpus":
 		return runEvalAttackCorpusCommand(args[1:], out)
 	case "compare":
@@ -142,8 +144,8 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 	if attackCorpusPath == "" && *maxAttacksPerScenarioFlag > 0 {
 		return fmt.Errorf("--max-attacks-per-scenario requires --attack-corpus")
 	}
-	if !strings.EqualFold(strings.TrimSpace(*suiteFlag), aphruntime.EvalSuiteBoundaryAttack) && evalAttackerRoutesFlagRequestsExplicit(*attackerRoutesFlag) {
-		return fmt.Errorf("--attacker-routes is only supported with --suite boundary_attack")
+	if !evalCommandSuiteUsesBoundaryAttack(*suiteFlag) && evalAttackerRoutesFlagRequestsExplicit(*attackerRoutesFlag) {
+		return fmt.Errorf("--attacker-routes is only supported with --suite boundary_attack or challenge")
 	}
 	routes, err := evalRoutesForCommand(mode, *routesFlag, *configFlag)
 	if err != nil {
@@ -162,8 +164,8 @@ func runEvalRunCommand(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if !strings.EqualFold(strings.TrimSpace(*suiteFlag), aphruntime.EvalSuiteBoundaryAttack) && len(attackerRoutes) > 0 {
-			return fmt.Errorf("--attacker-routes is only supported with --suite boundary_attack")
+		if !evalCommandSuiteUsesBoundaryAttack(*suiteFlag) && len(attackerRoutes) > 0 {
+			return fmt.Errorf("--attacker-routes is only supported with --suite boundary_attack or challenge")
 		}
 	}
 	judgeRoutes, err := evalJudgeRoutesForCommand(mode, *scoringFlag, *judgeRoutesFlag, *configFlag)
@@ -230,6 +232,15 @@ func evalAttackerRoutesFlagRequestsExplicit(spec string) bool {
 		}
 	}
 	return false
+}
+
+func evalCommandSuiteUsesBoundaryAttack(suite string) bool {
+	switch strings.ToLower(strings.TrimSpace(suite)) {
+	case aphruntime.EvalSuiteBoundaryAttack, aphruntime.EvalSuiteChallenge:
+		return true
+	default:
+		return false
+	}
 }
 
 func runEvalAttackCorpusCommand(args []string, out io.Writer) error {
@@ -953,13 +964,15 @@ func evalReportFailureError(report aphruntime.EvalReport) error {
 }
 
 func renderEvalCommandHelp(note string) string {
-	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical|trajectory|boundary_attack] [--format human|kv|json]", "  aphelion eval run [--suite canonical|trajectory|boundary_attack] [--mode local|live] [--subject eval|governor] [--rollouts N] [--jobs N] [--routes configured|provider:model,...] [--attacker-routes subject|configured|provider:model,...] [--attack-corpus corpus.json] [--max-attacks-per-scenario N] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval attack-corpus generate [--mode local|live] [--profile boundary|redteam] [--attacker-routes configured|provider:model,...] [--scenario id[,id]] [--per-scenario N] [--jobs N] [--progress] [--out corpus.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
+	lines := []string{"Aphelion eval", "Usage:", "  aphelion eval list [--suite canonical|trajectory|boundary_attack|challenge] [--format human|kv|json]", "  aphelion eval run [--suite canonical|trajectory|boundary_attack|challenge] [--mode local|live] [--subject eval|governor] [--rollouts N] [--jobs N] [--routes configured|provider:model,...] [--attacker-routes subject|configured|provider:model,...] [--attack-corpus corpus.json] [--max-attacks-per-scenario N] [--scenario id[,id]] [--scoring deterministic|judge] [--judge-routes configured|provider:model,...] [--judge-quorum pair|single] [--trace redacted|minimal] [--progress] [--format human|kv|json] [--out report.json]", "  aphelion eval model-bakeoff [--role governor] [--suites canonical,trajectory,boundary_attack,challenge] [--mode local|live] [--routes configured|provider:model,...] [--efforts low,medium,high] [--rollouts N] [--jobs N] [--confirm-live-cost] [--format human|markdown|json] [--out report.json]", "  aphelion eval attack-corpus generate [--mode local|live] [--profile boundary|redteam] [--attacker-routes configured|provider:model,...] [--scenario id[,id]] [--per-scenario N] [--jobs N] [--progress] [--out corpus.json]", "  aphelion eval compare --before baseline.json --after branch.json [--format markdown|json] [--out impact.md]", "  aphelion eval gate --before base1.json,base2.json --after branch1.json,branch2.json [--format markdown|json] [--out gate.md]", ""}
 	if note = strings.TrimSpace(note); note != "" {
 		lines = append([]string{note, ""}, lines...)
 	}
 	lines = append(lines,
 		"Local mode uses deterministic scripted providers and simulated external effects.",
 		"Live mode uses configured provider routes but still simulates GitHub, deploy, Tailscale, child, and private-content effects.",
+		"model-bakeoff reports evidence for per-role model selection; v1 is runnable for governor and changes no model-slot config.",
+		"model-bakeoff --efforts expands subject routes by governor reasoning effort; attacker and judge routes keep their own reasoning policy.",
 		"boundary_attack adds transcript-driven attacker turns; --attacker-routes subject reuses the subject route without multiplying jobs.",
 		"attack-corpus generate spends attacker tokens once; eval run --attack-corpus replays fixed attacks without attacker-provider calls.",
 		"--jobs bounds the worker pool across route/scenario/rollout eval jobs; it does not parallelize within one eval job.",

@@ -12,4 +12,6 @@ func TestFreshSchemaIncludesScopedAutoIndexes(t *testing.T) {
 
 	assertSQLiteIndex(t, store.db, "idx_operator_auto_approvals_scope_active")
 	assertSQLiteIndex(t, store.db, "idx_operator_autonomy_overrides_scope_active")
+	assertSQLiteIndex(t, store.db, "idx_judgment_uses_session_updated")
+	assertSQLiteIndex(t, store.db, "idx_judgment_uses_result")
 }

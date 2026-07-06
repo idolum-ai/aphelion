@@ -216,6 +216,19 @@ func (s *stubCommandRouter) TailnetGrantBindings(senderID int64) ([]core.Tailnet
 	return append([]core.TailnetGrantBindingStatus(nil), s.tailnetGrantBindings...), nil
 }
 
+func (s *stubCommandRouter) AuthorityFrontierStatus(ctx context.Context, senderID int64) (core.AuthorityFrontierStatusSnapshot, error) {
+	_ = ctx
+	s.authorityFrontierSenderID = senderID
+	if s.authorityFrontierStatusErr != nil {
+		return core.AuthorityFrontierStatusSnapshot{}, s.authorityFrontierStatusErr
+	}
+	snapshot := s.authorityFrontierStatus
+	if snapshot.AdminChatID == 0 {
+		snapshot.AdminChatID = senderID
+	}
+	return snapshot, nil
+}
+
 func (s *stubCommandRouter) RevokeTailnetSurface(ctx context.Context, senderID int64, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error) {
 	_ = ctx
 	s.revokeTailnetSurfaceSenderID = senderID

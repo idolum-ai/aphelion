@@ -10,12 +10,13 @@ import (
 type ReentryRecommendationStatus string
 
 const (
-	ReentryRecommendationStatusPending  ReentryRecommendationStatus = "pending"
-	ReentryRecommendationStatusShown    ReentryRecommendationStatus = "shown"
-	ReentryRecommendationStatusSelected ReentryRecommendationStatus = "selected"
-	ReentryRecommendationStatusIgnored  ReentryRecommendationStatus = "ignored"
-	ReentryRecommendationStatusStale    ReentryRecommendationStatus = "stale"
-	ReentryRecommendationStatusExpired  ReentryRecommendationStatus = "expired"
+	ReentryRecommendationStatusPending    ReentryRecommendationStatus = "pending"
+	ReentryRecommendationStatusShown      ReentryRecommendationStatus = "shown"
+	ReentryRecommendationStatusSelected   ReentryRecommendationStatus = "selected"
+	ReentryRecommendationStatusIgnored    ReentryRecommendationStatus = "ignored"
+	ReentryRecommendationStatusStale      ReentryRecommendationStatus = "stale"
+	ReentryRecommendationStatusExpired    ReentryRecommendationStatus = "expired"
+	ReentryRecommendationStatusSuppressed ReentryRecommendationStatus = "suppressed"
 )
 
 type ReentryCandidateKind string
@@ -34,8 +35,12 @@ type ReentryRecommendationCandidate struct {
 	ID               string               `json:"id"`
 	Kind             ReentryCandidateKind `json:"kind"`
 	Label            string               `json:"label"`
+	BodyText         string               `json:"body_text,omitempty"`
 	Summary          string               `json:"summary,omitempty"`
 	PromptText       string               `json:"prompt_text"`
+	IntentClass      string               `json:"intent_class,omitempty"`
+	TemporalFit      string               `json:"temporal_fit,omitempty"`
+	WhyNow           string               `json:"why_now,omitempty"`
 	AuthorityClass   string               `json:"authority_class,omitempty"`
 	RequiresApproval bool                 `json:"requires_approval,omitempty"`
 	BasisRefs        []string             `json:"basis_refs,omitempty"`
@@ -44,6 +49,7 @@ type ReentryRecommendationCandidate struct {
 	EvidenceRefs     []string             `json:"evidence_refs,omitempty"`
 	Scores           map[string]float64   `json:"scores,omitempty"`
 	JudgmentReason   string               `json:"judgment_reason,omitempty"`
+	DampeningKey     string               `json:"dampening_key,omitempty"`
 }
 
 type ReentryRecommendation struct {
@@ -88,6 +94,8 @@ func NormalizeReentryRecommendationStatus(status ReentryRecommendationStatus) Re
 		return ReentryRecommendationStatusStale
 	case ReentryRecommendationStatusExpired:
 		return ReentryRecommendationStatusExpired
+	case ReentryRecommendationStatusSuppressed:
+		return ReentryRecommendationStatusSuppressed
 	default:
 		return ReentryRecommendationStatusPending
 	}
@@ -95,7 +103,7 @@ func NormalizeReentryRecommendationStatus(status ReentryRecommendationStatus) Re
 
 func ReentryRecommendationStatusTerminal(status ReentryRecommendationStatus) bool {
 	switch NormalizeReentryRecommendationStatus(status) {
-	case ReentryRecommendationStatusSelected, ReentryRecommendationStatusIgnored, ReentryRecommendationStatusStale, ReentryRecommendationStatusExpired:
+	case ReentryRecommendationStatusSelected, ReentryRecommendationStatusIgnored, ReentryRecommendationStatusStale, ReentryRecommendationStatusExpired, ReentryRecommendationStatusSuppressed:
 		return true
 	default:
 		return false
@@ -127,8 +135,12 @@ func NormalizeReentryRecommendationCandidate(candidate ReentryRecommendationCand
 	candidate.ID = strings.TrimSpace(candidate.ID)
 	candidate.Kind = NormalizeReentryCandidateKind(candidate.Kind)
 	candidate.Label = strings.TrimSpace(candidate.Label)
+	candidate.BodyText = strings.TrimSpace(candidate.BodyText)
 	candidate.Summary = strings.TrimSpace(candidate.Summary)
 	candidate.PromptText = strings.TrimSpace(candidate.PromptText)
+	candidate.IntentClass = strings.TrimSpace(candidate.IntentClass)
+	candidate.TemporalFit = strings.TrimSpace(candidate.TemporalFit)
+	candidate.WhyNow = strings.TrimSpace(candidate.WhyNow)
 	candidate.AuthorityClass = strings.TrimSpace(candidate.AuthorityClass)
 	candidate.BasisRefs = normalizeMissionStringSlice(candidate.BasisRefs)
 	candidate.SourceKind = strings.TrimSpace(candidate.SourceKind)
@@ -136,6 +148,7 @@ func NormalizeReentryRecommendationCandidate(candidate ReentryRecommendationCand
 	candidate.EvidenceRefs = normalizeMissionStringSlice(candidate.EvidenceRefs)
 	candidate.Scores = normalizeReentryCandidateScores(candidate.Scores)
 	candidate.JudgmentReason = strings.TrimSpace(candidate.JudgmentReason)
+	candidate.DampeningKey = strings.TrimSpace(candidate.DampeningKey)
 	return candidate
 }
 

@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -102,6 +103,232 @@ func TestHandleInboundApprovedUserUsesPrincipalAwareToolsWhenSupported(t *testin
 	}
 	if tools.lastPrincipal.TelegramUserID != 1002 {
 		t.Fatalf("last principal user id = %d, want 1002", tools.lastPrincipal.TelegramUserID)
+	}
+}
+
+func TestHandleInboundProjectsSensitiveToolOutputBeforeModelContext(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &toolRequestingProvider{}
+	secret := "github_pat_1234567890abcdef"
+	tools := &principalRecordingTools{
+		defs:              []agent.ToolDef{testExecToolDef()},
+		supportsPrincipal: true,
+		output:            "stdout:\n" + secret + "\npath: /workspace/credential-slot\n",
+	}
+
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+
+	key := session.SessionKey{ChatID: 504, UserID: 0}
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     key.ChatID,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "run sensitive output probe",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	if strings.Contains(provider.lastToolOutput, secret) || strings.Contains(provider.lastToolOutput, "/workspace/credential-slot") {
+		t.Fatalf("model-facing tool output leaked raw protected material: %q", provider.lastToolOutput)
+	}
+	if strings.Contains(provider.lastToolOutput, "[EXPOSURE_PROJECTION]") || strings.Contains(provider.lastToolOutput, "policy_ref:") {
+		t.Fatalf("model-facing tool output carried in-band exposure header: %q", provider.lastToolOutput)
+	}
+	if !strings.Contains(provider.lastToolOutput, "tool_output_protected") {
+		t.Fatalf("model-facing tool output = %q, want protected projection marker", provider.lastToolOutput)
+	}
+
+	run, err := store.LatestTurnRun(key)
+	if err != nil {
+		t.Fatalf("LatestTurnRun() err = %v", err)
+	}
+	projections, err := store.ExposureProjectionsByTurnRun(key, run.ID, 10)
+	if err != nil {
+		t.Fatalf("ExposureProjectionsByTurnRun() err = %v", err)
+	}
+	var modelProjection session.ExposureProjectionRecord
+	var operatorProjection session.ExposureProjectionRecord
+	for _, projection := range projections {
+		switch projection.Audience {
+		case session.ExposureAudienceModelPreview:
+			modelProjection = projection
+		case session.ExposureAudienceOperator:
+			operatorProjection = projection
+		}
+	}
+	if modelProjection.ProjectionKind != session.ExposureProjectionProtectedRef || modelProjection.ProtectedEvidenceRef == "" {
+		t.Fatalf("model projection = %#v, want protected_ref with evidence ref", modelProjection)
+	}
+	if operatorProjection.ProjectionKind != session.ExposureProjectionProtectedRef || operatorProjection.ProtectedEvidenceRef == "" {
+		t.Fatalf("operator projection = %#v, want protected_ref with evidence ref", operatorProjection)
+	}
+	if !containsString(modelProjection.SensitivityProvenance, "pattern:github_token") {
+		t.Fatalf("model projection provenance = %#v, want github token pattern", modelProjection.SensitivityProvenance)
+	}
+	if modelProjection.ProjectedText == operatorProjection.ProjectedText {
+		t.Fatalf("model/operator projections should differ by audience, both = %q", modelProjection.ProjectedText)
+	}
+	if provider.lastToolOutput != modelProjection.ProjectedText {
+		t.Fatalf("model-facing output = %q, want model projection %q", provider.lastToolOutput, modelProjection.ProjectedText)
+	}
+	events, err := store.ExecutionEventsByTurnRun(key, run.ID, 20)
+	if err != nil {
+		t.Fatalf("ExecutionEventsByTurnRun() err = %v", err)
+	}
+	var succeededPayload map[string]any
+	for _, event := range events {
+		if event.EventType != core.ExecutionEventToolSucceeded {
+			continue
+		}
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &succeededPayload); err != nil {
+			t.Fatalf("tool succeeded payload json: %v", err)
+		}
+		break
+	}
+	if succeededPayload == nil {
+		t.Fatalf("events = %#v, want tool.succeeded event", events)
+	}
+	if succeededPayload["result_preview"] != modelProjection.ProjectedText {
+		t.Fatalf("result_preview = %#v, want model projection %q", succeededPayload["result_preview"], modelProjection.ProjectedText)
+	}
+	if succeededPayload["operator_result_preview"] != operatorProjection.ProjectedText {
+		t.Fatalf("operator_result_preview = %#v, want operator projection %q", succeededPayload["operator_result_preview"], operatorProjection.ProjectedText)
+	}
+	for _, leaked := range []string{secret, "/workspace/credential-slot"} {
+		if strings.Contains(succeededPayload["result_preview"].(string), leaked) || strings.Contains(succeededPayload["operator_result_preview"].(string), leaked) {
+			t.Fatalf("tool succeeded projection previews leaked %q: %#v", leaked, succeededPayload)
+		}
+	}
+}
+
+func TestHandleInboundProjectsToolFailureOutputAndErrorAtBoundary(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, _, sender := buildRuntimeFixtures(t)
+	provider := &toolRequestingProvider{}
+	outputToken := "github_pat_output1234567890abcdef"
+	errorToken := "error-bearer-secret-value"
+	outputPath := "/workspace/credential-output"
+	errorPath := "/workspace/credential-error"
+	providerFragment := "provider=openai request_id=req_secret_fragment"
+	tools := &principalRecordingTools{
+		defs:              []agent.ToolDef{testExecToolDef()},
+		supportsPrincipal: true,
+		output:            "stdout:\n" + outputToken + "\npath: " + outputPath + "\n",
+		err:               newPrincipalRecordingToolError("tool failed Authorization: Bearer " + errorToken + " path: " + errorPath + " " + providerFragment),
+	}
+
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	rt.faceBackend = face.BackendFloorFallback
+
+	key := session.SessionKey{ChatID: 505, UserID: 0}
+	_, err = rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:     key.ChatID,
+		SenderID:   1001,
+		SenderName: "admin",
+		Text:       "run failing sensitive output probe",
+		MessageID:  1,
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound() err = %v", err)
+	}
+	for _, leaked := range []string{outputToken, errorToken, outputPath, errorPath, providerFragment, "Authorization: Bearer"} {
+		if strings.Contains(provider.lastToolOutput, leaked) {
+			t.Fatalf("model-facing failure leaked %q: %s", leaked, provider.lastToolOutput)
+		}
+	}
+	var failure map[string]any
+	if err := json.Unmarshal([]byte(provider.lastToolOutput), &failure); err != nil {
+		t.Fatalf("model-facing failure json: %v\n%s", err, provider.lastToolOutput)
+	}
+	for _, field := range []string{"safe_summary", "failure_class", "retry_policy", "policy_ref", "protected_evidence_ref"} {
+		if strings.TrimSpace(asString(failure[field])) == "" {
+			t.Fatalf("failure payload missing %s: %#v", field, failure)
+		}
+	}
+	if failure["ok"] != false {
+		t.Fatalf("failure ok = %#v, want false", failure["ok"])
+	}
+	if failure["policy_ref"] != session.ExposureProjectionPolicyToolOutputV1 {
+		t.Fatalf("policy_ref = %#v, want exposure policy", failure["policy_ref"])
+	}
+	protectedRef := asString(failure["protected_evidence_ref"])
+
+	protected, ok, err := store.EvidenceObject(protectedRef)
+	if err != nil || !ok {
+		t.Fatalf("EvidenceObject(%s) ok=%t err=%v", protectedRef, ok, err)
+	}
+	if protected.RedactionClass != session.EvidenceRedactionBlocked {
+		t.Fatalf("protected redaction class = %q, want non_hydratable", protected.RedactionClass)
+	}
+	for _, want := range []string{outputToken, errorToken, outputPath, errorPath, providerFragment} {
+		if !strings.Contains(protected.PayloadJSON, want) {
+			t.Fatalf("protected payload missing raw failure detail %q: %s", want, protected.PayloadJSON)
+		}
+	}
+	hydrated, err := store.HydrateEvidence(session.EvidenceHydrationQuery{
+		Key:                 key,
+		Query:               "inspect protected failure",
+		RequiredEvidenceIDs: []string{protectedRef},
+		Limit:               10,
+	})
+	if err != nil {
+		t.Fatalf("HydrateEvidence() err = %v", err)
+	}
+	if len(hydrated.Required) != 1 || strings.TrimSpace(hydrated.Required[0].PayloadJSON) != "{}" {
+		t.Fatalf("hydrated required = %#v, want protected metadata with empty payload", hydrated.Required)
+	}
+
+	run, err := store.LatestTurnRun(key)
+	if err != nil {
+		t.Fatalf("LatestTurnRun() err = %v", err)
+	}
+	events, err := store.ExecutionEventsByTurnRun(key, run.ID, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsByTurnRun() err = %v", err)
+	}
+	var failedPayload map[string]any
+	for _, event := range events {
+		if event.EventType != core.ExecutionEventToolFailed {
+			continue
+		}
+		if err := json.Unmarshal([]byte(event.PayloadJSON), &failedPayload); err != nil {
+			t.Fatalf("tool failed payload json: %v", err)
+		}
+		break
+	}
+	if failedPayload == nil {
+		t.Fatalf("events = %#v, want tool.failed", events)
+	}
+	eventRaw, _ := json.Marshal(failedPayload)
+	for _, leaked := range []string{outputToken, errorToken, outputPath, errorPath, providerFragment, "Authorization: Bearer"} {
+		if strings.Contains(string(eventRaw), leaked) {
+			t.Fatalf("tool.failed event leaked %q: %s", leaked, eventRaw)
+		}
+	}
+	resultPreview := asString(failedPayload["result_preview"])
+	if !strings.Contains(resultPreview, `"safe_summary"`) || strings.Contains(resultPreview, "short_reason") {
+		t.Fatalf("result_preview = %q, want projected failure object", resultPreview)
+	}
+	if asString(failedPayload["error"]) != asString(failure["safe_summary"]) {
+		t.Fatalf("event error = %#v, want safe summary %#v", failedPayload["error"], failure["safe_summary"])
+	}
+	eventFailure, ok := failedPayload["failure_projection"].(map[string]any)
+	if !ok {
+		t.Fatalf("failure_projection = %#v, want structured projected failure", failedPayload["failure_projection"])
+	}
+	if asString(eventFailure["protected_evidence_ref"]) != protectedRef {
+		t.Fatalf("event protected ref = %#v, want %s", eventFailure["protected_evidence_ref"], protectedRef)
 	}
 }
 
@@ -283,6 +510,11 @@ func TestHandleInboundShowsToolProgressForActualToolCalls(t *testing.T) {
 	if run.ProgressMessageID != 1 {
 		t.Fatalf("progress_message_id = %d, want 1", run.ProgressMessageID)
 	}
+}
+
+func asString(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func TestHandleInboundAdminDisablesToolsWhenPrincipalAwareNotReady(t *testing.T) {

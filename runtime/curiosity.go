@@ -23,8 +23,24 @@ import (
 
 const curiositySessionID = "admin-curiosity"
 
+const (
+	curiositySchedulerEventLimit           = 300
+	curiosityFailureBackoff                = 4 * time.Hour
+	curiositySignalIntensityScore          = 100
+	curiosityCandidateAttemptPenalty       = 45
+	curiositySourceAttemptPenalty          = 20
+	curiosityCandidateObservationPenalty   = 35
+	curiositySourceObservationPenalty      = 15
+	curiosityCandidateRecencyPenalty       = 25
+	curiositySourceRecencyPenalty          = 15
+	curiosityCandidateRecencyWindow        = 2 * time.Hour
+	curiositySourceRecencyWindow           = 2 * time.Hour
+	curiosityRecentFailureMaxPenalty       = 120
+	curiositySelectionPolicyIntensityFirst = "intensity_attempt_cooldown_novelty_source_diversity"
+)
+
 func (r *Runtime) StartCuriosityLoop(ctx context.Context, logger func(string, ...any)) {
-	if r == nil || r.store == nil || r.provider == nil || !r.cfg.Curiosity.Enabled {
+	if r == nil || r.store == nil || !r.cfg.Curiosity.Enabled {
 		return
 	}
 	if logger == nil {
@@ -40,6 +56,11 @@ func (r *Runtime) StartCuriosityLoop(ctx context.Context, logger func(string, ..
 		}
 		return
 	}
+	if _, err := r.curiosityPrincipal(); err != nil {
+		logger("WARN curiosity disabled due to principal ambiguity: %v", err)
+		r.reportOperationalIssue(ctx, "curiosity", err)
+		return
+	}
 	r.startBackgroundLoop("curiosity", func() {
 		runPeriodic(ctx, cadence, func(runCtx context.Context) {
 			if err := r.runCuriosityOnce(runCtx, time.Now().UTC()); err != nil {
@@ -51,7 +72,7 @@ func (r *Runtime) StartCuriosityLoop(ctx context.Context, logger func(string, ..
 }
 
 func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err error) {
-	if r == nil || r.store == nil || r.provider == nil || !r.cfg.Curiosity.Enabled {
+	if r == nil || r.store == nil || !r.cfg.Curiosity.Enabled {
 		return nil
 	}
 	if now.IsZero() {
@@ -62,7 +83,14 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 	unlock := r.lockSession(key)
 	defer unlock()
 
-	actor := r.curiosityPrincipal()
+	actor, err := r.curiosityPrincipal()
+	if err != nil {
+		r.recordExecutionEvent(key, core.ExecutionEventCuriositySkipped, "curiosity", "skipped", map[string]any{
+			"reason": "principal_ambiguous",
+			"error":  trimError(err.Error()),
+		}, now)
+		return nil
+	}
 	scope, err := r.scopeForPrincipal(actor)
 	if err != nil {
 		return fmt.Errorf("resolve curiosity scope: %w", err)
@@ -86,8 +114,10 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 		r.recordExecutionEvent(key, core.ExecutionEventCuriositySkipped, "curiosity", "skipped", map[string]any{"reason": "no_candidate"}, now)
 		return nil
 	}
-	candidate := candidates[0]
-	r.recordExecutionEvent(key, core.ExecutionEventCuriositySelected, "curiosity", "selected", curiosityCandidatePayload(candidate), now)
+	candidate, err := r.selectCuriosityCandidate(candidates, key, now)
+	if err != nil {
+		return err
+	}
 
 	lease, ok, err := r.store.ConsumeCuriosityLeaseTurn(lease.ID, now)
 	if err != nil {
@@ -103,6 +133,12 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 		}, now)
 		return nil
 	}
+	selectedPayload := curiosityCandidatePayload(candidate)
+	selectedPayload["selection_policy"] = curiositySelectionPolicyIntensityFirst
+	if err := r.recordCuriositySelectionJudgmentUse(key, lease, candidate, now); err != nil {
+		return fmt.Errorf("record curiosity selection judgment: %w", err)
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventCuriositySelected, "curiosity", "selected", selectedPayload, now)
 
 	requestText := renderCuriosityRequest(candidate)
 	monitor, err := r.startTurnMonitor(ctx, key, session.TurnRunKindCuriosity, requestText, nil, nil, core.InboundMessage{})
@@ -119,13 +155,20 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 		copy.Observer = monitor
 		opts = &copy
 	}
+	provider := r.provider
+	if slotProvider, _, ok := r.modelSlotProviderIncludingDefault(core.ModelSlotCuriosity); ok {
+		provider = slotProvider
+	}
+	if provider == nil {
+		return fmt.Errorf("curiosity provider unavailable")
+	}
 	r.recordExecutionEvent(key, core.ExecutionEventCuriosityStarted, "curiosity", "started", map[string]any{
 		"lease_id":     lease.ID,
 		"candidate_id": candidate.ID,
 		"source_kind":  candidate.SourceKind,
 		"source_ref":   candidate.SourceRef,
 	}, now)
-	result, _, runErr := agent.RunTurn(monitor.Context(), r.provider, tools, curiosityBudget(r.cfg.Curiosity), opts, []agent.Message{
+	result, _, runErr := agent.RunTurn(monitor.Context(), provider, tools, curiosityBudget(r.cfg.Curiosity), opts, []agent.Message{
 		{Role: "system", Content: curiositySystemPrompt()},
 		{Role: "user", Content: requestText},
 	})
@@ -140,6 +183,11 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 	}
 	if result == nil {
 		finishErr = fmt.Errorf("curiosity turn returned no result")
+		r.recordExecutionEvent(key, core.ExecutionEventCuriosityFailed, "curiosity", "failed", map[string]any{
+			"lease_id":     lease.ID,
+			"candidate_id": candidate.ID,
+			"error":        trimError(finishErr.Error()),
+		}, time.Now().UTC())
 		return finishErr
 	}
 	if result.ProviderFailure != "" || result.Recovery != nil {
@@ -185,18 +233,11 @@ func (r *Runtime) runCuriosityOnce(ctx context.Context, now time.Time) (err erro
 		finishErr = err
 		return fmt.Errorf("record curiosity observation: %w", err)
 	}
-	if err := r.recordCuriosityInteriorSignal(obs, candidate, now); err != nil {
-		log.Printf("WARN curiosity interior signal write failed: %v", err)
+	if err := r.recordCuriosityPressureHandoff(key, obs, candidate, now); err != nil {
+		finishErr = err
+		log.Printf("WARN curiosity pressure handoff failed: %v", err)
+		return err
 	}
-	r.recordExecutionEvent(key, core.ExecutionEventCuriosityObservationRecorded, "curiosity", "recorded", map[string]any{
-		"lease_id":       lease.ID,
-		"observation_id": obs.ID,
-		"candidate_id":   candidate.ID,
-		"source_kind":    candidate.SourceKind,
-		"source_ref":     candidate.SourceRef,
-		"subject_key":    obs.SubjectKey,
-		"confidence":     obs.Confidence,
-	}, time.Now().UTC())
 	return nil
 }
 
@@ -208,18 +249,18 @@ func curiositySessionKey() session.SessionKey {
 	return session.SessionKey{ChatID: cronSessionChatID(curiositySessionID), UserID: 0, Scope: curiosityScopeRef()}
 }
 
-func (r *Runtime) curiosityPrincipal() principal.Principal {
-	for _, id := range r.cfg.Principals.Telegram.ApprovedUserIDs {
-		if id > 0 {
-			return principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: id}
-		}
+func (r *Runtime) curiosityPrincipal() (principal.Principal, error) {
+	if r == nil || r.cfg == nil {
+		return principal.Principal{}, fmt.Errorf("curiosity principal config unavailable")
 	}
-	for _, id := range r.cfg.Principals.Telegram.AdminUserIDs {
-		if id > 0 {
-			return principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: id}
-		}
+	if approved := uniquePositiveIDs(r.cfg.Principals.Telegram.ApprovedUserIDs); len(approved) > 0 {
+		return principal.Principal{}, fmt.Errorf("curiosity requires exactly one admin principal and no approved-user principals")
 	}
-	return principal.Principal{Role: principal.RoleApprovedUser}
+	admins := uniquePositiveIDs(r.cfg.Principals.Telegram.AdminUserIDs)
+	if len(admins) != 1 {
+		return principal.Principal{}, fmt.Errorf("curiosity requires exactly one admin principal, found %d", len(admins))
+	}
+	return principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: admins[0]}, nil
 }
 
 func (r *Runtime) ensureConfiguredCuriosityLease(now time.Time) (session.CuriosityLease, error) {
@@ -310,7 +351,7 @@ func (r *Runtime) curiosityCandidates(tools agent.ToolRegistry, sharedMemoryRoot
 				if rawURL == "" {
 					continue
 				}
-				out = append(out, newCuriosityCandidate(state, session.CuriositySourceURL, rawURL, "fetch_url", map[string]any{
+				out = append(out, newCuriosityCandidate(state, session.CuriositySourceURL, session.SafeCuriosityURLSourceRef(rawURL), "fetch_url", map[string]any{
 					"url":           rawURL,
 					"max_bytes":     131072,
 					"excerpt_bytes": 4096,
@@ -338,6 +379,163 @@ func (r *Runtime) curiosityCandidates(tools agent.ToolRegistry, sharedMemoryRoot
 		out = out[:12]
 	}
 	return out, nil
+}
+
+func (r *Runtime) selectCuriosityCandidate(candidates []curiosityCandidate, key session.SessionKey, now time.Time) (curiosityCandidate, error) {
+	if len(candidates) == 0 {
+		return curiosityCandidate{}, fmt.Errorf("select curiosity candidate: no candidates")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	history, err := r.curiositySelectionHistory(key)
+	if err != nil {
+		return curiosityCandidate{}, err
+	}
+	best := candidates[0]
+	bestScore := curiosityCandidateSelectionScore(best, history, now)
+	for _, candidate := range candidates[1:] {
+		score := curiosityCandidateSelectionScore(candidate, history, now)
+		if score > bestScore {
+			best = candidate
+			bestScore = score
+		}
+	}
+	return best, nil
+}
+
+type curiositySelectionHistory struct {
+	candidateAttempts     map[string]int
+	candidateLastAttempt  map[string]time.Time
+	candidateLastFailure  map[string]time.Time
+	candidateObservations map[string]time.Time
+	sourceAttempts        map[string]int
+	sourceLastAttempt     map[string]time.Time
+	sourceObservations    map[string]time.Time
+}
+
+func (r *Runtime) curiositySelectionHistory(key session.SessionKey) (curiositySelectionHistory, error) {
+	history := curiositySelectionHistory{
+		candidateAttempts:     make(map[string]int),
+		candidateLastAttempt:  make(map[string]time.Time),
+		candidateLastFailure:  make(map[string]time.Time),
+		candidateObservations: make(map[string]time.Time),
+		sourceAttempts:        make(map[string]int),
+		sourceLastAttempt:     make(map[string]time.Time),
+		sourceObservations:    make(map[string]time.Time),
+	}
+	if r == nil || r.store == nil {
+		return history, nil
+	}
+	events, err := r.store.LatestExecutionEventsBySession(key, curiositySchedulerEventLimit)
+	if err != nil {
+		return history, fmt.Errorf("load curiosity scheduler events: %w", err)
+	}
+	for _, event := range events {
+		switch event.EventType {
+		case core.ExecutionEventCuriositySelected:
+			payload := executionEventPayload(event.PayloadJSON)
+			candidateID := payloadString(payload, "candidate_id")
+			if candidateID == "" {
+				continue
+			}
+			sourceKey := curiositySourceKey(payloadString(payload, "source_kind"), payloadString(payload, "source_ref"))
+			history.candidateAttempts[candidateID]++
+			history.candidateLastAttempt[candidateID] = maxTime(history.candidateLastAttempt[candidateID], event.CreatedAt)
+			if sourceKey != "" {
+				history.sourceAttempts[sourceKey]++
+				history.sourceLastAttempt[sourceKey] = maxTime(history.sourceLastAttempt[sourceKey], event.CreatedAt)
+			}
+		case core.ExecutionEventCuriosityFailed:
+			payload := executionEventPayload(event.PayloadJSON)
+			candidateID := payloadString(payload, "candidate_id")
+			if candidateID != "" {
+				history.candidateLastFailure[candidateID] = maxTime(history.candidateLastFailure[candidateID], event.CreatedAt)
+			}
+		case core.ExecutionEventCuriositySkipped:
+			payload := executionEventPayload(event.PayloadJSON)
+			reason := payloadString(payload, "reason")
+			if reason != "candidate_tool_not_used" {
+				continue
+			}
+			candidateID := payloadString(payload, "candidate_id")
+			if candidateID != "" {
+				history.candidateLastFailure[candidateID] = maxTime(history.candidateLastFailure[candidateID], event.CreatedAt)
+			}
+		}
+	}
+	observations, err := r.store.CuriosityObservations(curiositySchedulerEventLimit)
+	if err != nil {
+		return history, fmt.Errorf("load curiosity scheduler observations: %w", err)
+	}
+	for _, obs := range observations {
+		if obs.CandidateID != "" {
+			history.candidateObservations[obs.CandidateID] = maxTime(history.candidateObservations[obs.CandidateID], obs.ObservedAt)
+		}
+		if sourceKey := curiositySourceKey(obs.SourceKind, obs.SourceRef); sourceKey != "" {
+			history.sourceObservations[sourceKey] = maxTime(history.sourceObservations[sourceKey], obs.ObservedAt)
+		}
+	}
+	return history, nil
+}
+
+func curiosityCandidateSelectionScore(candidate curiosityCandidate, history curiositySelectionHistory, now time.Time) float64 {
+	// These weights are deliberate scheduler policy, not a derived formula:
+	// prefer strong current pressure, but rotate away from recently attempted,
+	// failed, or already-observed candidates so curiosity behaves like saccades
+	// instead of staring at the same stable source forever.
+	score := candidate.SignalIntensity * curiositySignalIntensityScore
+	sourceKey := curiositySourceKey(candidate.SourceKind, candidate.SourceRef)
+	attempts := history.candidateAttempts[candidate.ID]
+	sourceAttempts := history.sourceAttempts[sourceKey]
+	score -= float64(attempts) * curiosityCandidateAttemptPenalty
+	score -= float64(sourceAttempts) * curiositySourceAttemptPenalty
+	if _, ok := history.candidateObservations[candidate.ID]; ok {
+		score -= curiosityCandidateObservationPenalty
+	}
+	if _, ok := history.sourceObservations[sourceKey]; ok {
+		score -= curiositySourceObservationPenalty
+	}
+	if last := history.candidateLastAttempt[candidate.ID]; !last.IsZero() {
+		score -= recencyPenalty(now.Sub(last), curiosityCandidateRecencyPenalty, curiosityCandidateRecencyWindow)
+	}
+	if last := history.sourceLastAttempt[sourceKey]; !last.IsZero() {
+		score -= recencyPenalty(now.Sub(last), curiositySourceRecencyPenalty, curiositySourceRecencyWindow)
+	}
+	if last := history.candidateLastFailure[candidate.ID]; !last.IsZero() {
+		score -= recencyPenalty(now.Sub(last), curiosityRecentFailureMaxPenalty, curiosityFailureBackoff)
+	}
+	return score
+}
+
+func recencyPenalty(age time.Duration, max float64, window time.Duration) float64 {
+	if age < 0 {
+		age = 0
+	}
+	if window <= 0 || age >= window {
+		return 0
+	}
+	return max * (1 - float64(age)/float64(window))
+}
+
+func curiositySourceKey(kind string, ref string) string {
+	kind = strings.TrimSpace(kind)
+	ref = strings.TrimSpace(ref)
+	if kind == "" || ref == "" {
+		return ""
+	}
+	return kind + "\x00" + ref
+}
+
+func maxTime(left time.Time, right time.Time) time.Time {
+	if right.IsZero() {
+		return left.UTC()
+	}
+	if left.IsZero() || right.After(left) {
+		return right.UTC()
+	}
+	return left.UTC()
 }
 
 func curiosityMemoryToolPath(sharedMemoryRoot string, rel string) string {
@@ -421,7 +619,7 @@ func (r *Runtime) recordCuriosityInteriorSignal(obs session.CuriosityObservation
 		Summary:           obs.Summary,
 		Source:            "curiosity",
 		Evidence:          obs.Evidence,
-		SourceFingerprint: shortRuntimeHash("curiosity", obs.LeaseID, obs.CandidateID, obs.ContentHash),
+		SourceFingerprint: session.CuriosityPressureFingerprint(obs.LeaseID, obs.CandidateID, obs.ContentHash),
 		Weight:            0.20,
 		Confidence:        obs.Confidence,
 		ObservedAt:        now,
@@ -430,6 +628,7 @@ func (r *Runtime) recordCuriosityInteriorSignal(obs session.CuriosityObservation
 }
 
 func curiosityEvidence(candidate curiosityCandidate, outputHash string, refs []session.RecordReference) []session.RecordReference {
+	refs = sanitizeCuriosityEvidenceRefs(candidate, refs)
 	refs = append(refs,
 		session.RecordReference{Kind: "curiosity_source", Ref: candidate.SourceKind + ":" + candidate.SourceRef, Label: "selected curiosity source"},
 		session.RecordReference{Kind: "curiosity_candidate", Ref: candidate.ID, Label: candidate.ToolName},
@@ -441,6 +640,54 @@ func curiosityEvidence(candidate curiosityCandidate, outputHash string, refs []s
 		refs = append(refs, session.RecordReference{Kind: "tool_output", Ref: outputHash, Label: "read-only look"})
 	}
 	return session.NormalizeRecordReferences(refs)
+}
+
+func (r *Runtime) recordCuriosityPressureHandoff(key session.SessionKey, obs session.CuriosityObservation, candidate curiosityCandidate, now time.Time) error {
+	if err := r.recordCuriosityInteriorSignal(obs, candidate, now); err != nil {
+		r.recordExecutionEvent(key, core.ExecutionEventCuriosityFailed, "curiosity", "pressure_handoff_failed", map[string]any{
+			"observation_id":       obs.ID,
+			"lease_id":             obs.LeaseID,
+			"candidate_id":         obs.CandidateID,
+			"pressure_fingerprint": session.CuriosityPressureFingerprint(obs.LeaseID, obs.CandidateID, obs.ContentHash),
+			"error":                trimError(err.Error()),
+		}, time.Now().UTC())
+		return fmt.Errorf("record curiosity pressure handoff: %w", err)
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventCuriosityObservationRecorded, "curiosity", "recorded", map[string]any{
+		"lease_id":              obs.LeaseID,
+		"observation_id":        obs.ID,
+		"candidate_id":          obs.CandidateID,
+		"source_kind":           obs.SourceKind,
+		"source_ref":            obs.SourceRef,
+		"subject_key":           obs.SubjectKey,
+		"confidence":            obs.Confidence,
+		"pressure_fingerprint":  session.CuriosityPressureFingerprint(obs.LeaseID, obs.CandidateID, obs.ContentHash),
+		"pressure_handoff":      "applied",
+		"pressure_source_kind":  "interior_signal",
+		"pressure_source_scope": string(heartbeatScopeRef().Kind),
+	}, time.Now().UTC())
+	return nil
+}
+
+func sanitizeCuriosityEvidenceRefs(candidate curiosityCandidate, refs []session.RecordReference) []session.RecordReference {
+	if candidate.SourceKind != session.CuriositySourceURL {
+		return refs
+	}
+	out := make([]session.RecordReference, 0, len(refs))
+	for _, ref := range refs {
+		ref.Ref = sanitizeCuriosityURLRecordRef(ref.Ref)
+		out = append(out, ref)
+	}
+	return out
+}
+
+func sanitizeCuriosityURLRecordRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	lower := strings.ToLower(ref)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return session.SafeCuriosityURLSourceRef(ref)
+	}
+	return ref
 }
 
 func (r *Runtime) curiositySignalHasIndependentSupport(state session.InteriorSignalState, now time.Time) (bool, error) {
@@ -528,7 +775,11 @@ func curiosityAllowedSourceRefs(cfg config.CuriosityConfig, kinds []string) []st
 		refs = append(refs, cfg.WorkspacePaths...)
 	}
 	if allowed[session.CuriositySourceURL] {
-		refs = append(refs, cfg.AllowlistedURLs...)
+		for _, rawURL := range cfg.AllowlistedURLs {
+			if ref := session.SafeCuriosityURLSourceRef(rawURL); ref != "" {
+				refs = append(refs, ref)
+			}
+		}
 	}
 	sort.Strings(refs)
 	return refs

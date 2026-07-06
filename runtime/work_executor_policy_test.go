@@ -3,11 +3,15 @@
 package runtime
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -157,6 +161,22 @@ func TestWorkResultCompletionEvidenceForRequestRequiresMaterialEvidenceForAuthor
 		t.Fatal("workspace-write mutating command should count as material completion evidence")
 	}
 
+	commitReq := readOnlyReq
+	commitReq.Mode = WorkModeCommit
+	commitReq.State.ActionProposal.RiskClass = "commit"
+	commitReq.State.ContinuationLease.AllowedActions = []string{"git_commit", "report_commit_evidence"}
+	plainCommit := `git commit -m "Add XPVENTA reconstruction packet artifacts"`
+	if !workResultHasSubstantiveCompletionEvidenceForRequest(commitReq, WorkResult{Commands: []string{plainCommit}}) {
+		t.Fatal("commit-mode git commit command should count as material completion evidence")
+	}
+	compoundCommit := `set -euo pipefail
+git commit -m "Add XPVENTA reconstruction packet artifacts" >/tmp/imexx_commit.out
+cat /tmp/imexx_commit.out
+printf '\nCOMMIT\n'; git rev-parse --short HEAD`
+	if workResultHasSubstantiveCompletionEvidenceForRequest(commitReq, WorkResult{Commands: []string{compoundCommit}}) {
+		t.Fatal("commit-mode redirected shell script completed from result evidence, want effect-plan/verification path")
+	}
+
 	grantReq := readOnlyReq
 	grantReq.Mode = WorkModeReadOnly
 	grantReq.State.ActionProposal.RiskClass = "external_account_pr_create"
@@ -202,6 +222,531 @@ func TestWorkResultCompletionEvidenceForRequestRequiresMaterialEvidenceForAuthor
 		ToolFailure:  "AUTHORITY_REJECTED: AskForGrant",
 	}) {
 		t.Fatal("failed authority/tool evidence completed external-account phase, want blocked/retry path")
+	}
+}
+
+func TestWorkOutcomeReconciliationBlocksUnverifiedExternalAccountSideEffects(t *testing.T) {
+	t.Parallel()
+
+	req := WorkRequest{
+		Mode:    WorkModeReadOnly,
+		Workdir: t.TempDir(),
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{
+				RiskClass:      "external_account_pr_create",
+				AllowedActions: []string{"github_pr_create", "report_pr_link"},
+				Status:         session.ProposalStatusApproved,
+			},
+			ContinuationLease: session.ContinuationLease{
+				ID:         "lease-external-unverified",
+				Status:     session.ContinuationLeaseStatusActive,
+				LeaseClass: session.ContinuationLeaseClassCapabilityGrant,
+				RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+					RequestID:      "cap-release-pr",
+					Kind:           session.CapabilityKindExternalAccount,
+					TargetResource: "github",
+					GrantedTo:      "telegram:1001",
+					AllowedActions: []string{"write"},
+				}},
+				ExpiresAt: time.Now().UTC().Add(time.Hour),
+			},
+		},
+	}
+	result := WorkResult{
+		Summary:       "A GitHub wrapper ran, but no PR URL or typed external-account evidence was captured.",
+		Commands:      []string{"custom-gh-wrapper --create-pr"},
+		SideEffects:   true,
+		ToolSuccesses: 1,
+	}
+
+	now := time.Now().UTC()
+	got, decision := (*Runtime)(nil).resolveWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 1}, req, result, now, now)
+	if decision.Kind != workOutcomeResolutionBlockedUnverified || !decision.blocksRetry() || !errors.Is(decision.Err, errWorkExecutorOutcomeUnverified) {
+		t.Fatalf("resolution decision = %#v result=%#v, want blocked unverified outcome", decision, got)
+	}
+}
+
+func TestRecordWorkResultEffectAttemptRefusesFirstWriteAfterResult(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7003, UserID: 0, Scope: telegramDMScopeRef(7003)}
+	now := time.Now().UTC()
+	req := WorkRequest{
+		OperationID: "op-effect-commit",
+		Mode:        WorkModeCommit,
+		LeaseID:     "lease-effect-commit",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-commit", RiskClass: "commit"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-commit",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-commit",
+				LeaseID: "lease-effect-commit",
+			}}},
+		},
+	}
+	command := `git commit -m "Add evidence"`
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{ExecutorName: "native", Commands: []string{command}}, nil, now, now.Add(time.Second))
+	if err == nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = nil attempts=%#v, want missing pre-dispatch attempt rejection", attempts)
+	}
+	if len(attempts) != 0 {
+		t.Fatalf("attempts = %#v, want no first write after result", attempts)
+	}
+}
+
+func TestExecEffectAttemptIsWrittenAheadOnToolStart(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7004, UserID: 0, Scope: telegramDMScopeRef(7004)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "run command", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	defer monitor.Finish(context.Background(), context.Canceled)
+
+	command := "git push origin main"
+	monitor.ToolStarted(context.Background(), "exec", json.RawMessage(fmt.Sprintf(`{"cmd":%q}`, command)))
+
+	attempts, err := store.EffectAttemptsByTurnRun(key, monitor.runID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun() err = %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one write-ahead attempt", attempts)
+	}
+	if attempts[0].Status != session.EffectAttemptStatusAttempted || attempts[0].CompletedAt.IsZero() == false {
+		t.Fatalf("attempt = %#v, want attempted without completion", attempts[0])
+	}
+}
+
+func TestWorkResultEffectAttemptConvergesWithMonitorStartRow(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7005, UserID: 0, Scope: telegramDMScopeRef(7005)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "run command", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	defer monitor.Finish(context.Background(), nil)
+
+	command := "gh pr create --base main --head fix/effect-attempt-ledger --fill"
+	monitor.ToolStarted(context.Background(), "exec", json.RawMessage(fmt.Sprintf(`{"command":%q}`, command)))
+	before, err := store.EffectAttemptsByTurnRun(key, monitor.runID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun(before) err = %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("before attempts = %#v, want one monitor attempt", before)
+	}
+
+	req := WorkRequest{
+		OperationID: "op-effect-converge",
+		Mode:        WorkModeCommit,
+		LeaseID:     "lease-effect-converge",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-converge", RiskClass: "commit"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-converge",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-converge",
+				LeaseID: "lease-effect-converge",
+			}}},
+		},
+	}
+	now := time.Now().UTC()
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{ExecutorName: "native", TurnRunID: monitor.runID, Commands: []string{command}}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one projected attempt", attempts)
+	}
+	if attempts[0].AttemptID != before[0].AttemptID {
+		t.Fatalf("attempt id = %s, want monitor id %s", attempts[0].AttemptID, before[0].AttemptID)
+	}
+	after, err := store.EffectAttemptsByTurnRun(key, monitor.runID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun(after) err = %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("after attempts = %#v, want one converged row", after)
+	}
+	if after[0].OperationID != "op-effect-converge" || after[0].PhaseID != "phase-effect-converge" || after[0].Status != session.EffectAttemptStatusExecuted {
+		t.Fatalf("after attempt = %#v, want work metadata and executed status", after[0])
+	}
+}
+
+func TestWorkResultEffectAttemptFallsBackToWorkPreDispatchPerMissingCommand(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7008, UserID: 0, Scope: telegramDMScopeRef(7008)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "run command", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	defer monitor.Finish(context.Background(), nil)
+
+	req := WorkRequest{
+		OperationID: "op-effect-mixed-source",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-mixed-source",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-mixed-source", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-mixed-source",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-mixed-source",
+				LeaseID: "lease-effect-mixed-source",
+			}}},
+		},
+	}
+	now := time.Now().UTC()
+	unrelatedTurnCommand := "touch unrelated-generated.txt"
+	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    "eff-unrelated-turn-command",
+		Key:          key,
+		TurnRunID:    monitor.runID,
+		Executor:     "turn",
+		Tool:         "exec",
+		Command:      unrelatedTurnCommand,
+		EffectKind:   string(commandeffect.KindWorkspaceMutation),
+		EffectReason: "touch filesystem mutation",
+		Status:       session.EffectAttemptStatusAttempted,
+		StartedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertEffectAttempt(unrelated turn command) err = %v", err)
+	}
+	workCommand := "set -u\ncd /tmp/aphelion-fixtures/copilotkit\npnpm --filter @copilotkit/react-core test > /tmp/copilotkit-a2ui-recovery.log 2>&1"
+	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    "eff-work-command-predispatch",
+		Key:          key,
+		OperationID:  req.OperationID,
+		PhaseID:      "phase-effect-mixed-source",
+		LeaseID:      req.LeaseID,
+		ProposalID:   req.State.ActionProposal.ID,
+		WorkMode:     string(req.Mode),
+		Executor:     "native",
+		Tool:         "work_executor",
+		Command:      workCommand,
+		EffectKind:   string(commandeffect.KindUnknown),
+		EffectReason: "multiple authority effects require effect plan",
+		Status:       session.EffectAttemptStatusAttempted,
+		StartedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertEffectAttempt(work command) err = %v", err)
+	}
+
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{
+		ExecutorName: "native",
+		TurnRunID:    monitor.runID,
+		Commands:     []string{workCommand},
+	}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v, want work-scoped pre-dispatch fallback for missing command", err)
+	}
+	if len(attempts) != 1 || attempts[0].AttemptID != "eff-work-command-predispatch" {
+		t.Fatalf("attempts = %#v, want work-scoped pre-dispatch row advanced", attempts)
+	}
+}
+
+func TestWorkResultEffectAttemptDedupesSameHashEvidenceWithoutSecondPreDispatchRow(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7009, UserID: 0, Scope: telegramDMScopeRef(7009)}
+	req := WorkRequest{
+		OperationID: "op-effect-same-hash-evidence",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-same-hash-evidence",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-same-hash-evidence", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-same-hash-evidence",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-same-hash-evidence",
+				LeaseID: "lease-effect-same-hash-evidence",
+			}}},
+		},
+	}
+	command := "mkdir -p generated/reports"
+	commandVariant := "mkdir   -p   generated/reports"
+	if session.EffectAttemptCommandHash(command) != session.EffectAttemptCommandHash(commandVariant) {
+		t.Fatalf("test fixture hashes differ: %s vs %s", session.EffectAttemptCommandHash(command), session.EffectAttemptCommandHash(commandVariant))
+	}
+	now := time.Now().UTC()
+	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    "eff-same-hash-evidence-predispatch",
+		Key:          key,
+		OperationID:  req.OperationID,
+		PhaseID:      "phase-effect-same-hash-evidence",
+		LeaseID:      req.LeaseID,
+		ProposalID:   req.State.ActionProposal.ID,
+		WorkMode:     string(req.Mode),
+		Executor:     "native",
+		Tool:         "work_executor",
+		Command:      command,
+		EffectKind:   string(commandeffect.KindWorkspaceMutation),
+		EffectReason: "mkdir filesystem mutation",
+		Status:       session.EffectAttemptStatusAttempted,
+		StartedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertEffectAttempt() err = %v", err)
+	}
+
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{
+		ExecutorName: "native",
+		Commands:     []string{command, commandVariant},
+	}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v, want duplicate same-hash evidence not to require a second pre-dispatch row", err)
+	}
+	if len(attempts) != 1 || attempts[0].AttemptID != "eff-same-hash-evidence-predispatch" {
+		t.Fatalf("attempts = %#v, want one advanced effect attempt", attempts)
+	}
+}
+
+func TestWorkResultEffectAttemptDedupesEventChannelReplay(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7007, UserID: 0, Scope: telegramDMScopeRef(7007)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "run command", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	defer monitor.Finish(context.Background(), nil)
+
+	command := "mkdir -p generated/reports"
+	monitor.ToolStarted(context.Background(), "exec", json.RawMessage(fmt.Sprintf(`{"command":%q}`, command)))
+	before, err := store.EffectAttemptsByTurnRun(key, monitor.runID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun(before) err = %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("before attempts = %#v, want one monitor attempt", before)
+	}
+
+	req := WorkRequest{
+		OperationID: "op-effect-event-replay",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-event-replay",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-event-replay", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-event-replay",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-event-replay",
+				LeaseID: "lease-effect-event-replay",
+			}}},
+		},
+	}
+	result := WorkResult{
+		ExecutorName: "native",
+		TurnRunID:    monitor.runID,
+		Commands:     []string{command},
+		CodexEvents: []session.WorkCodexEvent{{
+			Kind:    "command",
+			Command: command,
+		}},
+	}
+	now := time.Now().UTC()
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, result, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one logical command occurrence", attempts)
+	}
+	if attempts[0].AttemptID != before[0].AttemptID || attempts[0].Status != session.EffectAttemptStatusExecuted {
+		t.Fatalf("attempt = %#v, want existing pre-dispatch row advanced", attempts[0])
+	}
+}
+
+func TestWorkResultEffectAttemptsAdvanceDuplicateCommandOccurrences(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7006, UserID: 0, Scope: telegramDMScopeRef(7006)}
+	req := WorkRequest{
+		OperationID: "op-effect-duplicates",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-duplicates",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-duplicates", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-duplicates",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-duplicates",
+				LeaseID: "lease-effect-duplicates",
+			}}},
+		},
+	}
+	command := "touch generated.txt"
+	now := time.Now().UTC()
+	for i, id := range []string{"eff-duplicate-1", "eff-duplicate-2"} {
+		if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+			AttemptID:    id,
+			Key:          key,
+			OperationID:  req.OperationID,
+			PhaseID:      "phase-effect-duplicates",
+			LeaseID:      req.LeaseID,
+			ProposalID:   req.State.ActionProposal.ID,
+			WorkMode:     string(req.Mode),
+			Executor:     "codex",
+			Tool:         "codex_command_approval",
+			Command:      command,
+			EffectKind:   "workspace_mutation",
+			EffectReason: "touch filesystem mutation",
+			Status:       session.EffectAttemptStatusAttempted,
+			StartedAt:    now.Add(time.Duration(i) * time.Second),
+			UpdatedAt:    now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("UpsertEffectAttempt(%s) err = %v", id, err)
+		}
+	}
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{ExecutorName: "codex", Commands: []string{command, command}}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v", err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("attempts = %#v, want both duplicate command occurrences advanced", attempts)
+	}
+	if attempts[0].AttemptID != "eff-duplicate-1" || attempts[1].AttemptID != "eff-duplicate-2" {
+		t.Fatalf("attempt ids = %q, %q; want FIFO by started_at", attempts[0].AttemptID, attempts[1].AttemptID)
+	}
+	got, err := store.EffectAttemptsForWork(key, req.OperationID, "phase-effect-duplicates", req.LeaseID, req.State.ActionProposal.ID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsForWork() err = %v", err)
+	}
+	for _, attempt := range got {
+		if attempt.Status != session.EffectAttemptStatusExecuted {
+			t.Fatalf("attempt = %#v, want every duplicate attempt executed", attempt)
+		}
+	}
+}
+
+func TestWorkResultEffectAttemptsUseAttemptIDAcrossFuzzyCommandHashCollision(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7010, UserID: 0, Scope: telegramDMScopeRef(7010)}
+	req := WorkRequest{
+		OperationID: "op-effect-fuzzy-hash",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-fuzzy-hash",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-fuzzy-hash", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-fuzzy-hash",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-fuzzy-hash",
+				LeaseID: "lease-effect-fuzzy-hash",
+			}}},
+		},
+	}
+	wideQuotedWhitespace := "printf 'a  b' > generated.txt"
+	narrowQuotedWhitespace := "printf 'a b' > generated.txt"
+	if runtimeWorkCommandHash(wideQuotedWhitespace) != runtimeWorkCommandHash(narrowQuotedWhitespace) {
+		t.Fatalf("test fixture hashes differ; fuzzy command hash no longer documents quoted-whitespace collision")
+	}
+	now := time.Now().UTC()
+	for i, attempt := range []struct {
+		id      string
+		command string
+	}{
+		{id: "eff-fuzzy-hash-wide", command: wideQuotedWhitespace},
+		{id: "eff-fuzzy-hash-narrow", command: narrowQuotedWhitespace},
+	} {
+		if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+			AttemptID:    attempt.id,
+			Key:          key,
+			OperationID:  req.OperationID,
+			PhaseID:      "phase-effect-fuzzy-hash",
+			LeaseID:      req.LeaseID,
+			ProposalID:   req.State.ActionProposal.ID,
+			WorkMode:     string(req.Mode),
+			Executor:     "native",
+			Tool:         "work_executor",
+			Command:      attempt.command,
+			EffectKind:   string(commandeffect.KindBuildArtifact),
+			EffectReason: "shell redirection",
+			Status:       session.EffectAttemptStatusAttempted,
+			StartedAt:    now.Add(time.Duration(i) * time.Second),
+			UpdatedAt:    now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("UpsertEffectAttempt(%s) err = %v", attempt.id, err)
+		}
+	}
+
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{
+		ExecutorName: "native",
+		CommandEvidence: []WorkCommandEvidence{
+			{Command: wideQuotedWhitespace, EffectAttemptID: "eff-fuzzy-hash-wide", Source: "test"},
+			{Command: narrowQuotedWhitespace, EffectAttemptID: "eff-fuzzy-hash-narrow", Source: "test"},
+		},
+	}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v", err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("attempts = %#v, want both quoted-whitespace executions advanced by attempt id", attempts)
+	}
+	if attempts[0].AttemptID != "eff-fuzzy-hash-wide" || attempts[1].AttemptID != "eff-fuzzy-hash-narrow" {
+		t.Fatalf("attempt ids = %q, %q; want effect-attempt identity to beat fuzzy hash collision", attempts[0].AttemptID, attempts[1].AttemptID)
 	}
 }
 

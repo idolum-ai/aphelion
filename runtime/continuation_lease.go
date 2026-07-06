@@ -127,6 +127,26 @@ func applyContinuationLeaseClassBoundaries(action session.ActionProposal) sessio
 			"record resource descriptor, transform, retention, and access result",
 			"verify no data was consumed before approval",
 		)
+	case session.ContinuationLeaseClassRepoPublication:
+		action.AllowedActions = append(action.AllowedActions,
+			"git_push",
+			"push_remote",
+			"report_push_evidence",
+		)
+		action.ForbiddenActions = append(action.ForbiddenActions,
+			"deploy",
+			"restart_service",
+			"github_pr_create",
+			"github_pr_update",
+			"external_account_action",
+			"credential_token_output",
+			"external_effect_without_separate_grant",
+		)
+		action.ValidationPlan = append(action.ValidationPlan,
+			"verify intended local ref/commit before push",
+			"push only the approved branch/ref to the approved remote",
+			"record remote ref evidence after push and stop before PR metadata, deploy, restart, credentials, or unrelated external effects",
+		)
 	case session.ContinuationLeaseClassChildWake:
 		action.AllowedActions = append(action.AllowedActions,
 			"request_child_wake",

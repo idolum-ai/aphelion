@@ -5,6 +5,9 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"github.com/idolum-ai/aphelion/commandeffect"
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
@@ -36,7 +39,11 @@ func TestRegistryDefinitionsHaveValidJSONParameters(t *testing.T) {
 func (s *stubExecApprover) ConfirmExec(_ context.Context, req ExecApprovalRequest) (ExecApprovalDecision, error) {
 	s.called++
 	s.request = req
-	return ExecApprovalDecision{Approved: s.approved}, nil
+	choice := "deny"
+	if s.approved {
+		choice = "approve"
+	}
+	return ExecApprovalDecision{Approved: s.approved, DecisionID: "decision-stub-exec", Choice: choice}, nil
 }
 
 func TestExecContinuationAuthorityRejectsAutoApprovalWidening(t *testing.T) {
@@ -73,6 +80,593 @@ func TestExecContinuationAuthorityRejectsAutoApprovalWidening(t *testing.T) {
 	}
 	if approver.called != 0 {
 		t.Fatalf("approver called = %d, want rejection before proposal approval can widen authority", approver.called)
+	}
+}
+
+func TestExecContinuationAuthorityPublishesDiscoveredEffectContract(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: false}
+	key := adminSessionKey()
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+	command := "git fetch origin main --prune"
+	state := continuationExecAuthorityTestState("read_only_review", []string{"read_only", "inspect_code", "report_findings"}, false, time.Now().UTC())
+	ctx := WithContinuationExecAuthority(context.Background(), state)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		ctx,
+		"exec",
+		json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if err == nil {
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want missing continuation lease")
+	}
+	var safeFailure interface {
+		SafeToolFailureClass() string
+		SafeToolFailureSummary() string
+		SafeToolFailureRetryPolicy() string
+	}
+	if !errors.As(err, &safeFailure) {
+		t.Fatalf("err = %v, want safe missing-lease failure", err)
+	}
+	if safeFailure.SafeToolFailureClass() != "authority_rejected" || safeFailure.SafeToolFailureRetryPolicy() != "request_approval" {
+		t.Fatalf("safe failure = class:%q retry:%q summary:%q, want request_approval missing lease", safeFailure.SafeToolFailureClass(), safeFailure.SafeToolFailureRetryPolicy(), safeFailure.SafeToolFailureSummary())
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want discovered-effect contract before admin exact shell fallback", approver.called)
+	}
+
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one discovered-effect continuation request", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionBlockedNeedsAuthority ||
+		action.SubjectKind != "continuation_lease_request" ||
+		action.RequiredAuthority != string(session.ContinuationLeaseClassDataAccess) ||
+		action.ResourceBlocker != "missing_continuation_lease" ||
+		action.OperationKind != "continuation_lease_request" ||
+		action.OperationTool != "request_approval" {
+		t.Fatalf("next action = %#v, want request_approval continuation lease blocker", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["action"] != "request_continuation_lease" {
+		t.Fatalf("operation input = %#v, want request_continuation_lease action", input)
+	}
+	contractID, _ := input["contract_id"].(string)
+	if strings.TrimSpace(contractID) == "" {
+		t.Fatalf("operation input = %#v, want contract_id", input)
+	}
+
+	contract, ok, err := store.ContinuationRecoveryContract(contractID)
+	if err != nil {
+		t.Fatalf("ContinuationRecoveryContract(%q) err = %v", contractID, err)
+	}
+	if !ok {
+		t.Fatalf("ContinuationRecoveryContract(%q) ok=false", contractID)
+	}
+	if contract.SubjectKind != session.ContinuationRecoverySubjectKindDiscoveredEffect ||
+		contract.LeaseClass != session.ContinuationLeaseClassDataAccess ||
+		contract.Tool != "exec" ||
+		contract.ToolAction != session.ContinuationRecoveryRetryExecExactCommand {
+		t.Fatalf("contract = %#v, want discovered-effect exact exec data-access contract", contract)
+	}
+	constraints := contract.Constraints
+	if constraints["contract_kind"] != session.ContinuationRecoveryContractKindDiscoveredEffect ||
+		constraints["effect_kind"] != string(commandeffect.KindExternal) ||
+		constraints["effect_action"] != "fetch" ||
+		constraints["effect_provider"] != "git" ||
+		constraints["git_subcommand"] != "fetch" ||
+		constraints["command"] != command ||
+		constraints["command_hash"] != session.EffectAttemptCommandHash(command) {
+		t.Fatalf("contract constraints = %#v, want exact discovered git fetch identity", constraints)
+	}
+	if !stringSliceContainsForTest(contract.AllowedActions, "fetch") ||
+		!stringSliceContainsForTest(contract.AllowedActions, "git_fetch_origin_main_prune") ||
+		!stringSliceContainsForTest(contract.AllowedActions, "report_fetch_evidence") {
+		t.Fatalf("allowed actions = %#v, want discovered fetch action vocabulary", contract.AllowedActions)
+	}
+	retry := session.NormalizeContinuationRetryOperation(contract.RetryOperation)
+	if retry.OperationKind != session.ContinuationRecoveryRetryExecExactCommand || retry.Tool != "exec" || retry.SubjectKind != session.ContinuationRecoverySubjectKindDiscoveredEffect {
+		t.Fatalf("retry operation = %#v, want discovered-effect exact exec retry", retry)
+	}
+	var retryInput map[string]any
+	if err := json.Unmarshal([]byte(retry.InputJSON), &retryInput); err != nil {
+		t.Fatalf("unmarshal retry input %q: %v", retry.InputJSON, err)
+	}
+	if retryInput["command"] != command {
+		t.Fatalf("retry input = %#v, want exact command", retryInput)
+	}
+}
+
+func TestExecContinuationAuthorityRunsForNonProposalSideEffects(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	state := continuationExecAuthorityTestState("read_only_review", []string{"read_only", "inspect_code", "report_findings"}, false, now)
+	for _, tc := range []struct {
+		name    string
+		command string
+		path    string
+	}{
+		{name: "plain workspace mutation", command: "touch generated.txt", path: "generated.txt"},
+		{name: "command substitution mutation", command: `echo "$(touch generated-subst.txt)"`, path: "generated-subst.txt"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			workspace := t.TempDir()
+			registry := NewRegistry(workspace, time.Second).WithSessionStore(newToolTestStore(t))
+			ctx := WithContinuationExecAuthority(context.Background(), state)
+			_, err := registry.executeWithScopeAndPrincipal(
+				ctx,
+				"exec",
+				json.RawMessage(`{"command":`+strconv.Quote(tc.command)+`}`),
+				sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+				principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 1001},
+				session.SessionKey{ChatID: 8802, UserID: 0},
+			)
+			if err == nil || !strings.Contains(err.Error(), "command exceeds active continuation authority") {
+				t.Fatalf("exec err = %v, want continuation authority rejection before command dispatch", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(workspace, tc.path)); !os.IsNotExist(statErr) {
+				t.Fatalf("side-effect file %q stat err = %v, want command not dispatched", tc.path, statErr)
+			}
+		})
+	}
+}
+
+func TestExecRecordsJudgmentUseBeforeDispatch(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8812, UserID: 1001}
+	registry := NewRegistry(workspace, time.Second).WithSessionStore(store)
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"touch committed.txt"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if err != nil {
+		t.Fatalf("exec err = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "committed.txt")); statErr != nil {
+		t.Fatalf("committed file stat err = %v", statErr)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 1 {
+		t.Fatalf("judgment uses = %#v, want one exec dispatch use", uses)
+	}
+	judgments, err := store.JudgmentsByKind(key, "shell_effect_plan", 10)
+	if err != nil {
+		t.Fatalf("JudgmentsByKind(shell_effect_plan) err = %v", err)
+	}
+	if len(judgments) != 1 {
+		t.Fatalf("shell effect judgments = %#v, want one persisted plan judgment", judgments)
+	}
+	use := uses[0]
+	if use.ConsumerID != "tool.exec.dispatch" || use.Consequence != session.JudgmentUseConsequenceExecution || use.Irreversible {
+		t.Fatalf("use = %#v, want reversible exec dispatch use", use)
+	}
+	if len(use.JudgmentRefs) == 0 || use.JudgmentRefs[0] != session.JudgmentRef(judgments[0].ID) {
+		t.Fatalf("judgment refs = %#v, want shell effect judgment ref %q", use.JudgmentRefs, session.JudgmentRef(judgments[0].ID))
+	}
+	if use.ResultRef == "" || !strings.HasPrefix(use.ResultRef, "effect_attempt:") {
+		t.Fatalf("result ref = %q, want effect attempt ref", use.ResultRef)
+	}
+}
+
+func TestExecSideEffectFailsClosedWithoutInterpretationStore(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	registry := NewRegistry(workspace, time.Second)
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"mkdir out"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 1001},
+		session.SessionKey{ChatID: 88021, UserID: 1001},
+	)
+	if err == nil || !strings.Contains(err.Error(), "interpretation store unavailable") {
+		t.Fatalf("exec err = %v, want interpretation store unavailable", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "out")); !os.IsNotExist(statErr) {
+		t.Fatalf("side-effect directory stat err = %v, want command not dispatched", statErr)
+	}
+}
+
+func TestExecRecordsDistinctJudgmentUsesForRepeatedInvocations(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8813, UserID: 1001}
+	registry := NewRegistry(workspace, time.Second).WithSessionStore(store)
+	command := "touch repeated.txt"
+	for i := 1; i <= 2; i++ {
+		ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 77, InvocationID: "repeat-" + strconv.Itoa(i)})
+		if _, err := registry.executeWithScopeAndPrincipal(
+			ctx,
+			"exec",
+			json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+			sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+			principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+			key,
+		); err != nil {
+			t.Fatalf("exec invocation %d err = %v", i, err)
+		}
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 2 {
+		t.Fatalf("judgment uses = %#v, want one use per repeated invocation", uses)
+	}
+	resultRefs := map[string]bool{}
+	for _, use := range uses {
+		resultRefs[use.ResultRef] = true
+		if use.TurnRunID != 77 {
+			t.Fatalf("use = %#v, want turn run identity propagated", use)
+		}
+	}
+	if len(resultRefs) != 2 {
+		t.Fatalf("result refs = %#v, want distinct effect attempts for repeated invocations", resultRefs)
+	}
+}
+
+func TestExecPreDispatchUsesCanonicalRepresentativeEffectForAudit(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 88131, UserID: 1001}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	command := "synthetic workspace write plus high impact storage"
+	ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 78, InvocationID: "mixed-impact"})
+	now := time.Now().UTC()
+	judgment, err := store.RecordJudgment(session.JudgmentInput{
+		Key:                key,
+		TurnRunID:          78,
+		Kind:               session.JudgmentKindShellEffectPlan,
+		SubjectKey:         "exec:" + session.EffectAttemptCommandHash(command),
+		ClaimKey:           "command_effect_plan",
+		InterpreterID:      "commandeffect.plan_command",
+		InputRefs:          []string{session.JudgmentUseRef("command_hash", session.EffectAttemptCommandHash(command))},
+		InputHash:          session.EffectAttemptCommandHash(command),
+		ResultJSON:         `{"effects":["workspace_mutation","high_impact_storage"]}`,
+		DependencyRefs:     []session.JudgmentDependencyRef{{Kind: "command_hash", Ref: session.EffectAttemptCommandHash(command), Role: "subject"}},
+		SourceFaultDomains: []string{"shell_text", "commandeffect_plan_v1"},
+		AsOf:               now,
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordJudgment() err = %v", err)
+	}
+	plan := commandeffect.EffectPlan{
+		Command: command,
+		Effects: []commandeffect.Effect{
+			{Kind: commandeffect.KindWorkspaceMutation, Reason: "workspace write", Command: "touch out", SideEffects: true},
+			{Kind: commandeffect.KindHighImpactStorage, Reason: "high-impact storage command", Command: "dd of=/dev/sda", SideEffects: true},
+		},
+	}
+	if got := commandeffect.RepresentativeEffect(plan); got.Kind != commandeffect.KindHighImpactStorage {
+		t.Fatalf("RepresentativeEffect() = %#v, want high-impact storage", got)
+	}
+	if err := registry.recordExecPreDispatchAttempt(
+		ctx,
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"exec",
+		command,
+		"",
+		judgment,
+		plan,
+		execQualificationGround{Kind: "operator_approval", ProposalID: "proposal-mixed-impact", DecisionID: "decision-mixed-impact", Choice: "approve"},
+	); err != nil {
+		t.Fatalf("recordExecPreDispatchAttempt() err = %v", err)
+	}
+	attempts, err := store.EffectAttemptsByTurnRun(key, 78)
+	if err != nil {
+		t.Fatalf("EffectAttemptsByTurnRun() err = %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %#v, want one pre-dispatch attempt", attempts)
+	}
+	if attempts[0].EffectKind != string(commandeffect.KindHighImpactStorage) {
+		t.Fatalf("attempt effect kind = %q, want canonical representative %q", attempts[0].EffectKind, commandeffect.KindHighImpactStorage)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 1 {
+		t.Fatalf("judgment uses = %#v, want one execution use", uses)
+	}
+	use := uses[0]
+	if !use.Irreversible || use.QualificationStatus != session.JudgmentUseQualificationQualified {
+		t.Fatalf("use = %#v, want high-impact representative to require and record qualified irreversible use", use)
+	}
+	var sawHighImpact bool
+	for _, dep := range use.DependencyRefs {
+		if dep.Kind == "effect_kind" && dep.Ref == string(commandeffect.KindHighImpactStorage) {
+			sawHighImpact = true
+		}
+	}
+	if !sawHighImpact {
+		t.Fatalf("dependency refs = %#v, want high-impact effect kind qualification", use.DependencyRefs)
+	}
+}
+
+func TestIrreversibleRawExecEffectsHaveProposalGround(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{
+		"git push origin main",
+		"gh pr create --fill",
+		"ssh production.example uptime",
+		"systemctl restart aphelion",
+		"curl https://example.invalid",
+		"python -m pip install example-package",
+		"dd if=/dev/zero of=/tmp/disk.img bs=1 count=0",
+		"psql -c 'drop table users'",
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			plan := commandeffect.PlanCommand(command)
+			if err := validateExecEffectPlanDispatchable(plan); err != nil {
+				t.Fatalf("PlanCommand(%q) produced non-dispatchable plan: %v", command, err)
+			}
+			effect := commandeffect.RepresentativeEffect(plan)
+			boundaryKind := ""
+			if boundary, ok := commandeffect.BoundaryForPlan(plan); ok {
+				boundaryKind = string(boundary.Kind)
+			}
+			if !execEffectRequiresPreCommitQualification(effect.Kind, effect.Reason, boundaryKind) {
+				t.Fatalf("command %q representative effect = %#v boundary=%q, want irreversible effect for this regression case", command, effect, boundaryKind)
+			}
+			proposal, reason := proposalForCommand(command)
+			if reason == "" || strings.TrimSpace(proposal.ID) != "" || strings.TrimSpace(proposal.Kind) == "" {
+				t.Fatalf("proposalForCommand(%q) = proposal=%#v reason=%q, want fresh operator proposal ground", command, proposal, reason)
+			}
+		})
+	}
+}
+
+func TestExecIrreversibleUseRequiresApprovedProposalGround(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8814, UserID: 1001}
+	approver := &stubExecApprover{approved: true}
+	registry := NewRegistry(workspace, time.Second).WithSessionStore(store).WithExecApprover(approver)
+	_, err := registry.executeWithScopeAndPrincipal(
+		WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 88, InvocationID: "push-approval"}),
+		"exec",
+		json.RawMessage(`{"command":"git push origin main"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if err == nil {
+		t.Fatal("exec err = nil, want git push process failure after approved dispatch")
+	}
+	if approver.called == 0 {
+		t.Fatal("approver was not called for git push")
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 1 {
+		t.Fatalf("judgment uses = %#v, want one irreversible dispatch use", uses)
+	}
+	judgments, err := store.JudgmentsByKind(key, "shell_effect_plan", 10)
+	if err != nil {
+		t.Fatalf("JudgmentsByKind(shell_effect_plan) err = %v", err)
+	}
+	if len(judgments) != 1 {
+		t.Fatalf("shell effect judgments = %#v, want one persisted plan judgment", judgments)
+	}
+	use := uses[0]
+	if !use.Irreversible || use.QualificationStatus != session.JudgmentUseQualificationQualified {
+		t.Fatalf("use = %#v, want qualified irreversible dispatch use", use)
+	}
+	if len(use.JudgmentRefs) == 0 || use.JudgmentRefs[0] != session.JudgmentRef(judgments[0].ID) {
+		t.Fatalf("judgment refs = %#v, want shell effect judgment ref %q", use.JudgmentRefs, session.JudgmentRef(judgments[0].ID))
+	}
+	var sawProposal, sawOperatorDecision, sawDecorrelated bool
+	for _, dep := range use.DependencyRefs {
+		if dep.Kind == "operation_proposal" && dep.Role == "qualifies" {
+			sawProposal = true
+		}
+		if dep.Kind == "operator_decision" && dep.Role == "qualifies" && dep.Scope == "approve" {
+			sawOperatorDecision = true
+		}
+		if dep.Kind == "decorrelation_decision" && dep.Role == "qualifies" && dep.Scope == "decorrelated" {
+			sawDecorrelated = true
+		}
+	}
+	if !sawProposal || !sawOperatorDecision || !sawDecorrelated {
+		t.Fatalf("dependency refs = %#v, want approved proposal, operator decision, and decorrelation qualification refs", use.DependencyRefs)
+	}
+}
+
+func TestExecIrreversibleUseRejectsCorrelatedQualificationGround(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8816, UserID: 1001}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 90, InvocationID: "push-correlated-ground"})
+	now := time.Now().UTC()
+	shellJudgment, err := store.RecordJudgment(session.JudgmentInput{
+		Key:                key,
+		TurnRunID:          90,
+		Kind:               "shell_effect_plan",
+		SubjectKey:         "exec:" + session.EffectAttemptCommandHash("git push origin main"),
+		ClaimKey:           "command_effect_plan",
+		InterpreterID:      "commandeffect.plan_command",
+		InputRefs:          []string{session.JudgmentUseRef("command_hash", session.EffectAttemptCommandHash("git push origin main"))},
+		InputHash:          session.EffectAttemptCommandHash("git push origin main"),
+		ResultJSON:         `{"effect":"git_push"}`,
+		DependencyRefs:     []session.JudgmentDependencyRef{{Kind: "operation_proposal", Ref: "proposal-correlated", Role: "support"}},
+		SourceFaultDomains: []string{"operation_proposal"},
+		AsOf:               now,
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordJudgment() err = %v", err)
+	}
+	err = registry.recordExecPreDispatchAttempt(
+		ctx,
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"exec",
+		"git push origin main",
+		"",
+		shellJudgment,
+		commandeffect.PlanCommand("git push origin main"),
+		execQualificationGround{Kind: "operator_approval", ProposalID: "proposal-correlated", DecisionID: "decision-correlated", Choice: "approve"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "not decorrelated") {
+		t.Fatalf("recordExecPreDispatchAttempt() err = %v, want correlated qualification rejection", err)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 0 {
+		t.Fatalf("judgment uses = %#v, want no use for correlated qualification ground", uses)
+	}
+}
+
+func TestExecIrreversibleUseRejectsApprovalWithoutDecisionGround(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8817, UserID: 1001}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 91, InvocationID: "push-incomplete-approval-ground"})
+	judgment, plan, err := registry.recordShellEffectJudgment(ctx, key, "git push origin main")
+	if err != nil {
+		t.Fatalf("recordShellEffectJudgment() err = %v", err)
+	}
+	err = registry.recordExecPreDispatchAttempt(
+		ctx,
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"exec",
+		"git push origin main",
+		"",
+		judgment,
+		plan,
+		execQualificationGround{Kind: "operator_approval", ProposalID: "proposal-incomplete", Choice: "approve"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "approved operator decision") {
+		t.Fatalf("recordExecPreDispatchAttempt() err = %v, want incomplete approval ground rejection", err)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 0 {
+		t.Fatalf("judgment uses = %#v, want no use for incomplete approval ground", uses)
+	}
+}
+
+func TestExecIrreversibleUseRejectsContinuationWithoutOperatorApprovalGround(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8818, UserID: 1001}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 92, InvocationID: "push-continuation-without-approver"})
+	now := time.Now().UTC()
+	state := continuationExecAuthorityTestState("repo_publication", []string{"git_push", "report_push_evidence"}, false, now)
+	state.ContinuationLease.LeaseClass = session.ContinuationLeaseClassRepoPublication
+	state.ApprovedBy = 0
+	state.ContinuationLease.ApprovedBy = 0
+	ctx = WithContinuationExecAuthority(ctx, state)
+	judgment, plan, err := registry.recordShellEffectJudgment(ctx, key, "git push origin main")
+	if err != nil {
+		t.Fatalf("recordShellEffectJudgment() err = %v", err)
+	}
+	err = registry.recordExecPreDispatchAttempt(
+		ctx,
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"exec",
+		"git push origin main",
+		"",
+		judgment,
+		plan,
+		execQualificationGround{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "operator-approved support ref") {
+		t.Fatalf("recordExecPreDispatchAttempt() err = %v, want missing continuation approver ground rejection", err)
+	}
+}
+
+func TestExecIrreversibleUseWithoutGroundIsRejectedBeforeCommitment(t *testing.T) {
+	t.Parallel()
+
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8815, UserID: 1001}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 89, InvocationID: "push-no-ground"})
+	judgment, plan, err := registry.recordShellEffectJudgment(ctx, key, "git push origin main")
+	if err != nil {
+		t.Fatalf("recordShellEffectJudgment() err = %v", err)
+	}
+	err = registry.recordExecPreDispatchAttempt(
+		ctx,
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+		"exec",
+		"git push origin main",
+		"",
+		judgment,
+		plan,
+		execQualificationGround{},
+	)
+	if err == nil {
+		t.Fatal("recordExecPreDispatchAttempt() err = nil, want ungrounded irreversible use rejected")
+	}
+	if !strings.Contains(err.Error(), "lacks approved proposal or active continuation authority") {
+		t.Fatalf("recordExecPreDispatchAttempt() err = %v, want missing qualification ground", err)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 0 {
+		t.Fatalf("judgment uses = %#v, want no irreversible commitment without qualification ground", uses)
+	}
+	judgments, err := store.JudgmentsByKind(key, "shell_effect_plan", 10)
+	if err != nil {
+		t.Fatalf("JudgmentsByKind(shell_effect_plan) err = %v", err)
+	}
+	if len(judgments) != 1 {
+		t.Fatalf("shell effect judgments = %#v, want rejected irreversible command still interpreted once", judgments)
 	}
 }
 
@@ -168,8 +762,8 @@ func TestContinuationExecAuthorityBoundaryKindsAllowAndDeny(t *testing.T) {
 			name:           "remote host",
 			command:        "ssh aphelion.example uptime",
 			allowRiskClass: "remote_host_operation",
-			allowActions:   []string{"remote_host_operation", "report_remote_status"},
-			wantAction:     "remote_host_operation",
+			allowActions:   []string{"ssh", "report_remote_status"},
+			wantAction:     "ssh",
 		},
 		{
 			name:           "service process",
@@ -447,7 +1041,6 @@ func TestExecWrappedDangerousCommandsStillRequireApproval(t *testing.T) {
 
 	for _, command := range []string{
 		`sudo -n rm -rf build`,
-		`env -i PATH=/usr/bin rm -rf build`,
 		`timeout 5 rm -rf build`,
 	} {
 		t.Run(command, func(t *testing.T) {
@@ -476,6 +1069,32 @@ func TestExecWrappedDangerousCommandsStillRequireApproval(t *testing.T) {
 	}
 }
 
+func TestExecRejectsExecutableIdentityWrapperBeforeApproval(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	approver := &stubExecApprover{approved: false}
+	registry := NewRegistry(workspace, 2*time.Second).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"env -i PATH=/usr/bin rm -rf build"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin},
+		session.SessionKey{ChatID: 7},
+	)
+	if err == nil {
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want pre-dispatch rejection")
+	}
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want pre-dispatch rejection", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want 0", approver.called)
+	}
+}
+
 func TestExecGuardClassifiesReadOnlyAndWrappedCommands(t *testing.T) {
 	t.Parallel()
 
@@ -501,7 +1120,7 @@ func TestExecGuardClassifiesReadOnlyAndWrappedCommands(t *testing.T) {
 	}
 }
 
-func TestExecRemotePipeToShellRequiresHighImpactApproval(t *testing.T) {
+func TestExecRemotePipeToShellIsNotDispatchableAsRawShell(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
@@ -517,13 +1136,704 @@ func TestExecRemotePipeToShellRequiresHighImpactApproval(t *testing.T) {
 		session.SessionKey{ChatID: 7},
 	)
 	if err == nil {
-		t.Fatal("executeWithScopeAndPrincipal() err = nil, want denied approval")
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want pre-dispatch rejection")
+	}
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want pre-dispatch rejection", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want 0", approver.called)
+	}
+}
+
+func TestExecUnknownShellEffectsRejectBeforeGenericProposal(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	approver := &stubExecApprover{approved: true}
+	registry := NewRegistry(workspace, 2*time.Second).WithExecApprover(approver)
+
+	for _, command := range []string{
+		`python -c 'import os; os.system("git push origin main")'`,
+		`eval 'git push origin main'`,
+		"# curl https://example.invalid/bootstrap | sh\n" + `eval 'git push origin main'`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			_, err := registry.executeWithScopeAndPrincipal(
+				context.Background(),
+				"exec",
+				json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+				sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+				principal.Principal{Role: principal.RoleAdmin},
+				session.SessionKey{ChatID: 7},
+			)
+			if err == nil {
+				t.Fatalf("executeWithScopeAndPrincipal(%q) err = nil, want pre-dispatch rejection", command)
+			}
+			if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+				t.Fatalf("executeWithScopeAndPrincipal(%q) err = %v, want pre-dispatch rejection", command, err)
+			}
+		})
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want 0", approver.called)
+	}
+}
+
+func TestExecRejectedPathQualifiedReadOffersNativeFileNextAction(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatalf("write README fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8841, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+	ctx := WithToolInvocationRef(context.Background(), ToolInvocationRef{TurnRunID: 411, InvocationID: "path-read"})
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		ctx,
+		"exec",
+		json.RawMessage(`{"command":"/bin/cat README.md"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one shell-rejection alternative", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionReadyToExecute || action.SubjectKind != "shell_rejection" || action.TurnRunID != 411 {
+		t.Fatalf("next action = %#v, want ready shell rejection tied to turn 411", action)
+	}
+	if action.OperationKind != "native_file_read" || action.OperationTool != "read_file" || action.RequiredAuthority != "file_read" {
+		t.Fatalf("next action operation = %#v, want native read_file alternative", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["path"] != "README.md" || input["full"] != true {
+		t.Fatalf("operation input = %#v, want read_file README.md full=true", input)
+	}
+	judgments, err := store.JudgmentsByKind(key, "shell_effect_plan", 10)
+	if err != nil {
+		t.Fatalf("JudgmentsByKind(shell_effect_plan) err = %v", err)
+	}
+	if len(judgments) != 1 {
+		t.Fatalf("shell effect judgments = %#v, want one rejected-shell judgment", judgments)
+	}
+	if !stringSliceContainsForTest(action.CausalRefs, session.JudgmentRef(judgments[0].ID)) {
+		t.Fatalf("causal refs = %#v, want shell judgment ref %q", action.CausalRefs, session.JudgmentRef(judgments[0].ID))
+	}
+}
+
+func TestExecRejectedDynamicVerificationRequiresTypedRewrite(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8842, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"env PATH=./bin:$PATH go test ./..."}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one typed rewrite action", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionWaitingForOperator || action.OperationKind != session.NextActionOperationKindOperatorRewrite || action.OperationTool != "update_operation" || action.RequiredAuthority != session.NextActionOperationKindOperatorRewrite {
+		t.Fatalf("next action operation = %#v, want waiting operator rewrite for dynamic command", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["reason"] != "dynamic_shell" || input["recovery_operation_kind"] != session.NextActionOperationKindOperatorRewrite {
+		t.Fatalf("operation input = %#v, want dynamic_shell operator rewrite reason", input)
+	}
+}
+
+func TestExecReadOnlyInspectionWithCdDoesNotRequireExactAdminApproval(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "runtime"), 0o755); err != nil {
+		t.Fatalf("mkdir runtime fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "runtime", "typed_continuation_approval.go"), []byte("typed approval fixture\n"), 0o600); err != nil {
+		t.Fatalf("write typed approval fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "runtime", "continuation_materialize.go"), []byte("materialize fixture\n"), 0o600); err != nil {
+		t.Fatalf("write materialize fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: true}
+	key := session.SessionKey{ChatID: 1001, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"}}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+	command := "cd " + strconv.Quote(workspace) + " && sed -n '1,260p' runtime/typed_continuation_approval.go && sed -n '1,260p' runtime/continuation_materialize.go"
+
+	out, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if err != nil {
+		t.Fatalf("executeWithScopeAndPrincipal(read-only cd inspection) err = %v", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want read-only cd inspection to avoid exact-command approval", approver.called)
+	}
+	if !strings.Contains(out, "typed approval fixture") || !strings.Contains(out, "materialize fixture") {
+		t.Fatalf("output = %q, want both inspected files", out)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 0 {
+		t.Fatalf("judgment uses = %#v, want no pre-dispatch execution use for read-only inspection", uses)
+	}
+}
+
+func TestExecAdminDMCanApproveUnboundedInspectionShellWithCd(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "runtime"), 0o755); err != nil {
+		t.Fatalf("mkdir runtime fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "runtime", "typed_continuation_approval.go"), []byte("path-qualified inspection fixture\n"), 0o600); err != nil {
+		t.Fatalf("write typed approval fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: true}
+	key := session.SessionKey{ChatID: 1001, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"}}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+	command := "cd " + strconv.Quote(workspace) + " && /bin/cat runtime/typed_continuation_approval.go"
+
+	out, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if err != nil {
+		t.Fatalf("executeWithScopeAndPrincipal(admin exact cd inspection) err = %v", err)
 	}
 	if approver.called != 1 {
-		t.Fatalf("approver called = %d, want 1", approver.called)
+		t.Fatalf("approver called = %d, want exact-command approval prompt", approver.called)
 	}
-	if approver.request.Proposal.Kind != "remote_shell_execution" {
-		t.Fatalf("proposal kind = %q, want remote_shell_execution", approver.request.Proposal.Kind)
+	if approver.request.Proposal.Kind != "admin_unbounded_exact_exec" || approver.request.Command != command {
+		t.Fatalf("approval request = %#v, want exact admin unbounded exec proposal for command", approver.request)
+	}
+	if !strings.Contains(out, "path-qualified inspection fixture") {
+		t.Fatalf("output = %q, want inspected file content", out)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 1 || !uses[0].Irreversible || uses[0].QualificationStatus != session.JudgmentUseQualificationQualified {
+		t.Fatalf("judgment uses = %#v, want one qualified irreversible admin exact exec use", uses)
+	}
+}
+
+func TestExecAdminDMCanApproveExactUnboundedCommand(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: true}
+	key := session.SessionKey{ChatID: 1001, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"}}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"eval 'touch approved-exact.txt'"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if err != nil {
+		t.Fatalf("executeWithScopeAndPrincipal() err = %v", err)
+	}
+	if approver.called != 1 {
+		t.Fatalf("approver called = %d, want exact-command approval prompt", approver.called)
+	}
+	if approver.request.Proposal.Kind != "admin_unbounded_exact_exec" || approver.request.Command != "eval 'touch approved-exact.txt'" {
+		t.Fatalf("approval request = %#v, want exact admin unbounded exec proposal", approver.request)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "approved-exact.txt")); err != nil {
+		t.Fatalf("approved exact command side effect stat err = %v", err)
+	}
+	uses, err := store.JudgmentUsesBySession(key, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesBySession() err = %v", err)
+	}
+	if len(uses) != 1 || !uses[0].Irreversible || uses[0].QualificationStatus != session.JudgmentUseQualificationQualified {
+		t.Fatalf("judgment uses = %#v, want one qualified irreversible admin exact exec use", uses)
+	}
+}
+
+func TestExecAdminExactUnboundedCommandRequiresAdminDM(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: true}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"eval 'touch denied-group.txt'"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		session.SessionKey{ChatID: -200, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramGroup, ID: "-200"}},
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("group err = %v, want pre-dispatch rejection", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want no exact-command prompt outside admin DM", approver.called)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "denied-group.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("denied-group stat err = %v, want file absent", statErr)
+	}
+
+	_, err = registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"eval 'touch denied-user.txt'"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 1001},
+		session.SessionKey{ChatID: 1001, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"}},
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("approved-user err = %v, want pre-dispatch rejection", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want no exact-command prompt for non-admin", approver.called)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "denied-user.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("denied-user stat err = %v, want file absent", statErr)
+	}
+}
+
+func TestExecRejectedJournalctlPipelineRecordsSystemLogReadAlternative(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8849, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"journalctl --user -u aphelion.service --since '3 hours ago' --no-pager | grep -Ei 'idolum-email|continuation' | tail -120"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one system_log_read alternative", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionReadyToExecute || action.OperationKind != "system_log_read" || action.OperationTool != "system_log_read" {
+		t.Fatalf("next action = %#v, want ready system_log_read alternative", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["unit"] != "aphelion.service" || input["since"] != "3 hours ago" || input["limit"].(float64) != 120 {
+		t.Fatalf("operation input = %#v, want parsed unit/since/limit", input)
+	}
+	include, ok := input["include"].([]any)
+	if !ok || len(include) != 2 || include[0] != "idolum-email" || include[1] != "continuation" {
+		t.Fatalf("operation input include = %#v, want literal include terms", input["include"])
+	}
+}
+
+func TestExecRejectedNativeReadPreservesNonRootWorkdir(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	subdir := filepath.Join(workspace, "subdir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir subdir fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "foo.txt"), []byte("from subdir\n"), 0o600); err != nil {
+		t.Fatalf("write subdir fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8845, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"/bin/cat foo.txt","workdir":"subdir"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one native read alternative", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionReadyToExecute || action.OperationKind != "native_file_read" || action.OperationTool != "read_file" {
+		t.Fatalf("next action = %#v, want exact ready native read", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	wantPath := filepath.Join(subdir, "foo.txt")
+	if input["path"] != wantPath || input["full"] != true {
+		t.Fatalf("operation input = %#v, want read_file path %q full=true", input, wantPath)
+	}
+}
+
+func TestExecRejectedReadyNativeReadDowngradesWhenPathRedacts(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	reports := filepath.Join(workspace, "reports")
+	if err := os.MkdirAll(reports, 0o755); err != nil {
+		t.Fatalf("mkdir reports fixture: %v", err)
+	}
+	secretShapedName := "report-sk-123456789012.txt"
+	secretShapedPath := filepath.Join("reports", secretShapedName)
+	if err := os.WriteFile(filepath.Join(reports, secretShapedName), []byte("report\n"), 0o600); err != nil {
+		t.Fatalf("write report fixture: %v", err)
+	}
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8848, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"/bin/cat `+secretShapedPath+`"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one downgraded rewrite action", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionWaitingForOperator || action.OperationKind != session.NextActionOperationKindOperatorRewrite || action.OperationTool != "update_operation" {
+		t.Fatalf("next action = %#v, want redacted ready operation downgraded to operator rewrite", action)
+	}
+	if strings.Contains(action.OperationInputJSON, secretShapedName) || strings.Contains(action.OperationInputJSON, secretShapedPath) {
+		t.Fatalf("operation input leaked secret-shaped filename: %s", action.OperationInputJSON)
+	}
+	if !strings.Contains(action.OperationInputJSON, "ready_operation_input_redacted") || !strings.Contains(action.OperationInputJSON, "redacted:api_key:") {
+		t.Fatalf("operation input = %s, want redacted downgrade payload", action.OperationInputJSON)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["reason"] != "ready_operation_input_redacted" || input["recovery_operation_kind"] != session.NextActionOperationKindOperatorRewrite || input["original_operation_kind"] != "native_file_read" || input["original_operation_tool"] != "read_file" {
+		t.Fatalf("operation input = %#v, want ready operation redaction downgrade metadata", input)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 10)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventWorkflowNextState && (strings.Contains(event.PayloadJSON, secretShapedName) || strings.Contains(event.PayloadJSON, secretShapedPath)) {
+			t.Fatalf("workflow event leaked secret-shaped filename: %s", event.PayloadJSON)
+		}
+	}
+}
+
+func TestExecRejectedCatStdinRequiresTypedRewrite(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8849, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"/bin/cat -"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one stdin rewrite action", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionWaitingForOperator || action.OperationKind != session.NextActionOperationKindOperatorRewrite || action.OperationTool != "update_operation" {
+		t.Fatalf("next action = %#v, want operator rewrite for stdin semantics", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["reason"] != "stdin_semantics_not_native_file_path" || input["recovery_operation_kind"] != session.NextActionOperationKindOperatorRewrite {
+		t.Fatalf("operation input = %#v, want stdin operator rewrite reason", input)
+	}
+	if strings.Contains(action.OperationInputJSON, `"path":"-"`) {
+		t.Fatalf("operation input = %s, must not suggest read_file path '-'", action.OperationInputJSON)
+	}
+}
+
+func TestExecRejectedFindNameStaysLossyWaitingSuggestion(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8846, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"/usr/bin/find . -name '*.go'"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one lossy find suggestion", open)
+	}
+	action := open[0]
+	if action.State == session.NextActionReadyToExecute || action.OperationKind != "native_directory_list" || action.OperationTool != "list_dir" {
+		t.Fatalf("next action = %#v, want non-ready lossy directory-list suggestion", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["path"] == "*.go" || input["path"] == "'*.go'" || input["lossy_reason"] == "" {
+		t.Fatalf("operation input = %#v, want find path not name operand and lossy reason", input)
+	}
+}
+
+func TestExecRejectedCanonicalCandidateMustBeDispatchable(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8847, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"command git -c core.sshCommand=ssh status"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one typed rewrite action", open)
+	}
+	action := open[0]
+	if action.State == session.NextActionReadyToExecute || action.OperationKind == "confined_git_inspection" || action.OperationTool == "exec" {
+		t.Fatalf("next action = %#v, want non-ready typed rewrite for nondispatchable canonical candidate", action)
+	}
+}
+
+func TestExecRejectedShellAlternativeRedactsCommandDerivedPayloads(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	key := session.SessionKey{ChatID: 8844, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+	command := `/usr/bin/rg "Authorization: Bearer bearer-secret-value OPENAI_API_KEY=sk-rejected-secret-value" "https://user:credential-password@example.test/repo?api_key=query-secret-value"`
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one redacted shell alternative", open)
+	}
+	action := open[0]
+	if action.OperationKind != "native_text_search" || action.OperationTool != "search" || action.SubjectRef == "" {
+		t.Fatalf("next action = %#v, want native search recommendation with command hash subject", action)
+	}
+	recordText := strings.Join([]string{
+		action.OperationInputJSON,
+		action.OperatorProjection,
+		action.NextAction,
+		action.SubjectRef,
+		strings.Join(action.CausalRefs, "\n"),
+	}, "\n")
+	assertNoShellAlternativeSecrets(t, recordText)
+	for _, want := range []string{"redacted:bearer:", "redacted:api_key:", "redacted:connection_password:", "redacted:url_query:", `"query_fingerprint":"sha256:`, `"path_fingerprint":"sha256:`, `"recommendation_only":true`} {
+		if !strings.Contains(action.OperationInputJSON, want) {
+			t.Fatalf("operation input = %s, want %q", action.OperationInputJSON, want)
+		}
+	}
+
+	events, err := store.ExecutionEventsBySession(key, 0, 10)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	workflowPayload := ""
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventWorkflowNextState {
+			workflowPayload += event.PayloadJSON + "\n"
+		}
+	}
+	if workflowPayload == "" {
+		t.Fatalf("events = %#v, want workflow next-state event", events)
+	}
+	assertNoShellAlternativeSecrets(t, workflowPayload)
+	for _, want := range []string{"redacted:bearer:", "redacted:api_key:", "redacted:connection_password:", "redacted:url_query:", `"query_fingerprint":"sha256:`, `"path_fingerprint":"sha256:`} {
+		if !strings.Contains(workflowPayload, want) {
+			t.Fatalf("workflow payload = %s, want %q", workflowPayload, want)
+		}
+	}
+}
+
+func TestExecRejectedMultiAuthorityShellRecordsSplitPlanNextAction(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	approver := &stubExecApprover{approved: true}
+	key := session.SessionKey{ChatID: 8843, UserID: 1001}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store).WithExecApprover(approver)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"git push origin main && gh pr create --fill"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001},
+		key,
+	)
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+	}
+	if approver.called != 0 {
+		t.Fatalf("approver called = %d, want raw multi-effect shell rejected before proposal approval", approver.called)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one split-plan alternative", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionBlockedNeedsAuthority || action.OperationKind != session.NextActionOperationKindOperatorRewrite || action.OperationTool != "update_operation" || action.RequiredAuthority != session.NextActionOperationKindOperatorRewrite {
+		t.Fatalf("next action = %#v, want operator rewrite split-effect blocker", action)
+	}
+	input := mustNextActionInputMap(t, action)
+	if input["rewrite_reason"] != "multiple_authorities" || input["recovery_operation_kind"] != session.NextActionOperationKindOperatorRewrite {
+		t.Fatalf("operation input = %#v, want multiple-authority operator rewrite metadata", input)
+	}
+	rawSteps, ok := input["steps"].([]any)
+	if !ok || len(rawSteps) != 2 {
+		t.Fatalf("operation input = %#v, want two split steps", input)
+	}
+	first, _ := rawSteps[0].(map[string]any)
+	second, _ := rawSteps[1].(map[string]any)
+	if first["required_authority"] != "git_push" || second["required_authority"] != "github_pr_create" {
+		t.Fatalf("split steps = %#v / %#v, want git_push then github_pr_create authorities", first, second)
+	}
+}
+
+func TestExecPreDispatchAttemptWriteFailureStopsCommand(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	store := newToolTestStore(t)
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() err = %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second).WithSessionStore(store)
+
+	_, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"exec",
+		json.RawMessage(`{"command":"touch should-not-exist"}`),
+		sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+		principal.Principal{Role: principal.RoleAdmin},
+		session.SessionKey{ChatID: 7441},
+	)
+	if err == nil {
+		t.Fatal("executeWithScopeAndPrincipal() err = nil, want pre-dispatch rejection")
+	}
+	if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+		t.Fatalf("err = %v, want pre-dispatch rejection", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "should-not-exist")); !os.IsNotExist(statErr) {
+		t.Fatalf("side effect file stat err = %v, want file absent", statErr)
 	}
 }
 
@@ -633,8 +1943,6 @@ func TestExecBoundaryCrossingCommandsRequireApproval(t *testing.T) {
 		{name: "az", command: "az account show", kind: "external_account_command", reason: "external account command"},
 		{name: "op", command: "op item get production-token", kind: "external_account_command", reason: "external account command"},
 		{name: "ssh", command: "ssh host.example uptime", kind: "remote_host_operation", reason: "remote host operation"},
-		{name: "scp", command: "scp notes.txt host.example:/tmp/notes.txt", kind: "remote_host_operation", reason: "remote host operation"},
-		{name: "rsync", command: "rsync -av . host.example:/tmp/work", kind: "remote_host_operation", reason: "remote host operation"},
 		{name: "systemctl_restart", command: "systemctl --user restart aphelion.service", kind: "service_process_change", reason: "service/process change"},
 		{name: "systemctl_start", command: "systemctl start aphelion.service", kind: "service_process_change", reason: "service/process change"},
 		{name: "systemctl_reload", command: "systemctl reload aphelion.service", kind: "service_process_change", reason: "service/process change"},
@@ -649,6 +1957,26 @@ func TestExecBoundaryCrossingCommandsRequireApproval(t *testing.T) {
 			proposal, reason := proposalForCommand(tc.command)
 			if reason != tc.reason || proposal.Kind != tc.kind {
 				t.Fatalf("proposalForCommand(%q) = kind=%q reason=%q, want %q/%q", tc.command, proposal.Kind, reason, tc.kind, tc.reason)
+			}
+		})
+	}
+}
+
+func TestExecCompoundRemoteCopyCommandsDoNotGetSingleApproval(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{
+		`scp notes.txt host.example:/tmp/notes.txt`,
+		`rsync -av . host.example:/tmp/work`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			if proposal, reason := proposalForCommand(command); reason != "" || strings.TrimSpace(proposal.Kind) != "" {
+				t.Fatalf("proposalForCommand(%q) = kind=%q reason=%q, want no one-boundary proposal", command, proposal.Kind, reason)
+			}
+			if err := validateExecEffectPlanDispatchable(commandeffect.PlanCommand(command)); err == nil {
+				t.Fatalf("validateExecEffectPlanDispatchable(%q) = nil, want rejection", command)
 			}
 		})
 	}
@@ -674,6 +2002,37 @@ func TestExecInterruptionCommandKindsStaySpecific(t *testing.T) {
 			proposal, reason := proposalForCommand(tc.command)
 			if reason != tc.reason || proposal.Kind != tc.kind {
 				t.Fatalf("proposalForCommand(%q) = kind=%q reason=%q, want %q/%q", tc.command, proposal.Kind, reason, tc.kind, tc.reason)
+			}
+		})
+	}
+}
+
+func TestExecRejectsUnboundedShellBeforeDispatch(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	approver := &stubExecApprover{approved: true}
+	registry := NewRegistry(workspace, time.Second).WithExecApprover(approver)
+	for _, command := range []string{
+		`eval 'git push origin main'`,
+		`echo "$(git push origin main)"`,
+		`git push origin main && gh pr create --fill`,
+		`git push origin main & systemctl restart aphelion`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			_, err := registry.executeWithScopeAndPrincipal(
+				context.Background(),
+				"exec",
+				json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+				sandbox.Scope{WorkingRoot: workspace, SharedMemoryRoot: workspace},
+				principal.Principal{Role: principal.RoleAdmin},
+				session.SessionKey{ChatID: 8803},
+			)
+			if !errors.Is(err, ErrExecRejectedBeforeDispatch) {
+				t.Fatalf("err = %v, want ErrExecRejectedBeforeDispatch", err)
+			}
+			if approver.called != 0 {
+				t.Fatalf("approver called = %d, want 0 because unbounded shell is rejected before projection", approver.called)
 			}
 		})
 	}
@@ -1041,4 +2400,31 @@ func TestExecuteForAdminRejectsEscapedWorkdirWithoutApproval(t *testing.T) {
 	if !strings.Contains(err.Error(), "approved proposal") {
 		t.Fatalf("err = %v, want approval requirement", err)
 	}
+}
+
+func mustNextActionInputMap(t *testing.T, action session.NextActionRecord) map[string]any {
+	t.Helper()
+	var input map[string]any
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
+		t.Fatalf("unmarshal operation input %q: %v", action.OperationInputJSON, err)
+	}
+	return input
+}
+
+func assertNoShellAlternativeSecrets(t *testing.T, text string) {
+	t.Helper()
+	for _, forbidden := range []string{"bearer-secret-value", "sk-rejected-secret-value", "credential-password", "query-secret-value"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("stored shell alternative leaked %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func stringSliceContainsForTest(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

@@ -32,6 +32,10 @@ func NewRuntime(store Store) *Runtime {
 }
 
 func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.DurableReviewArtifact) (int64, error) {
+	return r.QueueReviewArtifactWithIdempotencyKey(agent, artifact, "")
+}
+
+func (r *Runtime) QueueReviewArtifactWithIdempotencyKey(agent core.DurableAgent, artifact core.DurableReviewArtifact, idempotencyKey string) (int64, error) {
 	if r == nil || r.store == nil {
 		return 0, fmt.Errorf("durable agent runtime store is nil")
 	}
@@ -57,6 +61,7 @@ func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.Dur
 	if err != nil {
 		return 0, fmt.Errorf("queue durable review artifact metadata: %w", err)
 	}
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
 
 	event := session.ReviewEvent{
 		SourceRole:        "durable_agent",
@@ -66,8 +71,9 @@ func (r *Runtime) QueueReviewArtifact(agent core.DurableAgent, artifact core.Dur
 			Kind: session.ScopeKindTelegramDM,
 			ID:   strconv.FormatInt(agent.ReviewTargetChatID, 10),
 		},
-		Summary:      summary,
-		MetadataJSON: metadataJSON,
+		Summary:        summary,
+		MetadataJSON:   metadataJSON,
+		IdempotencyKey: idempotencyKey,
 	}
 	eventID, err := r.store.InsertReviewEvent(event)
 	if err != nil {

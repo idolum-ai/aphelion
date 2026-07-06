@@ -88,13 +88,14 @@ Thinking should vary by run kind.
 
 ### Default turns
 
-- default `medium`
-- escalate to `high` when explicitly configured or when a stronger provider/model is selected
-- a narrow runtime-owned operator toggle may temporarily raise interactive/recovery effort from `medium` to `high` without rewriting the base config
+- default `high`
+- a narrow runtime-owned operator toggle may temporarily raise or lower
+  interactive/recovery effort across `low`, `medium`, `high`, and `xhigh`
+  without rewriting the base config
 
 ### Heartbeat turns
 
-- default `low` or `medium`
+- default `low`
 - enough to reflect, summarize, and choose silence well
 - not so high that maintenance turns become wasteful
 
@@ -154,14 +155,14 @@ See `config.md`, but the intended shape should preserve:
 
 ```toml
 [thinking]
-effort = "medium"           # none | low | medium | high | xhigh
+effort = "high"             # none | low | medium | high | xhigh
 summary = "auto"            # none | auto | compact
 
 [thinking.defaults]
-default = "medium"
+default = "high"
 heartbeat = "low"
 cron = "low"
-subagent = "medium"
+recovery = "high"
 ```
 
 Plan-mode or operator-specific overrides may be added later, but these are the core knobs.
@@ -173,6 +174,8 @@ Aphelion may also expose a narrow runtime-owned override layer for operator cont
 For the current system shape, that layer is intentionally small:
 
 - interactive/recovery governor effort is operator-selectable through the admin-only `/model` slot controls across `low|medium|high|xhigh`
+- status, heartbeat, and curiosity have first-class `/model` slots so cheap
+  maintenance/readable lanes can be routed separately from the strong governor
 - heartbeat and cron should continue to use their own lower defaults
 - OpenAI fast mode, when exposed through `/model`, is a provider service tier,
   not a reasoning-effort level; it should stay separate from the cross-backend

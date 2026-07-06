@@ -95,6 +95,24 @@ type OperationArtifact struct {
 	Ref   string `json:"ref"`
 }
 
+type OperationRecoveryHandoff struct {
+	Contract          string `json:"contract,omitempty"`
+	OperationKind     string `json:"operation_kind,omitempty"`
+	OperationTool     string `json:"operation_tool,omitempty"`
+	RetryPolicy       string `json:"retry_policy,omitempty"`
+	RequiredAuthority string `json:"required_authority,omitempty"`
+	ResourceBlocker   string `json:"resource_blocker,omitempty"`
+	DurableAgentID    string `json:"durable_agent_id,omitempty"`
+	AgentID           string `json:"agent_id,omitempty"`
+	BlockerKind       string `json:"blocker_kind,omitempty"`
+	TaskPacketID      string `json:"task_packet_id,omitempty"`
+	ChildResultID     string `json:"child_result_id,omitempty"`
+	Tool              string `json:"tool,omitempty"`
+	Adapter           string `json:"adapter,omitempty"`
+	DiagnosticOnly    bool   `json:"diagnostic_only,omitempty"`
+	NoContentProbe    bool   `json:"no_content_probe,omitempty"`
+}
+
 type PlanLeaseStatus string
 
 type OperationPlanLeaseLane struct {
@@ -208,18 +226,19 @@ type OperationEvidenceStatus struct {
 }
 
 type OperationState struct {
-	ID        string                `json:"id,omitempty"`
-	Objective string                `json:"objective,omitempty"`
-	Status    OperationStatus       `json:"status,omitempty"`
-	Stage     string                `json:"stage,omitempty"`
-	Summary   string                `json:"summary,omitempty"`
-	Proposal  OperationProposal     `json:"proposal,omitempty"`
-	PhasePlan OperationPhasePlan    `json:"phase_plan,omitempty"`
-	PlanLease OperationPlanLease    `json:"plan_lease,omitempty"`
-	Findings  []OperationFinding    `json:"findings,omitempty"`
-	Artifacts []OperationArtifact   `json:"artifacts,omitempty"`
-	Work      WorkOperationMetadata `json:"work,omitempty"`
-	UpdatedAt time.Time             `json:"updated_at,omitempty"`
+	ID              string                   `json:"id,omitempty"`
+	Objective       string                   `json:"objective,omitempty"`
+	Status          OperationStatus          `json:"status,omitempty"`
+	Stage           string                   `json:"stage,omitempty"`
+	Summary         string                   `json:"summary,omitempty"`
+	Proposal        OperationProposal        `json:"proposal,omitempty"`
+	PhasePlan       OperationPhasePlan       `json:"phase_plan,omitempty"`
+	PlanLease       OperationPlanLease       `json:"plan_lease,omitempty"`
+	Findings        []OperationFinding       `json:"findings,omitempty"`
+	Artifacts       []OperationArtifact      `json:"artifacts,omitempty"`
+	RecoveryHandoff OperationRecoveryHandoff `json:"recovery_handoff,omitempty"`
+	Work            WorkOperationMetadata    `json:"work,omitempty"`
+	UpdatedAt       time.Time                `json:"updated_at,omitempty"`
 }
 
 func NormalizePlanState(state PlanState) PlanState {
@@ -307,12 +326,53 @@ func NormalizeOperationState(state OperationState) OperationState {
 		})
 	}
 	state.Artifacts = artifacts
+	state.RecoveryHandoff = NormalizeOperationRecoveryHandoff(state.RecoveryHandoff)
 	state.Work = NormalizeWorkOperationMetadata(state.Work)
 
 	if state.UpdatedAt.IsZero() && state.Active() {
 		state.UpdatedAt = time.Now().UTC()
 	}
 	return state
+}
+
+func NormalizeOperationRecoveryHandoff(handoff OperationRecoveryHandoff) OperationRecoveryHandoff {
+	handoff.Contract = strings.TrimSpace(handoff.Contract)
+	handoff.OperationKind = normalizeEnumValue(handoff.OperationKind)
+	handoff.OperationTool = strings.TrimSpace(handoff.OperationTool)
+	handoff.RetryPolicy = normalizeEnumValue(handoff.RetryPolicy)
+	handoff.RequiredAuthority = strings.TrimSpace(handoff.RequiredAuthority)
+	handoff.ResourceBlocker = normalizeEnumValue(handoff.ResourceBlocker)
+	handoff.DurableAgentID = strings.TrimSpace(handoff.DurableAgentID)
+	handoff.AgentID = strings.TrimSpace(handoff.AgentID)
+	handoff.BlockerKind = normalizeEnumValue(handoff.BlockerKind)
+	handoff.TaskPacketID = strings.TrimSpace(handoff.TaskPacketID)
+	handoff.ChildResultID = strings.TrimSpace(handoff.ChildResultID)
+	handoff.Tool = strings.TrimSpace(handoff.Tool)
+	handoff.Adapter = strings.TrimSpace(handoff.Adapter)
+	if handoff.DurableAgentID == "" {
+		handoff.DurableAgentID = handoff.AgentID
+	}
+	if handoff.AgentID == "" {
+		handoff.AgentID = handoff.DurableAgentID
+	}
+	if handoff.Contract == "" &&
+		handoff.OperationKind == "" &&
+		handoff.OperationTool == "" &&
+		handoff.RetryPolicy == "" &&
+		handoff.RequiredAuthority == "" &&
+		handoff.ResourceBlocker == "" &&
+		handoff.DurableAgentID == "" &&
+		handoff.AgentID == "" &&
+		handoff.BlockerKind == "" &&
+		handoff.TaskPacketID == "" &&
+		handoff.ChildResultID == "" &&
+		handoff.Tool == "" &&
+		handoff.Adapter == "" &&
+		!handoff.DiagnosticOnly &&
+		!handoff.NoContentProbe {
+		return OperationRecoveryHandoff{}
+	}
+	return handoff
 }
 
 func NormalizePlanLeaseStatus(status PlanLeaseStatus) PlanLeaseStatus {

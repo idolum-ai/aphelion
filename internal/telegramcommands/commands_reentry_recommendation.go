@@ -84,11 +84,29 @@ func handleReentryRecommendationCallback(ctx context.Context, sender commandCall
 		if err := sender.AnswerCallbackQuery(ctx, strings.TrimSpace(cb.ID), "Queued."); err != nil && !telegram.IsStaleCallbackQueryError(err) {
 			return true, err
 		}
-		editReentryRecommendationCallbackMessage(ctx, sender, router, targetMsg.ChatID, targetMsg.MessageID, "reentry_recommendation.select", fmt.Sprintf("Queued re-entry path: %s.", strings.TrimSpace(candidate.Label)))
+		editReentryRecommendationCallbackMessage(ctx, sender, router, targetMsg.ChatID, targetMsg.MessageID, "reentry_recommendation.select", fmt.Sprintf("Queued re-entry path: %s.", neutralizeReentryRecommendationCallbackLabel(candidate.Label)))
 		return true, nil
 	default:
 		return false, nil
 	}
+}
+
+func neutralizeReentryRecommendationCallbackLabel(label string) string {
+	label = strings.Join(strings.Fields(strings.TrimSpace(label)), " ")
+	label = strings.Trim(label, " .\t\n\r")
+	if label == "" {
+		return "selected path"
+	}
+	replacer := strings.NewReplacer(
+		"`", "'",
+		"**", "''",
+		"*", "'",
+		"[", "",
+		"]", "",
+		"(", " - ",
+		")", "",
+	)
+	return replacer.Replace(label)
 }
 
 func editReentryRecommendationCallbackMessage(ctx context.Context, sender commandCallbackSender, router commandRouter, chatID int64, messageID int64, callbackKind string, text string) {
@@ -110,11 +128,20 @@ func reentryRecommendationSelectionPrompt(record session.ReentryRecommendation, 
 	if summary := strings.TrimSpace(candidate.Summary); summary != "" {
 		parts = append(parts, "Candidate summary: "+summary)
 	}
+	if intentClass := strings.TrimSpace(candidate.IntentClass); intentClass != "" {
+		parts = append(parts, "Candidate intent: "+intentClass)
+	}
+	if temporalFit := strings.TrimSpace(candidate.TemporalFit); temporalFit != "" {
+		parts = append(parts, "Candidate timing: "+temporalFit)
+	}
 	if candidate.SourceKind != "" || candidate.SourceRef != "" {
 		parts = append(parts, fmt.Sprintf("Candidate source: %s %s", strings.TrimSpace(candidate.SourceKind), strings.TrimSpace(candidate.SourceRef)))
 	}
 	if len(candidate.EvidenceRefs) > 0 {
 		parts = append(parts, "Evidence refs: "+strings.Join(candidate.EvidenceRefs, ", "))
+	}
+	if whyNow := strings.TrimSpace(candidate.WhyNow); whyNow != "" {
+		parts = append(parts, "Why now: "+whyNow)
 	}
 	if reason := strings.TrimSpace(candidate.JudgmentReason); reason != "" {
 		parts = append(parts, "Judgment reason: "+reason)

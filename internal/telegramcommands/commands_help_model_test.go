@@ -157,6 +157,12 @@ func TestHandleTelegramCommandModelStatus(t *testing.T) {
 	if len(sender.inline[0].rows) == 0 || sender.inline[0].rows[0][0].CallbackData != "model:slot:p" {
 		t.Fatalf("rows = %#v, want model slot buttons", sender.inline[0].rows)
 	}
+	labels := modelTestButtonLabels(sender.inline[0].rows)
+	for _, want := range []string{"Status", "Heartbeat", "Curiosity"} {
+		if !slices.Contains(labels, want) {
+			t.Fatalf("labels = %#v, want %s slot button", labels, want)
+		}
+	}
 }
 
 func TestHandleTelegramCommandModelSetParsesSlotConfig(t *testing.T) {
@@ -190,6 +196,34 @@ func TestHandleTelegramCommandModelSetParsesSlotConfig(t *testing.T) {
 	}
 	if router.setModelSlotReason != "debug swap" {
 		t.Fatalf("reason = %q, want debug swap", router.setModelSlotReason)
+	}
+}
+
+func TestHandleTelegramCommandModelSetParsesCuriositySlotConfig(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{canRestart: true}
+	handled, err := handleTelegramCommand(context.Background(), sender, &router, core.InboundMessage{
+		ChatID:    7,
+		SenderID:  1001,
+		MessageID: 22,
+		Text:      "/model set curiosity anthropic/claude-haiku-4-5-20251001 effort=low reason=cheap silent lane",
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommand() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.setModelSlotInput.Slot != core.ModelSlotCuriosity {
+		t.Fatalf("slot = %q, want curiosity", router.setModelSlotInput.Slot)
+	}
+	if router.setModelSlotInput.Provider != core.ModelProviderAnthropic || router.setModelSlotInput.Model != "claude-haiku-4-5-20251001" {
+		t.Fatalf("provider/model = %s/%s", router.setModelSlotInput.Provider, router.setModelSlotInput.Model)
+	}
+	if router.setModelSlotInput.Effort != "low" {
+		t.Fatalf("effort = %q, want low", router.setModelSlotInput.Effort)
 	}
 }
 
@@ -480,6 +514,58 @@ func TestHandleTelegramCommandCallbackModelPresetDoctorGPTUsesCodex(t *testing.T
 	}
 }
 
+func TestHandleTelegramCommandCallbackModelPresetCheapUsesSlotDefault(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		modelStatuses: []core.ModelSlotStatus{{
+			Slot: core.ModelSlotStatusReadable,
+			Effective: core.ModelSlotConfig{
+				Slot:      core.ModelSlotStatusReadable,
+				Provider:  core.ModelProviderAnthropic,
+				Model:     "claude-opus-4-8",
+				Effort:    "high",
+				Transport: core.ModelTransportAuto,
+			},
+			Default: core.ModelSlotConfig{
+				Slot:      core.ModelSlotStatusReadable,
+				Provider:  core.ModelProviderOpenAI,
+				Model:     "gpt-5.4-mini",
+				Effort:    "low",
+				Transport: core.ModelTransportAuto,
+			},
+			Source: "override",
+			Validation: core.ModelValidation{
+				Valid:             true,
+				ResolvedTransport: core.ModelTransportAnthropicMessages,
+			},
+		}},
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:   "model-preset-cheap",
+		Data: encodeModelCallbackData(modelCallbackPreset, core.ModelSlotStatusReadable, "cheap"),
+		From: &telegram.User{ID: 1001},
+		Message: &telegram.Message{
+			MessageID: 34,
+			Chat:      &telegram.Chat{ID: 7, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.setModelSlotInput.Slot != core.ModelSlotStatusReadable {
+		t.Fatalf("slot = %q, want status", router.setModelSlotInput.Slot)
+	}
+	if router.setModelSlotInput.Provider != core.ModelProviderOpenAI || router.setModelSlotInput.Model != "gpt-5.4-mini" || router.setModelSlotInput.Effort != "low" {
+		t.Fatalf("set model slot = %#v, want cheap status default", router.setModelSlotInput)
+	}
+}
+
 func TestRenderModelSlotRowsHidesMaxForDoctorDirectOpenAI(t *testing.T) {
 	t.Parallel()
 
@@ -504,8 +590,29 @@ func TestRenderModelSlotRowsHidesMaxForDoctorDirectOpenAI(t *testing.T) {
 	if slices.Contains(labels, "Max") {
 		t.Fatalf("labels = %#v, should hide Max for direct OpenAI doctor slot", labels)
 	}
+	if slices.Contains(labels, "Cheap") {
+		t.Fatalf("labels = %#v, should not show Cheap for doctor slot", labels)
+	}
 	if !slices.Contains(labels, "Fast") || !slices.Contains(labels, "Standard") {
 		t.Fatalf("labels = %#v, want OpenAI speed controls", labels)
+	}
+}
+
+func TestRenderModelSlotRowsShowsCheapPresetForCheapLanes(t *testing.T) {
+	t.Parallel()
+
+	rows := renderModelSlotRows(core.ModelSlotStatus{
+		Slot: core.ModelSlotStatusReadable,
+		Effective: core.ModelSlotConfig{
+			Slot:     core.ModelSlotStatusReadable,
+			Provider: core.ModelProviderOpenAI,
+			Model:    "gpt-5.4-mini",
+			Effort:   "low",
+		},
+	})
+	labels := modelTestButtonLabels(rows)
+	if !slices.Contains(labels, "Cheap") {
+		t.Fatalf("labels = %#v, want Cheap preset", labels)
 	}
 }
 
@@ -530,6 +637,16 @@ func TestRenderModelSlotRowsHidesSpeedForNonOpenAI(t *testing.T) {
 	if slices.Contains(labels, "Fast") || slices.Contains(labels, "Standard") {
 		t.Fatalf("labels = %#v, want no speed controls for non-OpenAI slot", labels)
 	}
+}
+
+func modelTestButtonLabels(rows [][]telegram.InlineButton) []string {
+	var labels []string
+	for _, row := range rows {
+		for _, button := range row {
+			labels = append(labels, button.Text)
+		}
+	}
+	return labels
 }
 
 func TestHandleTelegramCommandCallbackModelDeniedForNonAdmin(t *testing.T) {

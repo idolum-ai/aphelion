@@ -5,11 +5,85 @@ package session
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
 )
+
+func TestRedactEvidenceTextReplacesSecretValuesWithStableMarkers(t *testing.T) {
+	t.Parallel()
+
+	jwt := strings.Join([]string{
+		"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+		"eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+		"signaturesecret",
+	}, ".")
+	raw := `Authorization: Bearer bearer-secret-value
+OPENAI_API_KEY=sk-env-secret-value
+password='p@ssw0rd!with-punctuation'
+postgres://user:connection-password@example.test/db
+` + jwt + `
+-----BEGIN PRIVATE KEY-----
+abc123privatekeymaterial
+-----END PRIVATE KEY-----
+{"password":"pw-secret-value","url":"https://example.test/callback?X-Amz-Signature=signed-secret-value&ok=1"}
+github_pat_1234567890abcdef`
+
+	redacted := RedactEvidenceText(raw)
+	if !redacted.Redacted {
+		t.Fatal("Redacted = false, want true")
+	}
+	for _, secret := range []string{"bearer-secret-value", "sk-env-secret-value", "p@ssw0rd!with-punctuation", "connection-password", "signaturesecret", "abc123privatekeymaterial", "pw-secret-value", "signed-secret-value", "github_pat_1234567890abcdef"} {
+		if strings.Contains(redacted.Text, secret) {
+			t.Fatalf("redacted text leaked %q: %s", secret, redacted.Text)
+		}
+	}
+	for _, want := range []string{"<redacted:bearer:", "<redacted:api_key:", "<redacted:password:", "<redacted:connection_password:", "<redacted:jwt:", "<redacted:private_key:", "<redacted:url_query:", "<redacted:github_token:"} {
+		if !strings.Contains(redacted.Text, want) {
+			t.Fatalf("redacted text = %q, want marker %q", redacted.Text, want)
+		}
+	}
+	if class := EvidenceRedactionClassForRedactions(redacted); class != EvidenceRedactionSecret {
+		t.Fatalf("redaction class = %q, want %q", class, EvidenceRedactionSecret)
+	}
+	if again := RedactEvidenceText(raw); again.Text != redacted.Text {
+		t.Fatalf("redaction is not stable:\nfirst: %s\nagain: %s", redacted.Text, again.Text)
+	}
+}
+
+func TestProjectToolResultForAudienceReturnsStructuredDecisionWithoutHeader(t *testing.T) {
+	t.Parallel()
+
+	metadata := "path: /workspace/credential-slot"
+	redacted := ProjectToolResultForAudience(metadata, ExposureAudienceModelPreview)
+	if redacted.ProjectionKind != ExposureProjectionRedacted || redacted.PolicyRef == "" || redacted.Sensitivity != EvidenceRedactionRedacted {
+		t.Fatalf("projection = %#v, want structured redacted projection with policy", redacted)
+	}
+	if !stringListContains(redacted.SensitivityProvenance, "pattern:credential_metadata") {
+		t.Fatalf("provenance = %#v, want credential metadata pattern", redacted.SensitivityProvenance)
+	}
+	for _, leaked := range []string{"/workspace/credential-slot", "[EXPOSURE_PROJECTION]", "policy_ref:", "sensitivity:"} {
+		if strings.Contains(redacted.Text, leaked) {
+			t.Fatalf("projection text leaked in-band detail %q: %s", leaked, redacted.Text)
+		}
+	}
+
+	sensitive := "token: github_pat_1234567890abcdef"
+	protected := ProjectToolResultForPurpose(sensitive, ExposureAudienceModelPreview, ExposurePurposeToolResultModelContext)
+	if protected.ProjectionKind != ExposureProjectionProtectedRef || protected.Sensitivity != EvidenceRedactionSecret {
+		t.Fatalf("protected projection = %#v, want protected_ref credential-bearing decision", protected)
+	}
+	if strings.Contains(protected.Text, "github_pat_1234567890abcdef") || strings.Contains(protected.Text, "[EXPOSURE_PROJECTION]") {
+		t.Fatalf("protected projection text = %q, want safe marker without header or secret", protected.Text)
+	}
+
+	large := ProjectToolResultForAudience(strings.Repeat("repair detail\n", 300), ExposureAudienceModelPreview)
+	if large.ProjectionKind != ExposureProjectionDigest || !strings.Contains(large.Text, "[tool_output_digest") {
+		t.Fatalf("large projection = %#v, want compact digest", large)
+	}
+}
 
 func TestEvidenceWriteThroughFromSessionTurnAndExecution(t *testing.T) {
 	t.Parallel()
@@ -106,6 +180,67 @@ func TestEvidenceObjectsAreImmutableBySourceID(t *testing.T) {
 	}
 	if stored.Summary != "first" || stored.PayloadHash != first.PayloadHash {
 		t.Fatalf("stored evidence mutated = %#v, want first immutable snapshot", stored)
+	}
+}
+
+func TestEvidenceHydrationRecordsModelContextAdmissionUse(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	key := SessionKey{ChatID: 99150, UserID: 1001}
+	obj, err := store.UpsertEvidenceObject(EvidenceObjectInput{
+		SourceKind:      EvidenceSourceExecutionEvent,
+		SourceRef:       "event:hydrate-use",
+		SessionID:       SessionIDForKey(key),
+		ChatID:          key.ChatID,
+		UserID:          key.UserID,
+		Scope:           defaultScopeForKey(key),
+		EpistemicStatus: EvidenceStatusAttested,
+		Summary:         "release validation passed",
+		PayloadJSON:     `{"output":"go test ./... passed"}`,
+	})
+	if err != nil {
+		t.Fatalf("UpsertEvidenceObject() err = %v", err)
+	}
+	result, err := store.HydrateEvidence(EvidenceHydrationQuery{
+		Key:                 key,
+		OperationID:         "op-hydration-use",
+		Query:               "release validation",
+		RequiredEvidenceIDs: []string{obj.ID, "ev:missing"},
+		Limit:               4,
+		Now:                 time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("HydrateEvidence() err = %v", err)
+	}
+	uses, err := store.JudgmentUsesByResultRef(JudgmentUseRef("evidence_hydration", result.RunID), 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesByResultRef() err = %v", err)
+	}
+	if len(uses) != 1 {
+		t.Fatalf("uses = %#v, want one model context admission use", uses)
+	}
+	use := uses[0]
+	if use.Consequence != JudgmentUseConsequenceModelContextAdmission || use.QualificationStatus != JudgmentUseQualificationQualified {
+		t.Fatalf("use = %#v, want qualified model context admission", use)
+	}
+	judgments, err := store.JudgmentsByKind(key, "evidence_hydration_selection", 10)
+	if err != nil {
+		t.Fatalf("JudgmentsByKind(evidence_hydration_selection) err = %v", err)
+	}
+	if len(judgments) != 1 {
+		t.Fatalf("evidence hydration judgments = %#v, want one selection judgment", judgments)
+	}
+	if len(use.JudgmentRefs) == 0 || use.JudgmentRefs[0] != JudgmentRef(judgments[0].ID) {
+		t.Fatalf("judgment refs = %#v, want evidence hydration judgment ref %q", use.JudgmentRefs, JudgmentRef(judgments[0].ID))
+	}
+	roles := map[string]string{}
+	for _, dep := range use.DependencyRefs {
+		roles[dep.Ref] = dep.Role
+	}
+	if roles[obj.ID] != "admitted" || roles["ev:missing"] != "missing" {
+		t.Fatalf("dependency roles = %#v, want admitted selected evidence and missing required evidence", roles)
 	}
 }
 

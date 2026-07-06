@@ -124,6 +124,168 @@ func TestEvidenceHydrateToolReturnsExplicitPayloadWindow(t *testing.T) {
 	}
 }
 
+func TestEvidenceHydrateToolWithholdsCredentialBearingPayloadWindow(t *testing.T) {
+	t.Parallel()
+
+	store := newToolEvidenceStore(t)
+	key := session.SessionKey{
+		ChatID: 2005,
+		UserID: 42,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "2005"},
+	}
+	payload, err := json.Marshal(map[string]any{
+		"tool":   "exec",
+		"output": "before\nAuthorization: Bearer bearer-secret-value\nOPENAI_API_KEY=sk-output-secret-value\nafter\n",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	object, err := store.UpsertEvidenceObject(session.EvidenceObjectInput{
+		SourceKind:      session.EvidenceSourceToolOutput,
+		SourceRef:       "tool_output:run:exec:redacted",
+		SessionID:       session.SessionIDForKey(key),
+		ChatID:          key.ChatID,
+		UserID:          key.UserID,
+		Scope:           key.Scope,
+		EpistemicStatus: session.EvidenceStatusAttested,
+		RedactionClass:  session.EvidenceRedactionRedacted,
+		SubjectKey:      "exec",
+		Summary:         "Large exec output",
+		Digest:          "sha256:abc omitted middle",
+		PayloadJSON:     string(payload),
+		ObservedAt:      time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertEvidenceObject() err = %v", err)
+	}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	input := fmt.Sprintf(`{"query":"inspect retained tool output","required_evidence_ids":[%q],"include_payload_ids":[%q],"payload_limit":400}`, object.ID, object.ID)
+	out, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"evidence_hydrate",
+		json.RawMessage(input),
+		sandbox.Scope{WorkingRoot: t.TempDir()},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 42},
+		key,
+	)
+	if err != nil {
+		t.Fatalf("execute evidence_hydrate err = %v", err)
+	}
+	for _, secret := range []string{"bearer-secret-value", "sk-output-secret-value"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("hydration leaked %q: %s", secret, out)
+		}
+	}
+	for _, want := range []string{"payload_withheld: redaction_class=credential_bearing"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("hydration = %q, want %q", out, want)
+		}
+	}
+}
+
+func TestEvidenceHydrateToolWindowsAlreadyRedactedPayload(t *testing.T) {
+	t.Parallel()
+
+	store := newToolEvidenceStore(t)
+	key := session.SessionKey{
+		ChatID: 2007,
+		UserID: 42,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "2007"},
+	}
+	payload, err := json.Marshal(map[string]any{
+		"tool":   "exec",
+		"output": "before\nAuthorization: Bearer <redacted:bearer:abcdef123456>\nafter\n",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	object, err := store.UpsertEvidenceObject(session.EvidenceObjectInput{
+		SourceKind:      session.EvidenceSourceToolOutput,
+		SourceRef:       "tool_output:run:exec:already-redacted",
+		SessionID:       session.SessionIDForKey(key),
+		ChatID:          key.ChatID,
+		UserID:          key.UserID,
+		Scope:           key.Scope,
+		EpistemicStatus: session.EvidenceStatusAttested,
+		RedactionClass:  session.EvidenceRedactionRedacted,
+		SubjectKey:      "exec",
+		Summary:         "Large exec output",
+		Digest:          "sha256:abc omitted middle",
+		PayloadJSON:     string(payload),
+		ObservedAt:      time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertEvidenceObject() err = %v", err)
+	}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	input := fmt.Sprintf(`{"query":"inspect retained tool output","required_evidence_ids":[%q],"include_payload_ids":[%q],"payload_limit":400}`, object.ID, object.ID)
+	out, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"evidence_hydrate",
+		json.RawMessage(input),
+		sandbox.Scope{WorkingRoot: t.TempDir()},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 42},
+		key,
+	)
+	if err != nil {
+		t.Fatalf("execute evidence_hydrate err = %v", err)
+	}
+	if strings.Contains(out, "payload_withheld") {
+		t.Fatalf("hydration withheld already redacted payload: %s", out)
+	}
+	if !strings.Contains(out, "<redacted:bearer:abcdef123456>") {
+		t.Fatalf("hydration = %q, want redacted marker", out)
+	}
+}
+
+func TestEvidenceHydrateToolWithholdsNonHydratablePayload(t *testing.T) {
+	t.Parallel()
+
+	store := newToolEvidenceStore(t)
+	key := session.SessionKey{
+		ChatID: 2006,
+		UserID: 42,
+		Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "2006"},
+	}
+	object, err := store.UpsertEvidenceObject(session.EvidenceObjectInput{
+		SourceKind:      session.EvidenceSourceToolOutput,
+		SourceRef:       "tool_output:run:exec:blocked",
+		SessionID:       session.SessionIDForKey(key),
+		ChatID:          key.ChatID,
+		UserID:          key.UserID,
+		Scope:           key.Scope,
+		EpistemicStatus: session.EvidenceStatusAttested,
+		RedactionClass:  session.EvidenceRedactionBlocked,
+		SubjectKey:      "exec",
+		Summary:         "Operator-only output",
+		Digest:          "sha256:abc omitted middle",
+		PayloadJSON:     `{"output":"operator-only-secret"}`,
+		ObservedAt:      time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertEvidenceObject() err = %v", err)
+	}
+	registry := NewRegistry(t.TempDir(), time.Second).WithSessionStore(store)
+	input := fmt.Sprintf(`{"query":"inspect retained tool output","required_evidence_ids":[%q],"include_payload_ids":[%q]}`, object.ID, object.ID)
+	out, err := registry.executeWithScopeAndPrincipal(
+		context.Background(),
+		"evidence_hydrate",
+		json.RawMessage(input),
+		sandbox.Scope{WorkingRoot: t.TempDir()},
+		principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 42},
+		key,
+	)
+	if err != nil {
+		t.Fatalf("execute evidence_hydrate err = %v", err)
+	}
+	if strings.Contains(out, "operator-only-secret") {
+		t.Fatalf("hydration leaked withheld payload: %s", out)
+	}
+	if !strings.Contains(out, "payload_withheld: redaction_class=non_hydratable") {
+		t.Fatalf("hydration = %q, want payload_withheld", out)
+	}
+}
+
 func TestEvidenceHydrateToolReportsCrossSessionRequiredIDMissing(t *testing.T) {
 	t.Parallel()
 

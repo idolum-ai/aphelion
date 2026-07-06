@@ -29,8 +29,10 @@ type Runtime interface {
 	AutoApprovalStatus(ctx context.Context, chatID int64, senderID int64) (string, error)
 	AutoApprovalStatusForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
 	CreateApprovalWindowOfferForKey(ctx context.Context, key session.SessionKey, senderID int64, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error)
+	SuppressPostApprovalDefaultWindowOfferForKey(ctx context.Context, key session.SessionKey, senderID int64, sourceKind string, sourceID string, sourceDecisionKind string) (bool, error)
 	EnableApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64, duration time.Duration) (string, error)
 	EnableApprovalWindowForKeyResult(ctx context.Context, key session.SessionKey, senderID int64, duration time.Duration) (core.ApprovalWindowEnableResult, error)
+	DefaultApprovalWindowDuration() time.Duration
 	DoubleApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
 	CancelApprovalWindowForKey(ctx context.Context, key session.SessionKey, senderID int64) (string, error)
 	CancelApprovalWindowForKeyResult(ctx context.Context, key session.SessionKey, senderID int64) (core.ApprovalWindowCancelResult, error)
@@ -83,6 +85,7 @@ type Runtime interface {
 	TailnetStatusSnapshot(ctx context.Context) (core.TailnetStatusSnapshot, error)
 	TailnetSurfacesSnapshot() ([]core.TailnetSurfaceStatus, error)
 	TailnetGrantBindingsSnapshot() ([]core.TailnetGrantBindingStatus, error)
+	AuthorityFrontierStatus(ctx context.Context, adminChatID int64) (core.AuthorityFrontierStatusSnapshot, error)
 	RevokeTailnetSurface(ctx context.Context, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error)
 	IsTelegramAdmin(senderID int64) bool
 	CurrentEfforts() (string, string)

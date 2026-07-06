@@ -24,6 +24,9 @@ type stubCommandRouter struct {
 	tailnetGrantBindings              []core.TailnetGrantBindingStatus
 	tailnetGrantBindingsErr           error
 	tailnetGrantBindingsSenderID      int64
+	authorityFrontierStatus           core.AuthorityFrontierStatusSnapshot
+	authorityFrontierStatusErr        error
+	authorityFrontierStatusSenderID   int64
 	latestDoctorReport                session.DoctorReportRecord
 	latestDoctorReportOK              bool
 	latestDoctorReportErr             error
@@ -132,6 +135,11 @@ type stubCommandRouter struct {
 	approvalWindowOfferSource         string
 	approvalWindowMessage             *core.InboundMessage
 	approvalWindowDuration            time.Duration
+	defaultApprovalWindowDuration     time.Duration
+	suppressPostApprovalDefaultWindow bool
+	suppressPostApprovalErr           error
+	suppressPostApprovalSource        string
+	suppressPostApprovalMessage       *core.InboundMessage
 	approvalWindowReturn              string
 	approvalWindowActive              bool
 	approvalWindowCanceled            bool

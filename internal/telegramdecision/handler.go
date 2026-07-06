@@ -157,7 +157,7 @@ func initialDecisionRows(ctx context.Context, pending decision.PendingDecision, 
 	if err != nil || !ok {
 		return rows, "", err
 	}
-	offerRows := telegramcommands.ApprovalWindowEmbeddedOfferRows(offer)
+	offerRows := telegramcommands.ApprovalWindowEmbeddedOfferRowsForDuration(offer, offerer.DefaultApprovalWindowDuration())
 	if len(offerRows) == 0 {
 		return rows, offer.ID, nil
 	}
@@ -326,7 +326,7 @@ func (h *Handler) appendApprovalWindowRows(pending decision.PendingDecision, row
 	if err != nil || !ok {
 		return rows
 	}
-	return appendTelegramRows(rows, telegramcommands.ApprovalWindowRowsForLiveOffer(offer))
+	return appendTelegramRows(rows, telegramcommands.ApprovalWindowRowsForLiveOfferForDuration(offer, h.approvalWindowDuration()))
 }
 
 func (h *Handler) appendEmbeddedApprovalWindowRows(pending decision.PendingDecision, rows [][]telegram.InlineButton) [][]telegram.InlineButton {
@@ -337,7 +337,21 @@ func (h *Handler) appendEmbeddedApprovalWindowRows(pending decision.PendingDecis
 	if err != nil || !ok {
 		return rows
 	}
-	return appendTelegramRows(rows, telegramcommands.ApprovalWindowEmbeddedOfferRows(offer))
+	return appendTelegramRows(rows, telegramcommands.ApprovalWindowEmbeddedOfferRowsForDuration(offer, h.approvalWindowDuration()))
+}
+
+func (h *Handler) approvalWindowDuration() time.Duration {
+	if h == nil || h.router == nil {
+		return 15 * time.Minute
+	}
+	if durations, ok := h.router.(interface{ DefaultApprovalWindowDuration() time.Duration }); ok {
+		duration := durations.DefaultApprovalWindowDuration()
+		if duration <= 0 {
+			return 15 * time.Minute
+		}
+		return duration
+	}
+	return 15 * time.Minute
 }
 
 func (h *Handler) CanResumeRestartLoadedDecision(pending decision.PendingDecision) bool {

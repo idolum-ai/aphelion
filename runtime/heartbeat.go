@@ -52,6 +52,9 @@ func (r *Runtime) StartHeartbeatLoop(ctx context.Context, logger func(string, ..
 }
 
 func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err error) {
+	if err := r.sweepExpiredLookaheadAllowancesWithSilence(now); err != nil {
+		return fmt.Errorf("sweep expired lookahead allowances: %w", err)
+	}
 	targetChatID, deliver := r.resolveHeartbeatTarget(now)
 	if targetChatID == 0 {
 		return nil
@@ -88,7 +91,9 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 	hiddenInputs := r.assembleHeartbeatHiddenInputs(ctx, scope, now, deliver, events)
 	hiddenInputs = r.withInteriorSignalState(maintenanceKey, hiddenInputs, now, true)
 	hiddenInputAwareness := hiddenInputs.toTurnAwareness()
-	governorAwareness := turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", pipeline.TurnExecutionContract{}), hiddenInputAwareness)
+	exec := r.executionForTurn(pipeline.TurnPrepareContract{})
+	r.applyModelSlotExecutionIncludingDefault(&exec, core.ModelSlotHeartbeat)
+	governorAwareness := turn.ApplyHiddenInputAwareness(r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", exec), hiddenInputAwareness)
 	governorPrompt := prompt.GovernorRequest{
 		GovernorName:    r.governorName(),
 		GovernorBackend: r.governorBackend,
@@ -142,7 +147,8 @@ func (r *Runtime) runHeartbeatOnce(ctx context.Context, now time.Time) (err erro
 		UserText:   requestText,
 		LedgerText: requestText,
 	}
-	exec := r.executionForTurn(prepared)
+	exec = r.executionForTurn(prepared)
+	r.applyModelSlotExecutionIncludingDefault(&exec, core.ModelSlotHeartbeat)
 	governorAwareness = turn.ApplyHiddenInputAwareness(
 		r.governorRuntimeAwareness(scope, session.TurnRunKindHeartbeat, "system", exec),
 		hiddenInputAwareness,

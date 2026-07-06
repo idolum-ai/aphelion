@@ -30,6 +30,10 @@ func TestPendingDecisionRoundTripAndReload(t *testing.T) {
 		MessageID: 1001,
 		Prompt:    "Approve this proposal?",
 		Details:   "Install one dependency.",
+		MetadataJSON: `{
+			"approval_kind": "admin_unbounded_exact_exec",
+			"command_hash": "sha256:test"
+		}`,
 		Rationale: "Dependency install is needed before the tool can be audited and verified.",
 		ArtifactRefs: []RecordReference{
 			{Kind: "file_path", Ref: "docs/architecture/external-tools-pilot.md", Label: "design doc"},
@@ -62,6 +66,9 @@ func TestPendingDecisionRoundTripAndReload(t *testing.T) {
 	if pending[0].Rationale != record.Rationale {
 		t.Fatalf("Rationale = %q, want %q", pending[0].Rationale, record.Rationale)
 	}
+	if !strings.Contains(pending[0].MetadataJSON, `"approval_kind":"admin_unbounded_exact_exec"`) || !strings.Contains(pending[0].MetadataJSON, `"command_hash":"sha256:test"`) {
+		t.Fatalf("MetadataJSON = %q, want normalized approval metadata", pending[0].MetadataJSON)
+	}
 	if len(pending[0].ArtifactRefs) != 2 || pending[0].ArtifactRefs[0].Kind != "file_path" || pending[0].ArtifactRefs[1].Ref != "chat:7:message:1001" {
 		t.Fatalf("ArtifactRefs = %#v, want file_path + telegram_message refs", pending[0].ArtifactRefs)
 	}
@@ -82,8 +89,8 @@ func TestPendingDecisionRoundTripAndReload(t *testing.T) {
 	if len(pending) != 1 || pending[0].ID != "decision-abc123" {
 		t.Fatalf("pending after reload = %#v, want decision-abc123", pending)
 	}
-	if pending[0].Rationale != record.Rationale || len(pending[0].ArtifactRefs) != 2 {
-		t.Fatalf("pending after reload = %#v, want rationale + two artifact refs", pending[0])
+	if pending[0].Rationale != record.Rationale || len(pending[0].ArtifactRefs) != 2 || !strings.Contains(pending[0].MetadataJSON, `"approval_kind":"admin_unbounded_exact_exec"`) {
+		t.Fatalf("pending after reload = %#v, want rationale + metadata + two artifact refs", pending[0])
 	}
 
 	if err := store.DeletePendingDecision("decision-abc123"); err != nil {

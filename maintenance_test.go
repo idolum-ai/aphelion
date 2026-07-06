@@ -528,6 +528,60 @@ func TestRunInitCommandInstallsDailyReviewRecipe(t *testing.T) {
 	}
 }
 
+func TestRunInitCommandExpiresElapsedActiveCapabilityGrants(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := writeMaintenanceConfig(t, root)
+	cfg, _, err := loadConfigForCommand(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfigForCommand() err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	grantID := "capg-init-expired-active"
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        grantID,
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "durable_agent:init-child",
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "mail_cli",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		GrantedAt:      time.Now().UTC().Add(-2 * time.Hour),
+		ExpiresAt:      time.Now().UTC().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() err = %v", err)
+	}
+
+	out, err := captureStdout(t, func() error {
+		return runInitCommand([]string{"--config", cfgPath})
+	})
+	if err != nil {
+		t.Fatalf("runInitCommand() err = %v", err)
+	}
+	if !strings.Contains(out, "expired_capability_grants: 1") {
+		t.Fatalf("init output = %q, want expired_capability_grants: 1", out)
+	}
+	reopened, err := session.NewSQLiteStore(cfg.Sessions.DBPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) err = %v", err)
+	}
+	defer reopened.Close()
+	updated, ok, err := reopened.CapabilityGrant(grantID)
+	if err != nil {
+		t.Fatalf("CapabilityGrant() err = %v", err)
+	}
+	if !ok || updated.Status != session.CapabilityGrantStatusExpired || !updated.RevokedAt.IsZero() {
+		t.Fatalf("updated grant = %#v, want expired without revoked_at", updated)
+	}
+}
+
 func TestRunInitCommandMigratesChildMemorySnapshots(t *testing.T) {
 	t.Parallel()
 

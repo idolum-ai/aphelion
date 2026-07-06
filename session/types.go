@@ -78,6 +78,7 @@ const (
 
 const (
 	ContinuationLeaseClassLocalWorkspace  ContinuationLeaseClass = "local_workspace"
+	ContinuationLeaseClassRepoPublication ContinuationLeaseClass = "repo_publication"
 	ContinuationLeaseClassDataAccess      ContinuationLeaseClass = "data_access"
 	ContinuationLeaseClassChildWake       ContinuationLeaseClass = "child_wake"
 	ContinuationLeaseClassCapabilityGrant ContinuationLeaseClass = "capability_grant"

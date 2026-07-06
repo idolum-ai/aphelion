@@ -10,12 +10,56 @@ import (
 	"time"
 
 	"github.com/idolum-ai/aphelion/agent"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 )
 
 const requestApprovalToolName = "request_approval"
 
-func (r *Registry) requestApproval(_ context.Context, input json.RawMessage, key session.SessionKey) (string, error) {
+type RequestApprovalContinuationConflictError struct {
+	ExistingLeaseID       string
+	ExistingLeaseClass    session.ContinuationLeaseClass
+	ExistingStatus        session.ContinuationStatus
+	ExistingLeaseStatus   session.ContinuationLeaseStatus
+	RequestedLeaseID      string
+	RequestedLeaseClass   session.ContinuationLeaseClass
+	RequestInstanceID     string
+	RequestedContractHash string
+}
+
+func (e RequestApprovalContinuationConflictError) Error() string {
+	return fmt.Sprintf("request_approval continuation lease conflicts with existing %s continuation %s", e.ExistingLeaseStatus, strings.TrimSpace(e.ExistingLeaseID))
+}
+
+type requestApprovalAuthorityContractInvalidError struct {
+	diagnostic string
+}
+
+func newRequestApprovalAuthorityContractInvalidError(compilation session.AuthorityContractCompilation) requestApprovalAuthorityContractInvalidError {
+	diagnostic := strings.TrimSpace(session.AuthorityContractCompilationSummary(compilation))
+	if diagnostic == "" {
+		diagnostic = "invalid authority contract"
+	}
+	return requestApprovalAuthorityContractInvalidError{diagnostic: diagnostic}
+}
+
+func (e requestApprovalAuthorityContractInvalidError) Error() string {
+	return "request_approval authority contract invalid: " + strings.TrimSpace(e.diagnostic)
+}
+
+func (e requestApprovalAuthorityContractInvalidError) SafeToolFailureClass() string {
+	return "authority_contract_invalid"
+}
+
+func (e requestApprovalAuthorityContractInvalidError) SafeToolFailureSummary() string {
+	return session.RedactEvidenceText(e.Error()).Text
+}
+
+func (e requestApprovalAuthorityContractInvalidError) SafeToolFailureRetryPolicy() string {
+	return "revise_approval_contract"
+}
+
+func (r *Registry) requestApproval(ctx context.Context, input json.RawMessage, key session.SessionKey, p principal.Principal) (string, error) {
 	if r.store == nil {
 		return "", fmt.Errorf("request_approval requires transcript store")
 	}
@@ -30,11 +74,24 @@ func (r *Registry) requestApproval(_ context.Context, input json.RawMessage, key
 	if err := decodeToolObjectInput(input, &in, "request_approval"); err != nil {
 		return "", err
 	}
+	if requestApprovalActionToken(in.Action) == "request_authority_bundle" {
+		return r.requestAuthorityBundleApproval(in, key)
+	}
+	if requestApprovalActionToken(in.Action) == "request_continuation_lease" {
+		return r.requestContinuationLeaseApproval(in, key)
+	}
 	rawAllowedActions := append([]string(nil), in.Phase.AllowedActions...)
 	rawForbiddenActions := append([]string(nil), in.Phase.ForbiddenActions...)
 	phase, err := parseOperationPhaseInput(in.Phase)
 	if err != nil {
 		return "", fmt.Errorf("%s", strings.Replace(err.Error(), "update_operation phase", "request_approval phase", 1))
+	}
+	if requestApprovalActionToken(phase.AuthorityClass) == session.AuthorityClassExternalRead ||
+		requestApprovalActionToken(phase.GateReasonCode) == session.AuthorityClassExternalRead {
+		return "", requestApprovalAuthorityContractInvalidError{diagnostic: "external_read is deprecated for new approvals; request the stored discovered-effect recovery contract with action=request_continuation_lease"}
+	}
+	if requestApprovalPhaseNeedsContinuationLease(phase) {
+		return r.requestApprovalPhaseContinuationLease(ctx, in, key, p, phase)
 	}
 	if strings.TrimSpace(phase.Summary) == "" {
 		return "", fmt.Errorf("request_approval phase summary is required")
@@ -62,9 +119,12 @@ func (r *Registry) requestApproval(_ context.Context, input json.RawMessage, key
 		ValidationPlan:   append([]string(nil), phase.ValidationPlan...),
 		Status:           session.ProposalStatusPending,
 	}
+	proposal = session.ReconcileActionProposalAuthority(proposal)
+	phase.AllowedActions = append([]string(nil), proposal.AllowedActions...)
+	phase.ForbiddenActions = append([]string(nil), proposal.ForbiddenActions...)
 	compilation := session.CompileActionProposalAuthorityContract(proposal)
 	if compilation.Invalid() {
-		return "", fmt.Errorf("request_approval authority contract invalid: %s", session.AuthorityContractCompilationSummary(compilation))
+		return "", newRequestApprovalAuthorityContractInvalidError(compilation)
 	}
 
 	current, err := r.store.OperationState(key)
@@ -120,15 +180,6 @@ func (r *Registry) requestApproval(_ context.Context, input json.RawMessage, key
 	return renderOperationState("[APPROVAL_REQUESTED]", state), nil
 }
 
-func firstNonEmptyTool(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
 func requestApprovalToolDefinition() agent.ToolDef {
 	return agent.ToolDef{
 		Name:        requestApprovalToolName,
@@ -136,7 +187,9 @@ func requestApprovalToolDefinition() agent.ToolDef {
 		Parameters: json.RawMessage(`{
 			"type": "object",
 			"properties": {
+				"action": {"type": "string", "enum": ["request_continuation_lease", "request_authority_bundle"], "description": "Use request_continuation_lease to materialize a lease requested by a typed blocker, or request_authority_bundle to materialize a compiled broad-but-specific bundle"},
 				"objective": {"type": "string", "description": "Optional operation objective or plan goal this approval serves"},
+				"contract_id": {"type": "string", "description": "Required continuation recovery contract id for request_continuation_lease. The contract is the executable source; legacy inline lease payloads are rejected."},
 				"phase": {
 					"type": "object",
 					"description": "Bounded approval phase to materialize into a continuation approval card",
@@ -144,7 +197,7 @@ func requestApprovalToolDefinition() agent.ToolDef {
 						"id": {"type": "string", "description": "Optional stable phase id; generated when omitted"},
 						"summary": {"type": "string", "description": "Approval-card summary / next step"},
 						"status": {"type": "string", "enum": ["pending"], "description": "Must be pending when supplied"},
-						"authority_class": {"type": "string", "description": "Authority/risk class such as read_only_review, workspace_write, commit, deploy, or system_change"},
+						"authority_class": {"type": "string", "description": "Authority/risk class such as read_only_review, workspace_write, commit, deploy, or system_change. For one-time discovered external effects, use action=request_continuation_lease with the stored contract_id."},
 						"why_now": {"type": "string", "description": "Why this approval should be offered now"},
 						"bounded_effect": {"type": "string", "description": "What approval permits, including stop conditions"},
 						"allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Allowed action labels for this approval"},
@@ -183,7 +236,10 @@ func requestApprovalToolDefinition() agent.ToolDef {
 					"required": ["summary"]
 				}
 			},
-			"required": ["phase"]
+			"anyOf": [
+				{"required": ["phase"]},
+				{"required": ["action", "contract_id"]}
+			]
 		}`),
 	}
 }

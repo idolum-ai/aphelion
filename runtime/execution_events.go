@@ -243,8 +243,13 @@ func (r *Runtime) recordExecutionEvent(
 		)
 		return
 	}
-	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+	if elapsed := time.Since(started); elapsed >= core.PersistenceLatencySlowThreshold {
 		log.Printf("WARN append execution event slow type=%s chat_id=%d scope=%s tes_write_duration_ms=%d", strings.TrimSpace(eventType), key.ChatID, key.Scope.String(), durationMillis(elapsed))
+		if strings.TrimSpace(eventType) != core.ExecutionEventPersistenceLatency {
+			if err := r.store.RecordPersistenceLatencyClassification(key, "execution_events:"+strings.TrimSpace(eventType), elapsed, time.Now().UTC()); err != nil {
+				log.Printf("WARN record persistence latency classification failed type=%s chat_id=%d scope=%s err=%v", strings.TrimSpace(eventType), key.ChatID, key.Scope.String(), err)
+			}
+		}
 	}
 }
 

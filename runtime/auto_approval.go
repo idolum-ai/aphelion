@@ -21,6 +21,7 @@ const (
 
 type operatorAutoApprovalRequest struct {
 	ChatID          int64
+	AdminUserID     int64
 	TargetScopeKind string
 	TargetScopeID   string
 	Kind            string
@@ -29,6 +30,7 @@ type operatorAutoApprovalRequest struct {
 	ProposalID      string
 	Summary         string
 	Details         string
+	Metadata        map[string]string
 	WorkMode        WorkMode
 }
 
@@ -135,6 +137,7 @@ func (r *Runtime) AutoResolveDecision(ctx context.Context, pending decision.Pend
 	}
 	lease, ok, err := r.consumeOperatorAutoApproval(ctx, operatorAutoApprovalRequest{
 		ChatID:          pending.ChatID,
+		AdminUserID:     pending.SenderID,
 		TargetScopeKind: firstNonEmptyContinuation(pending.ScopeKind, string(session.ScopeKindTelegramDM)),
 		TargetScopeID:   firstNonEmptyContinuation(pending.ScopeID, fmt.Sprint(pending.ChatID)),
 		Kind:            "decision:" + strings.TrimSpace(string(pending.Kind)),
@@ -142,6 +145,7 @@ func (r *Runtime) AutoResolveDecision(ctx context.Context, pending decision.Pend
 		DecisionID:      strings.TrimSpace(pending.ID),
 		Summary:         strings.TrimSpace(pending.Prompt),
 		Details:         strings.TrimSpace(pending.Details),
+		Metadata:        pending.Metadata,
 	})
 	if err != nil || !ok {
 		return decision.AutoResolution{}, err
@@ -185,6 +189,7 @@ func (r *Runtime) maybeAutoApproveContinuationOfferWith(ctx context.Context, key
 	scopeKind, scopeID := operatorAutoTargetScopeForKey(key)
 	lease, ok, err := r.consumeOperatorAutoApproval(ctx, operatorAutoApprovalRequest{
 		ChatID:          key.ChatID,
+		AdminUserID:     msg.SenderID,
 		TargetScopeKind: scopeKind,
 		TargetScopeID:   scopeID,
 		Kind:            "continuation:" + strings.TrimSpace(source),
@@ -273,6 +278,9 @@ func (r *Runtime) consumeOperatorAutoApproval(ctx context.Context, req operatorA
 		return session.OperatorAutoApprovalLease{}, false, nil
 	}
 	now := time.Now().UTC()
+	if err := r.ensureDefaultApprovalWindowForRequest(ctx, req, now); err != nil {
+		return session.OperatorAutoApprovalLease{}, false, err
+	}
 	gate, ok, err := r.operatorAutoModeGateForScope(req.ChatID, req.TargetScopeKind, req.TargetScopeID, 0, now)
 	if err != nil || !ok {
 		return session.OperatorAutoApprovalLease{}, false, err
@@ -295,8 +303,12 @@ func (r *Runtime) consumeOperatorAutoApproval(ctx context.Context, req operatorA
 		if !ok {
 			continue
 		}
-		r.recordOperatorAutoApprovalEvent(req.ChatID, core.ExecutionEventAutoApprovalUsed, "used", used, map[string]any{
-			"auto_mode_source": strings.TrimSpace(gate.Source),
+		autoModeSource := strings.TrimSpace(gate.Source)
+		if strings.TrimSpace(used.Reason) == defaultApprovalWindowReason {
+			autoModeSource = defaultApprovalWindowEventSource
+		}
+		eventPayload := map[string]any{
+			"auto_mode_source": autoModeSource,
 			"auto_mode_scope":  strings.TrimSpace(gate.Scope),
 			"request_kind":     strings.TrimSpace(req.Kind),
 			"choice":           strings.TrimSpace(req.Choice),
@@ -305,7 +317,19 @@ func (r *Runtime) consumeOperatorAutoApproval(ctx context.Context, req operatorA
 			"summary":          truncatePreview(strings.TrimSpace(req.Summary), 220),
 			"details":          truncatePreview(strings.TrimSpace(req.Details), 220),
 			"work_mode":        strings.TrimSpace(string(req.WorkMode)),
-		})
+		}
+		for key, value := range req.Metadata {
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+			if key == "" || value == "" {
+				continue
+			}
+			if _, exists := eventPayload[key]; exists {
+				continue
+			}
+			eventPayload[key] = value
+		}
+		r.recordOperatorAutoApprovalEvent(req.ChatID, core.ExecutionEventAutoApprovalUsed, "used", used, eventPayload)
 		_ = ctx
 		return used, true, nil
 	}

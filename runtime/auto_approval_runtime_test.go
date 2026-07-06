@@ -106,6 +106,372 @@ func TestRuntimeAutoApprovalGrantAloneDoesNotResolve(t *testing.T) {
 	}
 }
 
+func TestRuntimeDefaultApprovalWindowOpensFiniteRowsForAdminRequest(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "30m"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-default-window",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99290,
+			SenderID:      1001,
+			Prompt:        "Approve this proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "approve" || !strings.Contains(result.Reason, "auto_approved:") {
+		t.Fatalf("auto resolution = %#v, want approve through default approval window", result)
+	}
+
+	now := time.Now().UTC()
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99290, now)
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].AdminUserID != 1001 || leases[0].UsedCount != 1 || leases[0].Reason != defaultApprovalWindowReason {
+		t.Fatalf("leases = %#v, want one used default approval window lease", leases)
+	}
+	assertOperatorWindowDuration(t, leases[0].CreatedAt, leases[0].ExpiresAt, 30*time.Minute)
+	overrides, err := store.ActiveOperatorAutonomyOverrides(99290, now)
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutonomyOverrides() err = %v", err)
+	}
+	if len(overrides) != 1 || overrides[0].AdminUserID != 1001 || overrides[0].Mode != "leased" || overrides[0].Reason != defaultApprovalWindowReason {
+		t.Fatalf("overrides = %#v, want one default leased override", overrides)
+	}
+	assertOperatorWindowDuration(t, overrides[0].CreatedAt, overrides[0].ExpiresAt, 30*time.Minute)
+}
+
+func TestRuntimeDefaultApprovalWindowAdminExecAutoApprovalRecordsExactKind(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "15m"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-default-window-admin-exec",
+		Request: decision.Request{
+			Kind:     decision.KindProposalApproval,
+			ChatID:   99296,
+			SenderID: 1001,
+			Prompt:   "Approve this proposal?",
+			Details: strings.Join([]string{
+				"Approve one exact admin shell command",
+				"Kind: admin_unbounded_exact_exec",
+				"Command class:",
+				"unknown",
+				"Workdir:",
+				"/tmp/aphelion-fixtures/workspace",
+				"Why now:",
+				"The shell command is outside the typed dispatchable subset.",
+			}, "\n\n"),
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+			Metadata: map[string]string{
+				"approval_kind": "admin_unbounded_exact_exec",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "approve" || !strings.Contains(result.Reason, "auto_approved:") {
+		t.Fatalf("auto resolution = %#v, want approve through default approval window", result)
+	}
+
+	key := session.SessionKey{ChatID: 99296, UserID: 0, Scope: telegramDMScopeRef(99296)}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var usedPayload map[string]any
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventAutoApprovalUsed {
+			usedPayload = executionEventPayload(event.PayloadJSON)
+			break
+		}
+	}
+	if usedPayload == nil {
+		t.Fatalf("events = %#v, want auto approval used event", events)
+	}
+	if got := payloadString(usedPayload, "approval_kind"); got != "admin_unbounded_exact_exec" {
+		t.Fatalf("approval_kind = %q payload=%#v, want exact admin exec kind recorded outside truncated details", got, usedPayload)
+	}
+	if got := payloadString(usedPayload, "auto_mode_source"); got != defaultApprovalWindowEventSource {
+		t.Fatalf("auto_mode_source = %q payload=%#v, want default approval window provenance", got, usedPayload)
+	}
+}
+
+func TestRuntimeDefaultApprovalWindowFiniteDoesNotReopenAfterBaselineExpires(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "15m"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+	scopeKind, scopeID := operatorAutoDefaultScope(99294)
+	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
+		ID:          "lease-default-finite-expired",
+		AdminUserID: 1001,
+		ChatID:      99294,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		Reason:      defaultApprovalWindowReason,
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease(expired) err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutonomyOverride(session.OperatorAutonomyOverride{
+		ID:          "override-default-finite-expired",
+		AdminUserID: 1001,
+		ChatID:      99294,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		Mode:        "leased",
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		Reason:      defaultApprovalWindowReason,
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutonomyOverride(expired) err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-default-window-expired",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99294,
+			SenderID:      1001,
+			Prompt:        "Approve this proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "" {
+		t.Fatalf("auto resolution = %#v, want finite default baseline not to renew after expiry", result)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99294, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("leases = %#v, want no renewed finite default lease", leases)
+	}
+}
+
+func TestRuntimeDefaultApprovalWindowAlwaysReopensAfterBaselineExpires(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "always"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+	scopeKind, scopeID := operatorAutoDefaultScope(99295)
+	if _, err := store.CreateOperatorAutoApprovalLease(session.OperatorAutoApprovalLease{
+		ID:          "lease-default-always-expired",
+		AdminUserID: 1001,
+		ChatID:      99295,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		Reason:      defaultApprovalWindowReason,
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease(expired) err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutonomyOverride(session.OperatorAutonomyOverride{
+		ID:          "override-default-always-expired",
+		AdminUserID: 1001,
+		ChatID:      99295,
+		ScopeKind:   scopeKind,
+		ScopeID:     scopeID,
+		Mode:        "leased",
+		Scope:       session.OperatorAutoApprovalScopeAll,
+		Reason:      defaultApprovalWindowReason,
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateOperatorAutonomyOverride(expired) err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-default-window-always-expired",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99295,
+			SenderID:      1001,
+			Prompt:        "Approve this proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "approve" {
+		t.Fatalf("auto resolution = %#v, want always default window to renew", result)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99295, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].Reason != defaultApprovalWindowReason || leases[0].UsedCount != 1 {
+		t.Fatalf("leases = %#v, want renewed used default lease", leases)
+	}
+	assertOperatorWindowDuration(t, leases[0].CreatedAt, leases[0].ExpiresAt, 15*time.Minute)
+}
+
+func TestRuntimeDefaultApprovalWindowOffDoesNotResolve(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "off"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-default-window-off",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99291,
+			SenderID:      1001,
+			Prompt:        "Approve this proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "" {
+		t.Fatalf("auto resolution = %#v, want no approval when default approval window is off", result)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99291, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("leases = %#v, want none", leases)
+	}
+}
+
+func TestRuntimeDefaultApprovalWindowDoesNotOpenForNonAdmin(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "15m"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-default-window-nonadmin",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99292,
+			SenderID:      1002,
+			Prompt:        "Approve this proposal?",
+			Details:       "Run a bounded workspace check.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "" {
+		t.Fatalf("auto resolution = %#v, want no approval for non-admin default window request", result)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99292, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("leases = %#v, want none", leases)
+	}
+}
+
+func TestRuntimeDefaultApprovalWindowDoesNotReplaceManualWindow(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "15m"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutonomy(context.Background(), 99293, 1001, "leased 15m workspace"); err != nil {
+		t.Fatalf("ConfigureAutonomy() err = %v", err)
+	}
+	if _, err := rt.ConfigureAutoApproval(context.Background(), 99293, 1001, "15m workspace uses=2 manual workspace window"); err != nil {
+		t.Fatalf("ConfigureAutoApproval() err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-default-window-manual",
+		Request: decision.Request{
+			Kind:          decision.KindProposalApproval,
+			ChatID:        99293,
+			SenderID:      1001,
+			Prompt:        "Approve this proposal?",
+			Details:       "Deploy and restart the service.",
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "" {
+		t.Fatalf("auto resolution = %#v, want manual narrower window to remain authoritative", result)
+	}
+	leases, err := store.ActiveOperatorAutoApprovalLeases(99293, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ActiveOperatorAutoApprovalLeases() err = %v", err)
+	}
+	if len(leases) != 1 || leases[0].Reason == defaultApprovalWindowReason || leases[0].Scope != session.OperatorAutoApprovalScopeWorkspace || leases[0].UsedCount != 0 {
+		t.Fatalf("leases = %#v, want original unspent manual workspace lease", leases)
+	}
+}
+
 func TestRuntimeAutoModeAloneDoesNotResolve(t *testing.T) {
 	t.Parallel()
 

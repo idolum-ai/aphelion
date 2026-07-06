@@ -60,7 +60,7 @@ func FormatReviewEventCompactMessage(event session.ReviewEvent) string {
 	if next := reviewEventCompactNextAction(meta); next != "" {
 		lines = append(lines, "", "**"+reviewEventCompactNextActionHeading(meta)+"**", "- "+truncateReviewEventText(next, 220))
 	}
-	lines = append(lines, "", reviewEventCompactFooter(meta))
+	lines = append(lines, "", reviewEventCompactFooter(event, meta))
 	return truncateReviewEventBlock(strings.Join(lines, "\n"), 1800)
 }
 
@@ -233,6 +233,9 @@ func reviewEventCompactTitle(event session.ReviewEvent, meta reviewEventArtifact
 	if title := strings.TrimSpace(meta.Metadata["operator_title"]); title != "" {
 		return title
 	}
+	if reviewEventIsCapabilityRequest(event, meta) {
+		return "Review: capability request"
+	}
 	agent := strings.TrimSpace(meta.AgentID)
 	if agent == "" {
 		agent = formattedReviewEventAgent(event)
@@ -245,6 +248,17 @@ func reviewEventCompactTitle(event session.ReviewEvent, meta reviewEventArtifact
 	default:
 		return "Review: " + agent
 	}
+}
+
+func reviewEventIsCapabilityRequest(event session.ReviewEvent, meta reviewEventArtifactMetadata) bool {
+	switch strings.TrimSpace(meta.RequestVia) {
+	case "capability_request", "durable_agent.delegation_request":
+		return true
+	}
+	if strings.TrimSpace(event.SourceRole) == "capability_request" {
+		return true
+	}
+	return reviewEventMetadataString(event, "request_id") != "" && strings.TrimSpace(meta.Kind) != ""
 }
 
 func reviewEventCompactContext(meta reviewEventArtifactMetadata) string {
@@ -363,7 +377,10 @@ func reviewEventCompactSummary(event session.ReviewEvent, meta reviewEventArtifa
 	return normalizeReviewEventWhitespace(event.Summary)
 }
 
-func reviewEventCompactFooter(meta reviewEventArtifactMetadata) string {
+func reviewEventCompactFooter(event session.ReviewEvent, meta reviewEventArtifactMetadata) string {
+	if reviewEventIsCapabilityRequest(event, meta) {
+		return "Details has the full capability request."
+	}
 	if reviewEventHasRedactions(meta) {
 		return "Details shows the safe review record; raw child text is stored locally because it may contain sensitive material."
 	}

@@ -28,10 +28,11 @@ func TestDefinitionsForPrincipalFiltersExternalToolByGrant(t *testing.T) {
 		t.Fatalf("WriteFile(run.sh) err = %v", err)
 	}
 	manifest := ExternalToolManifest{
-		Name:      "browse_page",
-		Owner:     "child-alpha",
-		Execution: ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
-		IO:        ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}}}`)},
+		Name:        "browse_page",
+		Owner:       "child-alpha",
+		Description: "Fetch a single governed page summary from a URL.",
+		Execution:   ExternalToolManifestExecution{Mode: "process", Entry: "./run.sh"},
+		IO:          ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}}}`)},
 	}
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{manifest})
 	if err != nil {
@@ -54,6 +55,9 @@ func TestDefinitionsForPrincipalFiltersExternalToolByGrant(t *testing.T) {
 	granted := registry.DefinitionsForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"})
 	if !toolDefExists(granted, "browse_page") {
 		t.Fatalf("DefinitionsForPrincipal(granted) missing browse_page: %#v", granted)
+	}
+	if def, ok := toolDefByName(granted, "browse_page"); !ok || !strings.Contains(def.Description, "Fetch a single governed page summary") {
+		t.Fatalf("browse_page definition = %#v, want manifest affordance text", def)
 	}
 	hidden := registry.DefinitionsForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "other-agent"})
 	if toolDefExists(hidden, "browse_page") {
@@ -94,11 +98,12 @@ func TestExternalToolRequiresRegistrationAndGrantAtInvocation(t *testing.T) {
 		t.Fatalf("UpsertRegisteredTool() err = %v", err)
 	}
 	_, err = registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
-	if err == nil || !strings.Contains(err.Error(), "not granted") {
-		t.Fatalf("ungranted browse_page err = %v, want not granted", err)
+	if err == nil || !strings.Contains(err.Error(), "missing capability grant") || !strings.Contains(err.Error(), "review request queued") {
+		t.Fatalf("ungranted browse_page err = %v, want queued missing-grant review", err)
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err != nil {
 		t.Fatalf("granted browse_page err = %v", err)
 	}
@@ -126,7 +131,7 @@ func TestManifestForPrincipalIncludesOnlyGrantedExternalTools(t *testing.T) {
 	grantToolInvoke(t, store, "browse_page", "child-alpha")
 
 	visible := registry.ManifestForPrincipal(principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-alpha"})
-	if !strings.Contains(visible, "- browse_page: external tool owned by child-alpha") {
+	if !strings.Contains(visible, "- browse_page: External tool owned by child-alpha") {
 		t.Fatalf("visible manifest = %q, want granted external tool", visible)
 	}
 	if !strings.Contains(visible, "executable: false") {
@@ -210,15 +215,15 @@ print(json.dumps({'summary':'ok','action':payload.get('action'),'username':paylo
 
 	actor := principal.Principal{Role: principal.RoleDurableAgent, DurableAgentID: "child-public-feed"}
 	key := adminSessionKey()
-	grantAuthorityUseLease(t, store, key)
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"example_handle"}`))
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"example_handle"}`))
 	if err != nil {
 		t.Fatalf("allowed scoped invoke err = %v", err)
 	}
 	if !strings.Contains(out, `"summary": "ok"`) && !strings.Contains(out, `"summary":"ok"`) {
 		t.Fatalf("allowed scoped invoke output = %q, want script output", out)
 	}
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"other"}`))
+	_, err = registry.ExecuteForSessionPrincipal(ctx, actor, key, manifest.Name, json.RawMessage(`{"action":"public_profile_metadata_read","username":"other"}`))
 	if err == nil || !strings.Contains(err.Error(), "selector") || !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("blocked scoped invoke err = %v, want selector not allowed", err)
 	}
@@ -235,6 +240,6 @@ print(json.dumps({'summary':'ok','action':payload.get('action'),'username':paylo
 		t.Fatalf("CapabilityGrant() err = %v", err)
 	}
 	if !ok || grant.InvocationCount != 2 || grant.FailureCount != 1 {
-		t.Fatalf("grant counters = %#v ok=%t, want allowed + blocked attempt recorded", grant, ok)
+		t.Fatalf("grant counters = %#v ok=%t, want one successful invocation and one blocked attempt", grant, ok)
 	}
 }

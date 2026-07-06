@@ -51,8 +51,12 @@ func TestHandleTelegramCommandCallbackReentryRecommendationSelectQueuesScopedWor
 	if router.queueReentryRecommendationMsg.IngressUpdateID != 8081 {
 		t.Fatalf("IngressUpdateID = %d, want callback update", router.queueReentryRecommendationMsg.IngressUpdateID)
 	}
-	if !strings.Contains(router.queueReentryRecommendationMsg.Text, "If action is needed, ask before doing it.") {
-		t.Fatalf("queued text = %q, want ask-before-action warning", router.queueReentryRecommendationMsg.Text)
+	if !strings.Contains(router.queueReentryRecommendationMsg.Text, "Continue the selected operation path: release workflow escaping") ||
+		!strings.Contains(router.queueReentryRecommendationMsg.Text, "ask for that exact bounded approval before acting") {
+		t.Fatalf("queued text = %q, want concrete selected path plus exact approval boundary", router.queueReentryRecommendationMsg.Text)
+	}
+	if strings.Contains(router.queueReentryRecommendationMsg.Text, "This suggestion only chose a path") {
+		t.Fatalf("queued text = %q, want no old re-deliberation suffix", router.queueReentryRecommendationMsg.Text)
 	}
 	for _, forbidden := range []string{"grant authority", "consumed lease", "fresh bounded approval"} {
 		if strings.Contains(router.queueReentryRecommendationMsg.Text, forbidden) {
@@ -64,6 +68,9 @@ func TestHandleTelegramCommandCallbackReentryRecommendationSelectQueuesScopedWor
 	}
 	if len(sender.editClear) != 1 || !strings.Contains(sender.editClear[0].text, "Queued re-entry path") {
 		t.Fatalf("editClear = %#v, want queued keyboard-clearing edit", sender.editClear)
+	}
+	if strings.Contains(sender.editClear[0].text, "[") || strings.Contains(sender.editClear[0].text, "](") || strings.Contains(sender.editClear[0].text, "**") || strings.Contains(sender.editClear[0].text, "`") {
+		t.Fatalf("edit text = %q, want markdown-like candidate label neutralized", sender.editClear[0].text)
 	}
 }
 
@@ -146,8 +153,11 @@ func TestReentryRecommendationSelectionPromptIncludesTypedProvenance(t *testing.
 	t.Parallel()
 
 	candidate := session.ReentryRecommendationCandidate{
-		Label:            "Review current operation",
-		PromptText:       "The operator selected this suggested path. This suggestion only chose a path. If action is needed, ask before doing it.",
+		Label:            "Repair: release workflow escaping",
+		PromptText:       "Continue the selected operation path: release workflow escaping. Take the next safe non-boundary step now. If boundary authority is required, ask for that exact bounded approval before acting.",
+		IntentClass:      "repair_blocker",
+		TemporalFit:      "now",
+		WhyNow:           "current operation state is the nearest durable work surface",
 		SourceKind:       "operation_state",
 		SourceRef:        "op-release",
 		EvidenceRefs:     []string{"ev-turn", "ev-op"},
@@ -158,13 +168,20 @@ func TestReentryRecommendationSelectionPromptIncludesTypedProvenance(t *testing.
 	prompt := reentryRecommendationSelectionPrompt(session.ReentryRecommendation{ID: "reentry-test"}, candidate)
 	for _, want := range []string{
 		"Candidate source: operation_state op-release",
+		"Candidate intent: repair_blocker",
+		"Candidate timing: now",
+		"Why now: current operation state is the nearest durable work surface",
 		"Evidence refs: ev-turn, ev-op",
 		"Judgment reason: Current operation has the strongest durable evidence.",
-		"This suggestion only chose a path",
+		"Continue the selected operation path: release workflow escaping",
+		"Take the next safe non-boundary step now",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt = %q, want %q", prompt, want)
 		}
+	}
+	if strings.Contains(prompt, "This suggestion only chose a path") {
+		t.Fatalf("prompt = %q, want selected path to advance without old re-deliberation suffix", prompt)
 	}
 }
 
@@ -181,9 +198,12 @@ func testReentryRecommendationRecord() session.ReentryRecommendation {
 			{
 				ID:               "c1",
 				Kind:             session.ReentryCandidateRequestNextLease,
-				Label:            "Next step",
+				Label:            "Continue: [release](https://example.invalid) **workflow** `escaping`",
 				Summary:          "Open a bounded follow-up.",
-				PromptText:       "The operator selected this suggested path. This suggestion only chose a path. If action is needed, ask before doing it.",
+				PromptText:       "Continue the selected operation path: release workflow escaping. Take the next safe non-boundary step now. If boundary authority is required, ask for that exact bounded approval before acting.",
+				IntentClass:      "continue_operation",
+				TemporalFit:      "now",
+				WhyNow:           "current operation state is the nearest durable work surface",
 				AuthorityClass:   "commit",
 				RequiresApproval: true,
 			},

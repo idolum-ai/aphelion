@@ -21,6 +21,7 @@ type Request struct {
 	DurableAgentID string
 	Prompt         string
 	Details        string
+	Metadata       map[string]string
 	Choices        []Choice
 	DefaultChoice  string
 	Timeout        time.Duration

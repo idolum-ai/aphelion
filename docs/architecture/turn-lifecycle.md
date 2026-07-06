@@ -11,8 +11,10 @@ Current interactive turn order:
 
 1. Runtime shell resolves principal/scope, starts chat actions, and holds session lock.
 2. Runtime interactive-DM assembler builds one-turn coordinator/ports from
-   shared interactive-like assembly, including scoped evidence hydration when
-   active work or recovery pressure needs source-fact fidelity.
+   shared interactive-like assembly. Stable prompt files are fingerprint-cached;
+   dynamic files are reloaded every turn. Evidence enters ordinary prompts as a
+   ledger pointer and hydrates selected source facts only under recovery,
+   continuation, active-operation, or explicit recall pressure.
 3. `turn.Machine` runs proposal/governor/face stages according to policy.
 4. `turn` persists transcript + sidecars.
 5. `turn` performs outbound delivery semantics.
@@ -65,13 +67,17 @@ Code anchors:
 ## Durable Child Species
 
 Durable Telegram group child turns share the same engine with runtime-owned
-child adapter context and policy hooks.
+child adapter context and policy hooks. When child work crosses into generic
+runtime execution, authority must remain continuous through the same point-of-use
+lease and grant validation used by other execution species; see
+[`execution-authority-continuity.md`](execution-authority-continuity.md).
 
 Code anchors:
 
 - [`runtime/durable_group.go`](../../runtime/durable_group.go)
 - [`runtime/turn_coordinator_common.go`](../../runtime/turn_coordinator_common.go)
 - [`runtime/turn_coordinator_durable.go`](../../runtime/turn_coordinator_durable.go)
+- [`tool/execution_authority_continuity_test.go`](../../tool/execution_authority_continuity_test.go)
 
 Related requirements:
 

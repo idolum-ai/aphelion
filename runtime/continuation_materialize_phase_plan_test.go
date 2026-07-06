@@ -4,11 +4,14 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 	"strings"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
@@ -108,6 +111,42 @@ func TestMaterializeDurablePhasePlanUsesNextPendingPhase(t *testing.T) {
 	}
 	if got, want := labels, []string{"Start", "Details", "Change", "Pause", "Stop"}; !equalStringSlices(got, want) {
 		t.Fatalf("inline labels = %#v, want %#v", got, want)
+	}
+}
+
+func TestContinuationStateFromOperationPhaseCanonicalizesRepoPushAuthority(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	cont := continuationStateFromOperationPhase(session.OperationState{
+		ID:        "repo-push-op",
+		Objective: "Bundle and publish the approved artifacts.",
+		PhasePlan: session.OperationPhasePlan{
+			ID:   "repo-push-plan",
+			Goal: "Bundle and publish the approved artifacts.",
+		},
+	}, session.OperationPhase{
+		ID:               "bundle-commit-push",
+		Summary:          "Bundle artifacts, commit them, and push to the imex repository.",
+		Status:           session.PlanStatusPending,
+		AuthorityClass:   "commit",
+		BoundedEffect:    "Create one local commit and push the current branch to origin.",
+		AllowedActions:   []string{"inspect_git_status", "git_commit_book_artifacts", "push_main_to_origin"},
+		ForbiddenActions: []string{"deploy", "restart_service"},
+		RequiresApproval: true,
+	}, "continue", now)
+
+	if !actionListContains(cont.ActionProposal.AllowedActions, "git_push") {
+		t.Fatalf("action allowed_actions = %#v, want canonical git_push", cont.ActionProposal.AllowedActions)
+	}
+	if !actionListContains(cont.ContinuationLease.AllowedActions, "git_push") {
+		t.Fatalf("lease allowed_actions = %#v, want canonical git_push", cont.ContinuationLease.AllowedActions)
+	}
+	if cont.ContinuationLease.LeaseClass != session.ContinuationLeaseClassRepoPublication {
+		t.Fatalf("lease class = %q, want repo publication", cont.ContinuationLease.LeaseClass)
+	}
+	if compilation := session.CompileContinuationAuthorityContract(cont); !compilation.Valid() {
+		t.Fatalf("continuation authority = %#v, want valid commit/push envelope", compilation)
 	}
 }
 
@@ -897,5 +936,161 @@ func TestHandleInboundAutoApprovesPlanLeaseWithoutReentrantSessionLock(t *testin
 	}
 	if len(leases) != 1 || leases[0].UsedCount != 1 {
 		t.Fatalf("autoapproval leases = %#v, want one consumed use", leases)
+	}
+}
+
+func TestMaterializedOperationAndContinuationRollbackTogether(t *testing.T) {
+	cases := []struct {
+		name   string
+		chatID int64
+		seed   func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) session.OperationState
+		check  func(t *testing.T, got session.OperationState)
+	}{
+		{
+			name:   "required capability phase",
+			chatID: 9150,
+			seed: func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) session.OperationState {
+				t.Helper()
+				if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+					RequestID:      "cap-atomic-materialization",
+					RequestedBy:    "telegram:1001",
+					RequestedFor:   "telegram:1001",
+					Kind:           session.CapabilityKindExternalAccount,
+					TargetResource: "github:atomic-materialization",
+					Purpose:        "Exercise atomic continuation materialization rollback.",
+					ReviewStatus:   session.CapabilityReviewStatusProposed,
+				}); err != nil {
+					t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+				}
+				return session.OperationState{
+					ID:        "op-atomic-required-capability",
+					Objective: "Exercise atomic required-capability materialization.",
+					Status:    session.OperationStatusBlocked,
+					Stage:     "phase_plan",
+					PhasePlan: session.OperationPhasePlan{
+						ID: "plan-atomic-required-capability",
+						Phases: []session.OperationPhase{{
+							ID:               "phase-atomic-required-capability",
+							Summary:          "atomic-materialization-trigger required capability phase",
+							Status:           session.PlanStatusPending,
+							AuthorityClass:   "external_account",
+							BoundedEffect:    "Prepare a bounded external-account request.",
+							AllowedActions:   []string{"github_pr_update"},
+							ForbiddenActions: []string{"deploy"},
+							RequiredCapabilityGrants: []session.CapabilityGrantSpec{{
+								RequestID:      "cap-atomic-materialization",
+								Kind:           session.CapabilityKindExternalAccount,
+								TargetResource: "github:atomic-materialization",
+								GrantedTo:      "telegram:1001",
+								AllowedActions: []string{"metadata:write"},
+							}},
+						}},
+					},
+				}
+			},
+			check: func(t *testing.T, got session.OperationState) {
+				t.Helper()
+				if got.PhasePlan.Phases[0].LeaseID != "" || got.Proposal.ID != "" || got.Stage != "phase_plan" {
+					t.Fatalf("operation after failed materialization = %#v, want original phase without materialized lease/proposal", got)
+				}
+			},
+		},
+		{
+			name:   "plan lease",
+			chatID: 9151,
+			seed: func(t *testing.T, store *session.SQLiteStore, key session.SessionKey) session.OperationState {
+				t.Helper()
+				return session.OperationState{
+					ID:        "op-atomic-plan-lease",
+					Objective: "Exercise atomic plan-lease materialization.",
+					Status:    session.OperationStatusBlocked,
+					Stage:     "plan_lease_proposal",
+					PlanLease: session.OperationPlanLease{
+						ID:         "plan-lease-atomic-materialization",
+						Summary:    "atomic-materialization-trigger plan lease",
+						Status:     session.PlanLeaseStatusProposed,
+						TurnBudget: 1,
+						Lanes: []session.OperationPlanLeaseLane{{
+							ID:             "review",
+							Summary:        "Review state",
+							AuthorityClass: "read_only_review",
+							ExpectedTurns:  1,
+						}},
+					},
+				}
+			},
+			check: func(t *testing.T, got session.OperationState) {
+				t.Helper()
+				if got.PlanLease.Status != session.PlanLeaseStatusProposed || got.Proposal.ID != "" || got.Stage != "plan_lease_proposal" {
+					t.Fatalf("operation after failed materialization = %#v, want original proposed plan lease without materialized proposal", got)
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, store, provider, sender := buildRuntimeFixtures(t)
+			rt, err := New(cfg, store, provider, nil, sender)
+			if err != nil {
+				t.Fatalf("New() err = %v", err)
+			}
+			key := session.SessionKey{ChatID: tc.chatID, UserID: 0, Scope: telegramDMScopeRef(tc.chatID)}
+			original := tc.seed(t, store, key)
+			if err := store.UpdateOperationState(key, original); err != nil {
+				t.Fatalf("UpdateOperationState(seed) err = %v", err)
+			}
+			installContinuationWriteRejectTrigger(t, store, "atomic-materialization-trigger")
+
+			materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{
+				ChatID:    tc.chatID,
+				SenderID:  1001,
+				Text:      "continue",
+				MessageID: 1,
+			}, "continue", nil)
+			if err == nil || !strings.Contains(err.Error(), "lease and continuation state") {
+				t.Fatalf("materializePendingOperationProposalApproval() materialized=%v err=%v, want atomic persistence failure", materialized, err)
+			}
+
+			got, err := store.OperationState(key)
+			if err != nil {
+				t.Fatalf("OperationState() err = %v", err)
+			}
+			tc.check(t, got)
+			cont, err := store.ContinuationState(key)
+			if err != nil {
+				t.Fatalf("ContinuationState() err = %v", err)
+			}
+			if strings.Contains(cont.DecisionID, "atomic-materialization-trigger") || strings.Contains(cont.StageSummary, "atomic-materialization-trigger") {
+				t.Fatalf("continuation after failed materialization = %#v, want no materialized continuation", cont)
+			}
+			sender.mu.Lock()
+			inlineCount := len(sender.inline)
+			sender.mu.Unlock()
+			if inlineCount != 0 {
+				t.Fatalf("inline count = %d, want no card after failed atomic materialization", inlineCount)
+			}
+		})
+	}
+}
+
+func installContinuationWriteRejectTrigger(t *testing.T, store *session.SQLiteStore, marker string) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite3", store.DBPath())
+	if err != nil {
+		t.Fatalf("sql.Open() err = %v", err)
+	}
+	defer db.Close()
+	quotedMarker := strings.ReplaceAll(marker, `'`, `''`)
+	if _, err := db.Exec(`
+		CREATE TRIGGER reject_materialized_continuation_update
+		BEFORE UPDATE OF continuation_state_json ON sessions
+		WHEN NEW.continuation_state_json LIKE '%` + quotedMarker + `%'
+		BEGIN
+			SELECT RAISE(ABORT, 'reject materialized continuation update');
+		END
+	`); err != nil {
+		t.Fatalf("create continuation reject trigger: %v", err)
 	}
 }

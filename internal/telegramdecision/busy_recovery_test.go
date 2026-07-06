@@ -84,6 +84,89 @@ func TestResumePendingBusyDecisionRecordsSyntheticIngressAndClearsPending(t *tes
 	}
 }
 
+func TestResumePendingBusyDecisionTransfersPrimaryIngressOwnership(t *testing.T) {
+	t.Parallel()
+
+	store, err := session.NewSQLiteStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	now := time.Date(2026, 6, 28, 14, 0, 0, 0, time.UTC)
+	msg := core.InboundMessage{
+		ChatID:          7,
+		SenderID:        42,
+		MessageID:       99,
+		IngressSurface:  telegramruntime.PrimaryIngressSurface,
+		IngressUpdateID: 1701,
+		Text:            "queued while busy",
+	}
+	ownerKey := telegramruntime.SessionOwnerKey(msg)
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("Marshal() err = %v", err)
+	}
+	if _, err := store.RecordTelegramIngressAccepted(session.TelegramIngressUpdateRecord{
+		Surface:     telegramruntime.PrimaryIngressSurface,
+		UpdateID:    msg.IngressUpdateID,
+		UpdateKind:  "message",
+		ChatID:      msg.ChatID,
+		SenderID:    msg.SenderID,
+		MessageID:   msg.MessageID,
+		SessionID:   core.SessionIDForInboundMessage(msg),
+		Status:      session.TelegramIngressUpdateAccepted,
+		InboundJSON: string(raw),
+		AcceptedAt:  now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("RecordTelegramIngressAccepted(primary) err = %v", err)
+	}
+	if _, err := store.MarkTelegramIngressQueued(telegramruntime.PrimaryIngressSurface, msg.IngressUpdateID, now.Add(time.Second)); err != nil {
+		t.Fatalf("MarkTelegramIngressQueued(primary) err = %v", err)
+	}
+	if err := store.UpsertPendingBusyDecision(session.PendingBusyDecisionRecord{
+		OwnerKey:           ownerKey,
+		ChatID:             msg.ChatID,
+		SenderID:           msg.SenderID,
+		SessionID:          core.SessionIDForInboundMessage(msg),
+		ScopeKind:          string(session.ScopeKindTelegramDM),
+		ScopeID:            "7",
+		MessageID:          msg.MessageID,
+		InboundMessageJSON: string(raw),
+	}); err != nil {
+		t.Fatalf("UpsertPendingBusyDecision() err = %v", err)
+	}
+
+	router := &decisionAcceptedTestRouter{decisionTestRouter: &decisionTestRouter{}}
+	handler := NewHandler(&decisionTestSender{}, router, decision.NewBroker(nil), store)
+	if err := handler.ResumePendingBusyDecision(context.Background(), ownerKey, decision.Result{Choice: "queue"}); err != nil {
+		t.Fatalf("ResumePendingBusyDecision() err = %v", err)
+	}
+
+	synthetic, ok, err := store.TelegramIngressUpdate(telegramruntime.BusyDecisionResumeIngressSurface, msg.IngressUpdateID)
+	if err != nil || !ok {
+		t.Fatalf("TelegramIngressUpdate(synthetic) ok=%t err=%v", ok, err)
+	}
+	if synthetic.Status != session.TelegramIngressUpdateAccepted {
+		t.Fatalf("synthetic status = %s, want accepted work owner", synthetic.Status)
+	}
+	primary, ok, err := store.TelegramIngressUpdate(telegramruntime.PrimaryIngressSurface, msg.IngressUpdateID)
+	if err != nil || !ok {
+		t.Fatalf("TelegramIngressUpdate(primary) ok=%t err=%v", ok, err)
+	}
+	if primary.Status != session.TelegramIngressUpdateDropped || primary.ErrorText != session.TelegramIngressDropReasonDecisionResume || primary.CompletedAt.IsZero() {
+		t.Fatalf("primary record = %#v, want dropped ownership-transfer marker", primary)
+	}
+	pending, err := store.PendingTelegramIngressUpdates(telegramruntime.PrimaryIngressSurface, 10)
+	if err != nil {
+		t.Fatalf("PendingTelegramIngressUpdates(primary) err = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("primary pending = %#v, want transferred ingress excluded from replay", pending)
+	}
+}
+
 func TestResumePendingBusyDecisionKeepsPendingWhenSyntheticRouteFails(t *testing.T) {
 	t.Parallel()
 

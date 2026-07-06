@@ -153,3 +153,67 @@ func TestContinuationClassScopeRejectsLocalWorkspaceExternalEffect(t *testing.T)
 		t.Fatalf("decision = %#v, want external-effect boundary", decision)
 	}
 }
+
+func TestContinuationClassScopeRejectsLocalWorkspaceRepoPublication(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	prior := session.ContinuationState{
+		Status: session.ContinuationStatusApproved,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-local-workspace",
+			Status:         session.ContinuationLeaseStatusActive,
+			LeaseClass:     session.ContinuationLeaseClassLocalWorkspace,
+			RemainingTurns: 2,
+			AllowedActions: []string{"workspace_write", "git_push"},
+			ExpiresAt:      now.Add(time.Hour),
+		},
+	}
+	proposed := session.ContinuationState{
+		ActionProposal: session.ActionProposal{
+			RiskClass:      "commit",
+			AllowedActions: []string{"git_push"},
+			BoundedEffect:  "Push the current branch to origin.",
+		},
+		ContinuationLease: session.ContinuationLease{
+			LeaseClass: session.ContinuationLeaseClassRepoPublication,
+		},
+	}
+
+	decision := continuationClassScopeDecisionForMaterializedState(prior, proposed, now)
+	if decision.Allowed || decision.FailedDimension != "lease_class" {
+		t.Fatalf("decision = %#v, want lease-class boundary", decision)
+	}
+}
+
+func TestContinuationClassScopeAllowsRepoPublicationWithinSamePushLease(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	prior := session.ContinuationState{
+		Status: session.ContinuationStatusApproved,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-repo-publication",
+			Status:         session.ContinuationLeaseStatusActive,
+			LeaseClass:     session.ContinuationLeaseClassRepoPublication,
+			RemainingTurns: 2,
+			AllowedActions: []string{"git_push", "report_push_evidence"},
+			ExpiresAt:      now.Add(time.Hour),
+		},
+	}
+	proposed := session.ContinuationState{
+		ActionProposal: session.ActionProposal{
+			RiskClass:      "commit",
+			AllowedActions: []string{"git_push"},
+			BoundedEffect:  "Push the current branch to origin.",
+		},
+		ContinuationLease: session.ContinuationLease{
+			LeaseClass: session.ContinuationLeaseClassRepoPublication,
+		},
+	}
+
+	decision := continuationClassScopeDecisionForMaterializedState(prior, proposed, now)
+	if !decision.Allowed {
+		t.Fatalf("decision = %#v, want repo-publication reuse inside explicit push lease", decision)
+	}
+}

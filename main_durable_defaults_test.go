@@ -174,7 +174,7 @@ func TestInstallDailyReviewRecipePreservesExistingAgent(t *testing.T) {
 			Backend:        "native",
 			NativeProvider: "anthropic",
 			APIKey:         "sk-ant-existing",
-			Model:          "claude-opus-4-6",
+			Model:          "claude-opus-4-8",
 		},
 		PolicyVersion: 5,
 		Status:        "active",

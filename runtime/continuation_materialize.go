@@ -4,17 +4,141 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/aphelion/core"
+	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 	"github.com/idolum-ai/aphelion/turn"
 )
 
 func (r *Runtime) MaterializeRequestedApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string) (bool, error) {
 	return r.materializePendingOperationProposalApproval(ctx, key, msg, promptInput, nil)
+}
+
+func continuationApprovalAlreadyOffered(state session.ContinuationState, store *session.SQLiteStore, key session.SessionKey) (bool, error) {
+	if store == nil {
+		return false, nil
+	}
+	state = session.NormalizeContinuationState(state)
+	leaseID := strings.TrimSpace(state.ContinuationLease.ID)
+	proposalID := strings.TrimSpace(state.ActionProposal.ID)
+	decisionID := strings.TrimSpace(state.DecisionID)
+	instanceCreatedAt := continuationApprovalInstanceCreatedAt(state)
+	instanceCreatedAtText := continuationApprovalInstanceCreatedAtText(state)
+	afterSeq := int64(0)
+	for {
+		events, err := store.ExecutionEventsBySession(key, afterSeq, 200)
+		if err != nil {
+			return false, err
+		}
+		if len(events) == 0 {
+			return false, nil
+		}
+		for _, event := range events {
+			afterSeq = event.Seq
+			if strings.TrimSpace(event.EventType) != core.ExecutionEventContinuationOffered || strings.TrimSpace(event.Status) != "delivered" {
+				continue
+			}
+			payload := map[string]any{}
+			if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+				continue
+			}
+			if continuationPayloadString(payload, "delivery_status") != "delivered" {
+				continue
+			}
+			if !continuationOfferEventMatchesInstance(payload, event.CreatedAt, instanceCreatedAt, instanceCreatedAtText) {
+				continue
+			}
+			if leaseID != "" && continuationPayloadString(payload, "lease_id") == leaseID {
+				return true, nil
+			}
+			if proposalID != "" && continuationPayloadString(payload, "proposal_id") == proposalID {
+				return true, nil
+			}
+			if decisionID != "" && continuationPayloadString(payload, "decision_id") == decisionID {
+				return true, nil
+			}
+		}
+		if len(events) < 200 {
+			return false, nil
+		}
+	}
+}
+
+func continuationApprovalInstanceCreatedAtText(state session.ContinuationState) string {
+	at := continuationApprovalInstanceCreatedAt(state)
+	if at.IsZero() {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339Nano)
+}
+
+func continuationApprovalInstanceCreatedAt(state session.ContinuationState) time.Time {
+	state = session.NormalizeContinuationState(state)
+	var out time.Time
+	record := func(at time.Time) {
+		if at.IsZero() {
+			return
+		}
+		at = at.UTC()
+		if out.IsZero() || at.Before(out) {
+			out = at
+		}
+	}
+	record(state.ActionProposal.CreatedAt)
+	record(state.ContinuationLease.CreatedAt)
+	return out
+}
+
+func continuationOfferEventMatchesInstance(payload map[string]any, eventCreatedAt time.Time, instanceCreatedAt time.Time, instanceCreatedAtText string) bool {
+	if instanceCreatedAtText != "" {
+		if offeredInstance := continuationPayloadString(payload, "state_instance_created_at"); offeredInstance != "" {
+			return offeredInstance == instanceCreatedAtText
+		}
+	}
+	if instanceCreatedAt.IsZero() || eventCreatedAt.IsZero() {
+		return true
+	}
+	// Legacy delivered-offer events did not carry a state-instance marker.
+	// Treat very old events as a different request instance while allowing the
+	// normal request_approval/send clock skew inside the same materialization.
+	const legacyOfferClockSkew = 5 * time.Second
+	return !eventCreatedAt.UTC().Before(instanceCreatedAt.UTC().Add(-legacyOfferClockSkew))
+}
+
+func continuationPayloadString(payload map[string]any, key string) string {
+	value, ok := payload[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func (r *Runtime) sendAndRecordContinuationOfferLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, text string, source string, payload map[string]any, at time.Time) error {
+	if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, text, source); err != nil {
+		return err
+	}
+	if payload == nil {
+		payload = continuationExecutionPayload(state)
+	}
+	payload["delivery_status"] = "delivered"
+	if instanceCreatedAt := continuationApprovalInstanceCreatedAtText(state); instanceCreatedAt != "" {
+		payload["state_instance_created_at"] = instanceCreatedAt
+	}
+	if _, err := r.appendExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "delivered", payload, at); err != nil {
+		return fmt.Errorf("record delivered continuation offer: %w", err)
+	}
+	return nil
 }
 
 func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) (bool, error) {
@@ -26,12 +150,17 @@ func (r *Runtime) materializePendingOperationProposalApproval(ctx context.Contex
 	return r.materializePendingOperationProposalApprovalLocked(ctx, key, msg, promptInput, result)
 }
 
-func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, _ *turn.Result) (bool, error) {
+func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, promptInput string, result *turn.Result) (bool, error) {
 	if r == nil || r.store == nil || r.outbound == nil || msg.ChatID == 0 {
 		return false, nil
 	}
 	if _, ok := r.continuationApprovalPromptSender(); !ok {
 		return false, nil
+	}
+	if handledRecovery, continueMaterialization, err := r.materializePendingRecoveryApprovalNextActionLocked(ctx, key, msg, time.Now().UTC()); err != nil {
+		return false, err
+	} else if handledRecovery && !continueMaterialization {
+		return true, nil
 	}
 	opState, err := r.store.OperationState(key)
 	if err != nil {
@@ -89,6 +218,18 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 			}
 		}
 	}
+	if repaired, ok, err := r.repairTerminalContinuationProjection(ctx, key, msg, opState, priorContinuation, priorContinuationExists, now, "materialization_repair", true); err != nil {
+		return false, err
+	} else if ok {
+		priorContinuation = repaired
+		priorContinuationExists = true
+	}
+	if repaired, ok, err := r.repairSupersededContinuationProjection(ctx, key, msg, opState, priorContinuation, priorContinuationExists, now, "materialization_repair"); err != nil {
+		return false, err
+	} else if ok {
+		priorContinuation = repaired
+		priorContinuationExists = true
+	}
 	if operationStatusIsTerminal(opState.Status) {
 		return false, nil
 	}
@@ -122,6 +263,11 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 			return true, nil
 		}
 		state := continuationStateFromOperationPhase(opState, phase, promptInput, now)
+		if attached, err := r.attachOperationPhaseRecoveryContract(key, msg, phase, state, now); err != nil {
+			return true, err
+		} else {
+			state = attached
+		}
 		if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_phase_required_capability", now); err != nil || blocked {
 			return true, err
 		} else {
@@ -131,19 +277,15 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 		if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_phase_required_capability", now); err != nil || reused {
 			return true, err
 		}
-		if err := r.store.UpdateOperationState(key, opState); err != nil {
-			return false, fmt.Errorf("persist required-capability operation phase lease state: %w", err)
-		}
-		if err := r.store.UpdateContinuationState(key, state); err != nil {
-			return false, fmt.Errorf("persist required-capability operation phase continuation state: %w", err)
+		if err := r.store.UpdateOperationAndContinuationState(key, opState, state); err != nil {
+			return false, fmt.Errorf("persist required-capability operation phase lease and continuation state: %w", err)
 		}
 		payload := continuationExecutionPayload(state)
 		payload["materialized_from"] = "operation_phase_required_capability"
 		payload["phase_plan_id"] = strings.TrimSpace(opState.PhasePlan.ID)
 		payload["phase_id"] = strings.TrimSpace(phase.ID)
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 		r.recordContinuationBundleNarrowing(key, opState, []session.OperationPhase{phase}, state, "operation_phase_required_capability", now)
-		if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_required_capability"); err != nil {
+		if err := r.sendAndRecordContinuationOfferLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_required_capability", payload, now); err != nil {
 			return false, fmt.Errorf("send required-capability operation phase continuation approval: %w", err)
 		}
 		return true, nil
@@ -167,18 +309,14 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 			opState = updatedOpState
 		}
 		opState = operationStateWithMaterializedPlanLease(opState, state, now)
-		if err := r.store.UpdateOperationState(key, opState); err != nil {
-			return false, fmt.Errorf("persist operation plan lease state: %w", err)
-		}
-		if err := r.store.UpdateContinuationState(key, state); err != nil {
-			return false, fmt.Errorf("persist operation plan lease continuation state: %w", err)
+		if err := r.store.UpdateOperationAndContinuationState(key, opState, state); err != nil {
+			return false, fmt.Errorf("persist operation plan lease and continuation state: %w", err)
 		}
 		payload := continuationExecutionPayload(state)
 		payload["materialized_from"] = "operation_plan_lease"
 		payload["plan_lease_id"] = strings.TrimSpace(opState.PlanLease.ID)
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 		r.recordContinuationBundleNarrowing(key, opState, operationPlanLeasePhasesFromOperation(opState, opState.PlanLease), state, "operation_plan_lease", now)
-		if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
+		if err := r.sendAndRecordContinuationOfferLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease", payload, now); err != nil {
 			return false, fmt.Errorf("send operation plan lease continuation approval: %w", err)
 		}
 		return true, nil
@@ -203,19 +341,15 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 				opState = updatedOpState
 			}
 			opState = operationStateWithMaterializedPlanLease(opState, state, now)
-			if err := r.store.UpdateOperationState(key, opState); err != nil {
-				return false, fmt.Errorf("persist synthesized operation plan lease state: %w", err)
-			}
-			if err := r.store.UpdateContinuationState(key, state); err != nil {
-				return false, fmt.Errorf("persist synthesized operation plan lease continuation state: %w", err)
+			if err := r.store.UpdateOperationAndContinuationState(key, opState, state); err != nil {
+				return false, fmt.Errorf("persist synthesized operation plan lease and continuation state: %w", err)
 			}
 			payload := continuationExecutionPayload(state)
 			payload["materialized_from"] = "operation_plan_lease"
 			payload["plan_lease_id"] = strings.TrimSpace(opState.PlanLease.ID)
 			payload["synthesized_from_phase_plan"] = true
-			r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 			r.recordContinuationBundleNarrowing(key, opState, operationPlanLeasePhasesFromOperation(opState, opState.PlanLease), state, "operation_plan_lease", now)
-			if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease"); err != nil {
+			if err := r.sendAndRecordContinuationOfferLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_plan_lease", payload, now); err != nil {
 				return false, fmt.Errorf("send synthesized operation plan lease continuation approval: %w", err)
 			}
 			return true, nil
@@ -242,18 +376,14 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 		if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_phase_bundle", now); err != nil || reused {
 			return true, err
 		}
-		if err := r.store.UpdateOperationState(key, opState); err != nil {
-			return false, fmt.Errorf("persist operation phase bundle lease state: %w", err)
-		}
-		if err := r.store.UpdateContinuationState(key, state); err != nil {
-			return false, fmt.Errorf("persist operation phase bundle continuation state: %w", err)
+		if err := r.store.UpdateOperationAndContinuationState(key, opState, state); err != nil {
+			return false, fmt.Errorf("persist operation phase bundle lease and continuation state: %w", err)
 		}
 		payload := continuationExecutionPayload(state)
 		payload["materialized_from"] = "operation_phase_bundle"
 		payload["phase_plan_id"] = strings.TrimSpace(opState.PhasePlan.ID)
 		payload["bundle_phase_count"] = len(bundle)
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
-		if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_bundle"); err != nil {
+		if err := r.sendAndRecordContinuationOfferLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_bundle", payload, now); err != nil {
 			return false, fmt.Errorf("send operation phase bundle continuation approval: %w", err)
 		}
 		return true, nil
@@ -290,6 +420,11 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 		}
 
 		state := continuationStateFromOperationPhase(opState, phase, promptInput, now)
+		if attached, err := r.attachOperationPhaseRecoveryContract(key, msg, phase, state, now); err != nil {
+			return true, err
+		} else {
+			state = attached
+		}
 		if updatedOpState, blocked, err := r.blockInvalidMaterializedContinuationAuthority(ctx, key, msg, opState, state, "operation_phase_plan", now); err != nil || blocked {
 			return true, err
 		} else {
@@ -299,19 +434,15 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 		if reused, err := r.consumeActiveContinuationLeaseForMaterializedState(ctx, key, msg, opState, state, "operation_phase_plan", now); err != nil || reused {
 			return true, err
 		}
-		if err := r.store.UpdateOperationState(key, opState); err != nil {
-			return false, fmt.Errorf("persist operation phase lease state: %w", err)
-		}
-		if err := r.store.UpdateContinuationState(key, state); err != nil {
-			return false, fmt.Errorf("persist operation phase continuation state: %w", err)
+		if err := r.store.UpdateOperationAndContinuationState(key, opState, state); err != nil {
+			return false, fmt.Errorf("persist operation phase lease and continuation state: %w", err)
 		}
 		payload := continuationExecutionPayload(state)
 		payload["materialized_from"] = "operation_phase_plan"
 		payload["phase_plan_id"] = strings.TrimSpace(opState.PhasePlan.ID)
 		payload["phase_id"] = strings.TrimSpace(phase.ID)
-		r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
 		r.recordContinuationBundleNarrowing(key, opState, []session.OperationPhase{phase}, state, "operation_phase_plan", now)
-		if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_plan"); err != nil {
+		if err := r.sendAndRecordContinuationOfferLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_phase_plan", payload, now); err != nil {
 			return false, fmt.Errorf("send operation phase continuation approval: %w", err)
 		}
 		return true, nil
@@ -319,7 +450,7 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 	proposal := opState.Proposal
 	if !pendingOperationProposalNeedsButton(proposal) {
 		if operationPhasePlanHasBlockingInProgress(opState.PhasePlan) {
-			return true, nil
+			return result != nil, nil
 		}
 		return false, nil
 	}
@@ -332,6 +463,18 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 	}
 	priorState = session.NormalizeContinuationState(priorState)
 	if priorExists && priorState.Status == session.ContinuationStatusPending && operationProposalMatchesContinuation(proposal, priorState) {
+		alreadyOffered, err := continuationApprovalAlreadyOffered(priorState, r.store, key)
+		if err != nil {
+			return false, fmt.Errorf("read delivered continuation offers: %w", err)
+		}
+		if alreadyOffered {
+			return true, nil
+		}
+		payload := continuationExecutionPayload(priorState)
+		payload["materialized_from"] = "operation_proposal_existing_continuation"
+		if err := r.sendAndRecordContinuationOfferLocked(ctx, key, msg, priorState, renderOperationProposalMaterializedPromptFallback(priorState), "operation_proposal_existing_continuation", payload, now); err != nil {
+			return false, fmt.Errorf("send existing operation proposal continuation approval: %w", err)
+		}
 		return true, nil
 	}
 
@@ -350,11 +493,896 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 	}
 	payload := continuationExecutionPayload(state)
 	payload["materialized_from"] = "operation_proposal"
-	r.recordExecutionEvent(key, core.ExecutionEventContinuationOffered, "continuation", "pending", payload, now)
-	if err := r.sendMaterializedContinuationApprovalLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_proposal"); err != nil {
+	if err := r.sendAndRecordContinuationOfferLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "operation_proposal", payload, now); err != nil {
 		return false, fmt.Errorf("send operation proposal continuation approval: %w", err)
 	}
 	return true, nil
+}
+
+type recoveryApprovalHandoffInput struct {
+	Action                string            `json:"action"`
+	ContractID            string            `json:"contract_id"`
+	LeaseClass            string            `json:"lease_class"`
+	Principal             string            `json:"principal"`
+	AllowedActions        []string          `json:"allowed_actions"`
+	Constraints           map[string]string `json:"constraints"`
+	Tool                  string            `json:"tool"`
+	ToolAction            string            `json:"tool_action"`
+	GrantID               string            `json:"grant_id"`
+	GrantTargetResource   string            `json:"grant_target_resource"`
+	Resource              string            `json:"resource"`
+	RequestInstanceID     string            `json:"request_instance_id"`
+	AgentID               string            `json:"agent_id"`
+	RecoveryContract      string            `json:"recovery_contract"`
+	RecoveryOperationKind string            `json:"recovery_operation_kind"`
+}
+
+func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, now time.Time) (bool, bool, error) {
+	if r == nil || r.store == nil {
+		return false, false, nil
+	}
+	actor, ok := r.recoveryApprovalMaterializationActor(msg)
+	if !ok {
+		return false, false, nil
+	}
+	tools := r.toolsForPrincipal(actor, key)
+	if tools == nil {
+		return false, false, nil
+	}
+	if _, err := r.promoteDurableChildAuthorityBundleRequestsForParentKey(key, now); err != nil {
+		return false, false, err
+	}
+	actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", "continuation_lease_request", 100)
+	if err != nil {
+		return false, false, err
+	}
+	bundleActions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", "authority_bundle_request", 100)
+	if err != nil {
+		return false, false, err
+	}
+	actions = append(actions, bundleActions...)
+	var deferredConflicts []recoveryApprovalDeferredConflict
+	for _, action := range actions {
+		consumable, invalid := recoveryApprovalNextActionConsumable(action)
+		if invalid {
+			if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+				RecordID:    action.RecordID,
+				Key:         key,
+				Owner:       "runtime",
+				SubjectKind: action.SubjectKind,
+				SubjectRef:  action.SubjectRef,
+				Reason:      "invalid_recovery_handoff",
+				ResolvedAt:  now,
+			}); err != nil {
+				return false, false, fmt.Errorf("resolve invalid recovery approval handoff %s: %w", action.RecordID, err)
+			}
+			continue
+		}
+		if !consumable {
+			continue
+		}
+		switch strings.TrimSpace(action.OperationKind) {
+		case "continuation_lease_request":
+			executable, invalid, err := r.recoveryApprovalContinuationContractExecutable(key, action)
+			if err != nil {
+				return false, false, err
+			}
+			if invalid {
+				if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+					RecordID:    action.RecordID,
+					Key:         key,
+					Owner:       "runtime",
+					SubjectKind: action.SubjectKind,
+					SubjectRef:  action.SubjectRef,
+					Reason:      "invalid_continuation_recovery_contract",
+					ResolvedAt:  now,
+				}); err != nil {
+					return false, false, fmt.Errorf("resolve invalid continuation recovery handoff %s: %w", action.RecordID, err)
+				}
+				continue
+			}
+			if !executable {
+				continue
+			}
+		case "authority_bundle_request":
+			executable, invalid, terminalReason, err := r.recoveryApprovalAuthorityBundleExecutable(key, action, now)
+			if err != nil {
+				return false, false, err
+			}
+			if invalid {
+				if strings.TrimSpace(terminalReason) == "" {
+					terminalReason = "invalid_authority_bundle_handoff"
+				}
+				if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+					RecordID:    action.RecordID,
+					Key:         key,
+					Owner:       "runtime",
+					SubjectKind: action.SubjectKind,
+					SubjectRef:  action.SubjectRef,
+					Reason:      terminalReason,
+					ResolvedAt:  now,
+				}); err != nil {
+					return false, false, fmt.Errorf("resolve invalid authority bundle handoff %s: %w", action.RecordID, err)
+				}
+				continue
+			}
+			if !executable {
+				continue
+			}
+		}
+		if _, err := tools.Execute(ctx, "request_approval", json.RawMessage(action.OperationInputJSON)); err != nil {
+			var conflict toolpkg.RequestApprovalContinuationConflictError
+			if !errors.As(err, &conflict) {
+				return false, false, fmt.Errorf("materialize recovery approval handoff %s: %w", action.RecordID, err)
+			}
+			retry, handled, handleErr := r.adjudicateRecoveryApprovalContinuationConflictLocked(ctx, key, msg, action, conflict, now)
+			if handleErr != nil {
+				return false, false, handleErr
+			}
+			if !handled {
+				return false, false, fmt.Errorf("materialize recovery approval handoff %s: %w", action.RecordID, err)
+			}
+			if !retry {
+				deferredConflicts = append(deferredConflicts, recoveryApprovalDeferredConflict{Action: action, Conflict: conflict})
+				continue
+			}
+			if _, err := tools.Execute(ctx, "request_approval", json.RawMessage(action.OperationInputJSON)); err != nil {
+				return false, false, fmt.Errorf("materialize recovery approval handoff %s after adjudication: %w", action.RecordID, err)
+			}
+		}
+		if err := r.sendMaterializedRecoveryApprovalOfferLocked(ctx, key, msg, action, now); err != nil {
+			return false, false, err
+		}
+		if err := r.resolveDeferredRecoveryApprovalConflicts(key, deferredConflicts, action.RecordID, "superseded_by_later_recovery_handoff", now); err != nil {
+			return false, false, err
+		}
+		if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+			RecordID:    action.RecordID,
+			Key:         key,
+			Owner:       "runtime",
+			SubjectKind: action.SubjectKind,
+			SubjectRef:  action.SubjectRef,
+			Reason:      "recovery_handoff_materialized",
+			ResolvedAt:  now,
+		}); err != nil {
+			return false, false, fmt.Errorf("resolve recovery approval handoff %s: %w", action.RecordID, err)
+		}
+		return true, false, nil
+	}
+	if len(deferredConflicts) > 0 {
+		selected := newestRecoveryApprovalDeferredConflict(deferredConflicts)
+		if err := r.resolveDeferredRecoveryApprovalConflicts(key, deferredConflicts, selected.Action.RecordID, "superseded_by_newer_blocker", now); err != nil {
+			return false, false, err
+		}
+		if err := r.emitRecoveryApprovalContinuationConflictBlocker(key, selected.Action, selected.Conflict, now); err != nil {
+			return false, false, err
+		}
+		return true, false, nil
+	}
+	return false, false, nil
+}
+
+func (r *Runtime) materializeRecoveryApprovalNextActionLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord, now time.Time) (bool, bool, error) {
+	return r.materializeRecoveryApprovalNextActionWithOfferLocked(ctx, key, msg, action, now, true)
+}
+
+func (r *Runtime) prepareRecoveryApprovalNextActionLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord, now time.Time) (bool, bool, error) {
+	return r.materializeRecoveryApprovalNextActionWithOfferLocked(ctx, key, msg, action, now, false)
+}
+
+func (r *Runtime) materializeRecoveryApprovalNextActionWithOfferLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord, now time.Time, sendOffer bool) (bool, bool, error) {
+	if r == nil || r.store == nil {
+		return false, false, nil
+	}
+	actor, ok := r.recoveryApprovalMaterializationActor(msg)
+	if !ok {
+		return false, false, nil
+	}
+	tools := r.toolsForPrincipal(actor, key)
+	if tools == nil {
+		return false, false, nil
+	}
+	if _, err := r.promoteDurableChildAuthorityBundleRequestsForParentKey(key, now); err != nil {
+		return false, false, err
+	}
+	if !action.ResolvedAt.IsZero() {
+		return false, false, nil
+	}
+	consumable, invalid := recoveryApprovalNextActionConsumable(action)
+	if invalid {
+		if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+			RecordID:    action.RecordID,
+			Key:         key,
+			Owner:       "runtime",
+			SubjectKind: action.SubjectKind,
+			SubjectRef:  action.SubjectRef,
+			Reason:      "invalid_recovery_handoff",
+			ResolvedAt:  now,
+		}); err != nil {
+			return false, false, fmt.Errorf("resolve invalid recovery approval handoff %s: %w", action.RecordID, err)
+		}
+		return false, true, nil
+	}
+	if !consumable {
+		return false, false, nil
+	}
+	switch strings.TrimSpace(action.OperationKind) {
+	case "continuation_lease_request":
+		executable, invalid, err := r.recoveryApprovalContinuationContractExecutable(key, action)
+		if err != nil {
+			return false, false, err
+		}
+		if invalid {
+			if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+				RecordID:    action.RecordID,
+				Key:         key,
+				Owner:       "runtime",
+				SubjectKind: action.SubjectKind,
+				SubjectRef:  action.SubjectRef,
+				Reason:      "invalid_continuation_recovery_contract",
+				ResolvedAt:  now,
+			}); err != nil {
+				return false, false, fmt.Errorf("resolve invalid continuation recovery handoff %s: %w", action.RecordID, err)
+			}
+			return false, true, nil
+		}
+		if !executable {
+			return false, false, nil
+		}
+	case "authority_bundle_request":
+		executable, invalid, terminalReason, err := r.recoveryApprovalAuthorityBundleExecutable(key, action, now)
+		if err != nil {
+			return false, false, err
+		}
+		if invalid {
+			if strings.TrimSpace(terminalReason) == "" {
+				terminalReason = "invalid_authority_bundle_handoff"
+			}
+			if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+				RecordID:    action.RecordID,
+				Key:         key,
+				Owner:       "runtime",
+				SubjectKind: action.SubjectKind,
+				SubjectRef:  action.SubjectRef,
+				Reason:      terminalReason,
+				ResolvedAt:  now,
+			}); err != nil {
+				return false, false, fmt.Errorf("resolve invalid authority bundle handoff %s: %w", action.RecordID, err)
+			}
+			return false, true, nil
+		}
+		if !executable {
+			return false, false, nil
+		}
+	default:
+		return false, false, nil
+	}
+	if _, err := tools.Execute(ctx, "request_approval", json.RawMessage(action.OperationInputJSON)); err != nil {
+		var conflict toolpkg.RequestApprovalContinuationConflictError
+		if !errors.As(err, &conflict) {
+			return false, false, fmt.Errorf("materialize recovery approval handoff %s: %w", action.RecordID, err)
+		}
+		retry, handled, handleErr := r.adjudicateRecoveryApprovalContinuationConflictLocked(ctx, key, msg, action, conflict, now)
+		if handleErr != nil {
+			return false, false, handleErr
+		}
+		if !handled {
+			return false, false, fmt.Errorf("materialize recovery approval handoff %s: %w", action.RecordID, err)
+		}
+		if !retry {
+			if err := r.emitRecoveryApprovalContinuationConflictBlocker(key, action, conflict, now); err != nil {
+				return false, false, err
+			}
+			return false, true, nil
+		}
+		if _, err := tools.Execute(ctx, "request_approval", json.RawMessage(action.OperationInputJSON)); err != nil {
+			return false, false, fmt.Errorf("materialize recovery approval handoff %s after adjudication: %w", action.RecordID, err)
+		}
+	}
+	if !sendOffer {
+		return true, false, nil
+	}
+	if err := r.sendMaterializedRecoveryApprovalOfferLocked(ctx, key, msg, action, now); err != nil {
+		return false, false, err
+	}
+	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+		RecordID:    action.RecordID,
+		Key:         key,
+		Owner:       "runtime",
+		SubjectKind: action.SubjectKind,
+		SubjectRef:  action.SubjectRef,
+		Reason:      "recovery_handoff_materialized",
+		ResolvedAt:  now,
+	}); err != nil {
+		return false, false, fmt.Errorf("resolve recovery approval handoff %s: %w", action.RecordID, err)
+	}
+	return true, false, nil
+}
+
+func (r *Runtime) recoveryApprovalContinuationContractExecutable(key session.SessionKey, action session.NextActionRecord) (bool, bool, error) {
+	if r == nil || r.store == nil {
+		return false, false, nil
+	}
+	var input recoveryApprovalHandoffInput
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
+		return false, true, nil
+	}
+	contractID := strings.TrimSpace(input.ContractID)
+	if contractID == "" {
+		return false, true, nil
+	}
+	contract, ok, err := r.store.ContinuationRecoveryContract(contractID)
+	if err != nil {
+		return false, false, err
+	}
+	if !ok {
+		return false, true, nil
+	}
+	contract = session.NormalizeContinuationRecoveryContract(contract)
+	if contract.Status != session.ContinuationRecoveryContractStatusRecorded {
+		return false, true, nil
+	}
+	if strings.TrimSpace(contract.SessionID) != "" && contract.SessionID != session.SessionIDForKey(key) {
+		return false, true, nil
+	}
+	if strings.TrimSpace(contract.SubjectRef) == "" {
+		return false, true, nil
+	}
+	if strings.TrimSpace(contract.SubjectKind) != "continuation_lease_request" &&
+		!session.ContinuationRecoveryContractIsDiscoveredEffect(contract) {
+		return false, true, nil
+	}
+	return true, false, nil
+}
+
+func (r *Runtime) recoveryApprovalAuthorityBundleExecutable(key session.SessionKey, action session.NextActionRecord, now time.Time) (bool, bool, string, error) {
+	if r == nil || r.store == nil {
+		return false, false, "", nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	var input recoveryApprovalHandoffInput
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
+		return false, true, "invalid_authority_bundle_handoff", nil
+	}
+	bundleID := strings.TrimSpace(input.ContractID)
+	if bundleID == "" {
+		return false, true, "invalid_authority_bundle_handoff", nil
+	}
+	bundle, ok, err := r.store.AuthorityBundleContract(bundleID)
+	if err != nil {
+		return false, false, "", err
+	}
+	if !ok {
+		return false, true, "invalid_authority_bundle_handoff", nil
+	}
+	bundle = session.NormalizeAuthorityBundleContract(bundle)
+	if bundle.Status != session.AuthorityBundleStatusRecorded {
+		return false, true, "terminal_authority_bundle_handoff", nil
+	}
+	if bundle.SessionID != "" && bundle.SessionID != session.SessionIDForKey(key) {
+		return false, true, "invalid_authority_bundle_handoff", nil
+	}
+	if !bundle.ExpiresAt.IsZero() && !now.Before(bundle.ExpiresAt.UTC()) {
+		return false, true, "expired_authority_bundle_handoff", nil
+	}
+	if strings.TrimSpace(bundle.PrimaryContinuationContractID) != "" || len(bundle.RequiredCapabilityGrants) > 0 {
+		return true, false, "", nil
+	}
+	if key.Scope.Kind == session.ScopeKindDurableAgent {
+		return false, false, "", nil
+	}
+	return false, true, "invalid_authority_bundle_handoff", nil
+}
+
+func (r *Runtime) sendMaterializedRecoveryApprovalOfferLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	state, exists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("load recovery approval continuation for handoff %s: %w", strings.TrimSpace(action.RecordID), err)
+	}
+	if !exists {
+		return fmt.Errorf("recovery approval handoff %s did not create continuation state", strings.TrimSpace(action.RecordID))
+	}
+	state = session.NormalizeContinuationState(state)
+	if state.Status != session.ContinuationStatusPending || state.ContinuationLease.Status != session.ContinuationLeaseStatusPending {
+		return fmt.Errorf("recovery approval handoff %s produced non-pending continuation", strings.TrimSpace(action.RecordID))
+	}
+	alreadyOffered, err := continuationApprovalAlreadyOffered(state, r.store, key)
+	if err != nil {
+		return fmt.Errorf("read delivered recovery approval offers: %w", err)
+	}
+	if alreadyOffered {
+		return nil
+	}
+	payload := continuationExecutionPayload(state)
+	payload["materialized_from"] = "recovery_approval_handoff"
+	payload["recovery_next_action_id"] = strings.TrimSpace(action.RecordID)
+	payload["recovery_operation_kind"] = strings.TrimSpace(action.OperationKind)
+	payload["recovery_subject_kind"] = strings.TrimSpace(action.SubjectKind)
+	payload["recovery_subject_ref"] = strings.TrimSpace(action.SubjectRef)
+	if err := r.sendAndRecordContinuationOfferLocked(ctx, key, msg, state, renderOperationProposalMaterializedPromptFallback(state), "recovery_approval_handoff", payload, now); err != nil {
+		return fmt.Errorf("send recovery approval continuation offer for handoff %s: %w", strings.TrimSpace(action.RecordID), err)
+	}
+	return nil
+}
+
+type recoveryApprovalDeferredConflict struct {
+	Action   session.NextActionRecord
+	Conflict toolpkg.RequestApprovalContinuationConflictError
+}
+
+func (r *Runtime) adjudicateRecoveryApprovalContinuationConflictLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord, conflict toolpkg.RequestApprovalContinuationConflictError, now time.Time) (bool, bool, error) {
+	if r == nil || r.store == nil {
+		return false, false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	state, ok, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return false, false, fmt.Errorf("read continuation conflict state: %w", err)
+	}
+	if !ok {
+		r.recordRecoveryApprovalConflictAdjudication(key, action, conflict, "missing_current_state", "retry_without_conflict", now)
+		return true, true, nil
+	}
+	state = session.NormalizeContinuationState(state)
+	if !recoveryApprovalConflictMatchesCurrentState(state, conflict) {
+		r.recordRecoveryApprovalConflictAdjudication(key, action, conflict, "current_state_changed", "retry_without_conflict", now)
+		return true, true, nil
+	}
+	if state.Status == session.ContinuationStatusPending &&
+		state.ContinuationLease.Status == session.ContinuationLeaseStatusPending &&
+		recoveryApprovalHandoffCanSupersedePending(action, state) {
+		repaired := continuationStateWithSupersededProjection(state, now)
+		repaired.HandshakeBlockedReason = "superseded_by_recovery_approval_handoff"
+		if err := r.store.UpdateContinuationState(key, repaired); err != nil {
+			return false, false, fmt.Errorf("supersede conflicting pending continuation %s: %w", strings.TrimSpace(state.ContinuationLease.ID), err)
+		}
+		r.recordRecoveryApprovalConflictAdjudication(key, action, conflict, "stale_pending_superseded", "retry_request_approval", now)
+		if _, err := r.store.RecordNextAction(session.NextActionInput{
+			Key:                key,
+			Owner:              "continuation",
+			State:              session.NextActionSuperseded,
+			SubjectKind:        "continuation_approval",
+			SubjectRef:         firstNonEmptyContinuation(state.ContinuationLease.ID, state.DecisionID, state.ActionProposal.ID),
+			CausalRefs:         recoveryApprovalConflictCausalRefs(action, state, conflict),
+			NextAction:         "retire the stale pending continuation approval and materialize the requested recovery approval",
+			RetryPolicy:        "do_not_use_superseded_prompt",
+			OperatorProjection: "A stale pending approval was superseded by a newer typed recovery handoff.",
+			CreatedAt:          now,
+		}); err != nil {
+			return false, false, fmt.Errorf("record superseded recovery approval conflict: %w", err)
+		}
+		chatID := msg.ChatID
+		if chatID == 0 {
+			chatID = key.ChatID
+		}
+		if chatID != 0 {
+			r.retireStaleContinuationApprovalCards(ctx, key, chatID, continuationCallbackThreadIDForMessage(key, msg), 0, "superseded_by_recovery_handoff", now)
+		}
+		return true, true, nil
+	}
+	return false, true, nil
+}
+
+func (r *Runtime) emitRecoveryApprovalContinuationConflictBlocker(key session.SessionKey, action session.NextActionRecord, conflict toolpkg.RequestApprovalContinuationConflictError, now time.Time) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	state, ok, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("read blocked continuation conflict state: %w", err)
+	}
+	if !ok {
+		state = session.ContinuationState{}
+	} else {
+		state = session.NormalizeContinuationState(state)
+	}
+	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+		RecordID:    action.RecordID,
+		Key:         key,
+		Owner:       "runtime",
+		SubjectKind: action.SubjectKind,
+		SubjectRef:  action.SubjectRef,
+		Reason:      "blocked_by_live_continuation_authority",
+		ResolvedAt:  now,
+	}); err != nil {
+		return fmt.Errorf("resolve blocked recovery approval handoff %s: %w", action.RecordID, err)
+	}
+	r.recordRecoveryApprovalConflictAdjudication(key, action, conflict, "live_authority_blocks_replacement", "operator_intervention_required", now)
+	if _, err := r.store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "continuation",
+		State:              session.NextActionWaitingForOperator,
+		SubjectKind:        "continuation_approval_conflict",
+		SubjectRef:         strings.TrimSpace(action.RecordID),
+		CausalRefs:         recoveryApprovalConflictCausalRefs(action, state, conflict),
+		NextAction:         "finish, stop, or revoke the active continuation before requesting this recovery approval",
+		RequiredAuthority:  string(conflict.RequestedLeaseClass),
+		ResourceBlocker:    "live_continuation_conflict",
+		RetryPolicy:        "operator_must_resolve_existing_authority",
+		OperatorProjection: "The requested recovery approval conflicts with a live continuation lease, so Aphelion did not replace it automatically.",
+		CreatedAt:          now,
+	}); err != nil {
+		return fmt.Errorf("record live continuation conflict next action: %w", err)
+	}
+	return nil
+}
+
+func (r *Runtime) resolveDeferredRecoveryApprovalConflicts(key session.SessionKey, conflicts []recoveryApprovalDeferredConflict, keepRecordID string, reason string, now time.Time) error {
+	if r == nil || r.store == nil || len(conflicts) == 0 {
+		return nil
+	}
+	keepRecordID = strings.TrimSpace(keepRecordID)
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	for _, conflict := range conflicts {
+		action := conflict.Action
+		if strings.TrimSpace(action.RecordID) == "" || strings.TrimSpace(action.RecordID) == keepRecordID {
+			continue
+		}
+		if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+			RecordID:    action.RecordID,
+			Key:         key,
+			Owner:       "runtime",
+			SubjectKind: action.SubjectKind,
+			SubjectRef:  action.SubjectRef,
+			Reason:      reason,
+			ResolvedAt:  now,
+		}); err != nil {
+			return fmt.Errorf("resolve deferred recovery approval handoff %s: %w", action.RecordID, err)
+		}
+		r.recordRecoveryApprovalConflictAdjudication(key, action, conflict.Conflict, "deferred_conflict_superseded", reason, now)
+	}
+	return nil
+}
+
+func newestRecoveryApprovalDeferredConflict(conflicts []recoveryApprovalDeferredConflict) recoveryApprovalDeferredConflict {
+	if len(conflicts) == 0 {
+		return recoveryApprovalDeferredConflict{}
+	}
+	selected := conflicts[0]
+	for _, candidate := range conflicts[1:] {
+		if recoveryApprovalActionNewer(candidate.Action, selected.Action) {
+			selected = candidate
+		}
+	}
+	return selected
+}
+
+func recoveryApprovalActionNewer(left session.NextActionRecord, right session.NextActionRecord) bool {
+	if left.CreatedAt.IsZero() && right.CreatedAt.IsZero() {
+		return strings.TrimSpace(left.RecordID) > strings.TrimSpace(right.RecordID)
+	}
+	if left.CreatedAt.IsZero() {
+		return false
+	}
+	if right.CreatedAt.IsZero() {
+		return true
+	}
+	leftAt := left.CreatedAt.UTC()
+	rightAt := right.CreatedAt.UTC()
+	if leftAt.Equal(rightAt) {
+		return strings.TrimSpace(left.RecordID) > strings.TrimSpace(right.RecordID)
+	}
+	return leftAt.After(rightAt)
+}
+
+func recoveryApprovalHandoffCanSupersedePending(action session.NextActionRecord, state session.ContinuationState) bool {
+	state = session.NormalizeContinuationState(state)
+	if action.CreatedAt.IsZero() || state.UpdatedAt.IsZero() {
+		return true
+	}
+	return !action.CreatedAt.UTC().Before(state.UpdatedAt.UTC())
+}
+
+func recoveryApprovalConflictMatchesCurrentState(state session.ContinuationState, conflict toolpkg.RequestApprovalContinuationConflictError) bool {
+	state = session.NormalizeContinuationState(state)
+	if want := strings.TrimSpace(conflict.ExistingLeaseID); want != "" && strings.TrimSpace(state.ContinuationLease.ID) != want {
+		return false
+	}
+	if conflict.ExistingLeaseClass != "" && state.ContinuationLease.LeaseClass != conflict.ExistingLeaseClass {
+		return false
+	}
+	if conflict.ExistingStatus != "" && state.Status != conflict.ExistingStatus {
+		return false
+	}
+	if conflict.ExistingLeaseStatus != "" && state.ContinuationLease.Status != conflict.ExistingLeaseStatus {
+		return false
+	}
+	return true
+}
+
+func (r *Runtime) recordRecoveryApprovalConflictAdjudication(key session.SessionKey, action session.NextActionRecord, conflict toolpkg.RequestApprovalContinuationConflictError, decision string, outcome string, now time.Time) {
+	if r == nil {
+		return
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationAdjudicated, "continuation", "adjudicated", map[string]any{
+		"adjudication_kind":     "recovery_approval_materialization",
+		"surface":               "recovery_approval_handoff",
+		"decision":              strings.TrimSpace(decision),
+		"outcome":               strings.TrimSpace(outcome),
+		"next_action_record_id": strings.TrimSpace(action.RecordID),
+		"existing_lease_id":     strings.TrimSpace(conflict.ExistingLeaseID),
+		"existing_lease_class":  string(conflict.ExistingLeaseClass),
+		"existing_status":       string(conflict.ExistingStatus),
+		"existing_lease_status": string(conflict.ExistingLeaseStatus),
+		"requested_lease_id":    strings.TrimSpace(conflict.RequestedLeaseID),
+		"requested_lease_class": string(conflict.RequestedLeaseClass),
+		"request_instance_id":   strings.TrimSpace(conflict.RequestInstanceID),
+	}, now)
+}
+
+func recoveryApprovalConflictCausalRefs(action session.NextActionRecord, state session.ContinuationState, conflict toolpkg.RequestApprovalContinuationConflictError) []string {
+	refs := []string{}
+	if id := strings.TrimSpace(action.RecordID); id != "" {
+		refs = append(refs, "next_action:"+id)
+	}
+	if id := strings.TrimSpace(conflict.ExistingLeaseID); id != "" {
+		refs = append(refs, "continuation_lease:"+id)
+	}
+	if id := strings.TrimSpace(conflict.RequestedLeaseID); id != "" {
+		refs = append(refs, "requested_continuation_lease:"+id)
+	}
+	if id := strings.TrimSpace(state.DecisionID); id != "" {
+		refs = append(refs, "decision:"+id)
+	}
+	return refs
+}
+
+func (r *Runtime) recoveryApprovalMaterializationActor(msg core.InboundMessage) (principal.Principal, bool) {
+	if r == nil || r.resolver == nil || msg.SenderID == 0 {
+		return principal.Principal{}, false
+	}
+	actor, ok := r.resolver.ResolveTelegramUser(msg.SenderID)
+	if !ok {
+		return principal.Principal{}, false
+	}
+	return actor, true
+}
+
+func recoveryApprovalNextActionConsumable(action session.NextActionRecord) (bool, bool) {
+	if action.State != session.NextActionBlockedNeedsAuthority {
+		return false, false
+	}
+	if strings.TrimSpace(action.OperationTool) != "request_approval" {
+		return false, false
+	}
+	switch strings.TrimSpace(action.OperationKind) {
+	case "continuation_lease_request":
+		if strings.TrimSpace(action.SubjectKind) != "continuation_lease_request" ||
+			strings.TrimSpace(action.ResourceBlocker) != "missing_continuation_lease" {
+			return false, false
+		}
+	case "authority_bundle_request":
+		if strings.TrimSpace(action.SubjectKind) != "authority_bundle_request" ||
+			strings.TrimSpace(action.ResourceBlocker) != "authority_bundle_approval" {
+			return false, false
+		}
+	default:
+		return false, false
+	}
+	if strings.TrimSpace(action.OperationInputJSON) == "" {
+		return false, true
+	}
+	if err := toolpkg.ValidateRecoveryTransitionRecord(action); err != nil {
+		return false, true
+	}
+	var input recoveryApprovalHandoffInput
+	if err := json.Unmarshal([]byte(action.OperationInputJSON), &input); err != nil {
+		return false, true
+	}
+	consumable := recoveryApprovalHandoffInputConsumable(input)
+	return consumable, !consumable
+}
+
+func recoveryApprovalHandoffInputConsumable(input recoveryApprovalHandoffInput) bool {
+	if strings.TrimSpace(input.RecoveryContract) != "aphelion.recovery_handoff.v1" {
+		return false
+	}
+	operationKind := strings.TrimSpace(input.RecoveryOperationKind)
+	action := strings.TrimSpace(input.Action)
+	if operationKind == "continuation_lease_request" && action == "request_continuation_lease" && strings.TrimSpace(input.ContractID) != "" {
+		return true
+	}
+	if operationKind == "authority_bundle_request" && action == "request_authority_bundle" && strings.TrimSpace(input.ContractID) != "" {
+		return true
+	}
+	if strings.TrimSpace(input.ContractID) == "" {
+		return false
+	}
+	return false
+}
+
+func (r *Runtime) attachOperationPhaseRecoveryContract(key session.SessionKey, msg core.InboundMessage, phase session.OperationPhase, state session.ContinuationState, now time.Time) (session.ContinuationState, error) {
+	state = session.NormalizeContinuationState(state)
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	if lease.LeaseClass != session.ContinuationLeaseClassChildWake {
+		return state, nil
+	}
+	agentID, grantID, targetResource := operationPhaseChildWakeTarget(phase)
+	if agentID == "" {
+		return state, fmt.Errorf("child_wake operation phase requires exact durable_agent wake_once target")
+	}
+	principalID := operationPhaseRecoveryPrincipal(msg, key)
+	if principalID == "" {
+		return state, fmt.Errorf("child_wake operation phase requires operator principal")
+	}
+	allowed := append([]string(nil), lease.AllowedActions...)
+	if !operationPhaseActionContains(allowed, "wake_named_child") {
+		allowed = append(allowed, "wake_named_child")
+	}
+	constraints := map[string]string{}
+	for key, value := range lease.Constraints {
+		if strings.TrimSpace(key) != "" && strings.TrimSpace(value) != "" {
+			constraints[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	constraints["agent_id"] = agentID
+	constraints["principal"] = principalID
+	if grantID != "" {
+		constraints["grant_id"] = grantID
+	}
+	if targetResource != "" {
+		constraints["grant_target_resource"] = targetResource
+		constraints["target_resource"] = targetResource
+	}
+	retryInput := map[string]any{"action": "wake_once", "agent_id": agentID}
+	if guidance := operationPhaseChildWakeGuidance(phase); guidance != "" {
+		retryInput["reason"] = guidance
+	}
+	retryJSON, err := json.Marshal(retryInput)
+	if err != nil {
+		return state, fmt.Errorf("compile child_wake retry input: %w", err)
+	}
+	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   "operation-phase-" + strings.TrimSpace(state.DecisionID),
+		SessionID:           session.SessionIDForKey(key),
+		SubjectKind:         "continuation_lease_request",
+		Principal:           principalID,
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		AllowedActions:      allowed,
+		Constraints:         constraints,
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             agentID,
+		GrantID:             grantID,
+		GrantTargetResource: targetResource,
+		RetryOperation: session.ContinuationRetryOperation{
+			Contract:      session.ContinuationRecoveryRetryVersion,
+			OperationKind: "durable_agent_wake_once",
+			Tool:          "durable_agent",
+			InputJSON:     string(retryJSON),
+			SubjectKind:   "continuation_lease_request",
+		},
+		CreatedAt: now,
+	})
+	if err != nil {
+		return state, err
+	}
+	contract, err = r.store.UpsertContinuationRecoveryContract(contract)
+	if err != nil {
+		return state, err
+	}
+	lease.RecoveryContractID = contract.ContractID
+	lease.RetryOperation = contract.RetryOperation
+	lease.Constraints = constraints
+	lease.AllowedActions = allowed
+	lease.PlanHash = contract.ContractHash
+	state.ContinuationLease = session.NormalizeContinuationLease(lease)
+	state.ActionProposal.PlanHash = contract.ContractHash
+	return session.NormalizeContinuationState(state), nil
+}
+
+func operationPhaseChildWakeGuidance(phase session.OperationPhase) string {
+	phase = normalizeSingleOperationPhase(phase)
+	for _, value := range []string{
+		phase.Summary,
+		phase.BoundedEffect,
+		phase.OperatorTitle,
+		phase.PlanTitle,
+	} {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func operationPhaseChildWakeTarget(phase session.OperationPhase) (string, string, string) {
+	phase = normalizeSingleOperationPhase(phase)
+	for _, grant := range phase.RequiredCapabilityGrants {
+		grant = session.NormalizeCapabilityGrantSpec(grant)
+		agentID := operationPhaseAgentIDFromTargetResource(grant.TargetResource)
+		if agentID == "" {
+			agentID = operationPhaseAgentIDFromConstraints(grant.Constraints)
+		}
+		if agentID != "" {
+			return agentID, grant.GrantID, grant.TargetResource
+		}
+	}
+	return "", "", ""
+}
+
+func operationPhaseAgentIDFromTargetResource(target string) string {
+	target = strings.TrimSpace(target)
+	parts := strings.Split(target, ":")
+	if len(parts) == 3 && parts[0] == "durable_agent" && parts[2] == "wake_once" && strings.TrimSpace(parts[1]) != "" {
+		return strings.TrimSpace(parts[1])
+	}
+	return ""
+}
+
+func operationPhaseAgentIDFromConstraints(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return ""
+	}
+	return operationPhaseFindAgentID(payload)
+}
+
+func operationPhaseFindAgentID(value any) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if strings.TrimSpace(key) == "agent_id" {
+				if found := operationPhaseFindAgentID(child); found != "" {
+					return found
+				}
+			}
+		}
+		for _, child := range typed {
+			if found := operationPhaseFindAgentID(child); found != "" {
+				return found
+			}
+		}
+	case []any:
+		if len(typed) == 1 {
+			return operationPhaseFindAgentID(typed[0])
+		}
+	case string:
+		return strings.TrimSpace(typed)
+	}
+	return ""
+}
+
+func operationPhaseRecoveryPrincipal(msg core.InboundMessage, key session.SessionKey) string {
+	if msg.SenderID != 0 {
+		return fmt.Sprintf("telegram:%d", msg.SenderID)
+	}
+	if key.UserID != 0 {
+		return fmt.Sprintf("telegram:%d", key.UserID)
+	}
+	if key.ChatID != 0 {
+		return fmt.Sprintf("telegram:%d", key.ChatID)
+	}
+	return ""
+}
+
+func operationPhaseActionContains(actions []string, want string) bool {
+	want = strings.ToLower(strings.TrimSpace(want))
+	for _, action := range actions {
+		if strings.ToLower(strings.TrimSpace(action)) == want {
+			return true
+		}
+	}
+	return false
 }
 
 const operationPlanBudgetMaxLanes = 6

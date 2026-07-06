@@ -40,8 +40,11 @@ type durableGroupTurnCoordinator struct {
 	tools                     agent.ToolRegistry
 	currentFaceModel          face.Renderer
 	baseGovernorAwareness     prompt.RuntimeAwareness
+	promptOperationState      session.OperationState
 	audit                     *turnAuditRecorder
 	allowStream               bool
+	progress                  *toolProgressReporter
+	progressOwnedByCaller     bool
 	pendingParentConversation []core.DurableAgentConversationMessage
 	governorContextBuilder    durableWakeGovernorContextBuilder
 	lastRunID                 int64
@@ -114,6 +117,7 @@ func (c *durableGroupTurnCoordinator) Render(ctx context.Context, req turn.FaceR
 		Scope:                 c.scope,
 		Msg:                   c.msg,
 		Key:                   c.key,
+		RunID:                 c.lastRunID,
 		Channel:               c.requestChannel(),
 		PrincipalRole:         c.principalRoleOrLiveRole(),
 		LastGovernor:          c.lastGovernor,
@@ -168,6 +172,8 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 		PromptContext:         c.promptContext,
 		Tools:                 c.tools,
 		BaseGovernorAwareness: c.baseGovernorAwareness,
+		PromptOperationState:  c.promptOperationState,
+		PromptOperationSet:    true,
 		Audit:                 c.audit,
 		RunKind:               runKind,
 		FaceNote:              req.FaceNote,
@@ -179,8 +185,10 @@ func (c *durableGroupTurnCoordinator) Execute(ctx context.Context, req turn.Gove
 		ExtraSystemMessages: []agent.Message{
 			{Role: "system", Content: c.governorContext()},
 		},
-		RunErrPrefix:        "run durable group turn",
-		InvalidOutputPrefix: "invalid durable group turn output",
+		RunErrPrefix:          "run durable group turn",
+		InvalidOutputPrefix:   "invalid durable group turn output",
+		Progress:              c.progress,
+		ProgressOwnedByCaller: c.progressOwnedByCaller,
 	})
 	if err != nil {
 		return nil, err

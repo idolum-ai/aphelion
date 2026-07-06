@@ -18,8 +18,9 @@ const (
 	personaModelSonnet   = "claude-sonnet-4-6"
 	personaModelOpus46   = "claude-opus-4-6"
 	personaModelOpus47   = "claude-opus-4-7"
+	personaModelOpus48   = "claude-opus-4-8"
 	personaModelGPT55    = "gpt-5.5"
-	personaModelOpus     = personaModelOpus47
+	personaModelOpus     = personaModelOpus48
 	personaEffortSonnet  = "sonnet"
 	personaEffortOpus    = "opus"
 	personaEffortGPT     = "gpt"
@@ -54,7 +55,7 @@ func recipeStatePath(cfg *config.Config) string {
 func defaultRuntimeRecipeState(cfg *config.Config) runtimeRecipeState {
 	state := runtimeRecipeState{
 		PersonaModel:   personaModelSonnet,
-		GovernorEffort: governorEffortMedium,
+		GovernorEffort: governorEffortHigh,
 	}
 	if cfg == nil {
 		return state
@@ -146,7 +147,7 @@ func (r *Runtime) currentRecipeSnapshot() recipeSnapshot {
 		return recipeSnapshot{
 			PersonaModel:   personaModelSonnet,
 			PersonaEffort:  personaEffortSonnet,
-			GovernorEffort: governorEffortMedium,
+			GovernorEffort: governorEffortHigh,
 		}
 	}
 	r.recipeMu.Lock()
@@ -186,15 +187,17 @@ func normalizePersonaModel(model string) string {
 	value = strings.TrimPrefix(value, "anthropic/")
 	value = strings.TrimPrefix(value, "openai/")
 	switch value {
-	case personaModelSonnet, personaModelOpus46, personaModelOpus47, personaModelGPT55:
+	case personaModelSonnet, personaModelOpus48, personaModelGPT55:
 		return value
+	case personaModelOpus46, personaModelOpus47, "claude-opus-4.7":
+		return personaModelOpus48
 	default:
 		return ""
 	}
 }
 
 func personaEffortForModel(model string) string {
-	if normalized := normalizePersonaModel(model); normalized == personaModelOpus46 || normalized == personaModelOpus47 {
+	if normalized := normalizePersonaModel(model); normalized == personaModelOpus48 {
 		return personaEffortOpus
 	} else if normalized == personaModelGPT55 {
 		return personaEffortGPT

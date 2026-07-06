@@ -20,6 +20,7 @@ import (
 func (r *Runtime) applyTurnConstitution(
 	ctx context.Context,
 	key session.SessionKey,
+	turnRunID int64,
 	scope sandbox.Scope,
 	channel string,
 	principalRole string,
@@ -44,17 +45,20 @@ func (r *Runtime) applyTurnConstitution(
 			audit.RecordViolations(violations)
 			audit.RecordExecutionClaimFindings(adjudication.Findings)
 		}
+		if err := r.recordConstitutionJudgmentUse(key, turnRunID, "execution_claim_adjudication", violations, time.Now().UTC()); err != nil {
+			r.recordExecutionEvent(key, core.ExecutionEventDeliveryFinalFailed, "constitution", "judgment_record_failed", map[string]any{"error": trimError(err.Error())}, time.Now().UTC())
+		}
 		if repaired, ok := r.repairTurnReply(ctx, scope, channel, principalRole, userText, currentFaceModel, faceAwareness, materialFloor, floorText, trimmedReply, media, violations, []core.RuntimeAdjudication{adjudication.RuntimeAdjudication("repair_requested")}, audit); ok {
 			repairedAdjudication := r.adjudicateFinalReplyExecutionClaimsWithContext(ctx, key, repaired)
 			if !repairedAdjudication.HasFindings() {
 				trimmedReply = strings.TrimSpace(repaired)
 				r.recordExecutionClaimAdjudication(key, repairedAdjudication.WithPrior(adjudication), "persona_repaired")
 			} else {
-				trimmedReply = neutralizeUnsupportedExecutionClaims(repaired, repairedAdjudication)
+				trimmedReply = r.neutralizeUnsupportedExecutionClaimsForState(key, repaired, repairedAdjudication)
 				r.recordExecutionClaimAdjudication(key, repairedAdjudication, "fallback_neutralized")
 			}
 		} else {
-			trimmedReply = neutralizeUnsupportedExecutionClaims(trimmedReply, adjudication)
+			trimmedReply = r.neutralizeUnsupportedExecutionClaimsForState(key, trimmedReply, adjudication)
 			r.recordExecutionClaimAdjudication(key, adjudication, "fallback_neutralized")
 		}
 	}
@@ -108,6 +112,9 @@ func (r *Runtime) applyTurnConstitution(
 		RecordViolations: func(violations []ConstitutionViolation) {
 			if audit != nil {
 				audit.RecordViolations(violations)
+			}
+			if err := r.recordConstitutionJudgmentUse(key, turnRunID, "final_reply", violations, time.Now().UTC()); err != nil {
+				r.recordExecutionEvent(key, core.ExecutionEventDeliveryFinalFailed, "constitution", "judgment_record_failed", map[string]any{"error": trimError(err.Error())}, time.Now().UTC())
 			}
 		},
 	})
@@ -222,6 +229,9 @@ func (r *Runtime) adjudicateFinalReplyExecutionClaimsWithContext(ctx context.Con
 	if r == nil || r.store == nil || reply == "" {
 		return out
 	}
+	if !r.shouldInterpretFinalReplyExecutionClaims(key) {
+		return out
+	}
 	claims := r.interpretFinalReplyExecutionClaims(ctx, reply)
 	if len(claims) == 0 {
 		return out
@@ -314,8 +324,8 @@ func (r *Runtime) adjudicateFinalReplyExecutionClaimsWithContext(ctx context.Con
 	}
 	if executionClaimsInclude(claims, "approval_request") &&
 		!out.HasPendingContinuationApproval &&
-		!out.HasMaterializableOperationFollow &&
-		!out.HasActiveContinuationAuthority {
+		!out.HasActiveContinuationAuthority &&
+		!out.HasMaterializableOperationFollow {
 		out.Findings = append(out.Findings, executionClaimFinding("approval_request", "approval-request claim has no pending approval state", out))
 	}
 	return out
@@ -348,7 +358,58 @@ func (r *Runtime) adjudicationWithContinuationSurfaceState(key session.SessionKe
 			out.HasMaterializableOperationFollow = true
 		}
 	}
+	for _, operationKind := range []string{"continuation_lease_request", "authority_bundle_request"} {
+		actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", operationKind, 1)
+		if err == nil && len(actions) > 0 {
+			out.HasMaterializableOperationFollow = true
+			break
+		}
+	}
 	return out
+}
+
+func (r *Runtime) shouldInterpretFinalReplyExecutionClaims(key session.SessionKey) bool {
+	if r == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(r.governorBackend), "codex") {
+		return true
+	}
+	return r.hasFinalReplyContinuationOrApprovalSurface(key, time.Now().UTC())
+}
+
+func (r *Runtime) hasFinalReplyContinuationOrApprovalSurface(key session.SessionKey, now time.Time) bool {
+	if r == nil || r.store == nil {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	if cont, exists, err := r.store.ContinuationStateIfExists(key); err == nil && exists {
+		cont = session.NormalizeContinuationState(cont)
+		if cont.Status == session.ContinuationStatusApproved && cont.ContinuationLease.ActiveAt(now) && cont.RemainingTurns > 0 {
+			return true
+		}
+		if continuationStateHasFreshPendingLease(cont, now) {
+			return true
+		}
+	}
+	if opState, err := r.store.OperationState(key); err == nil {
+		opState = session.NormalizeOperationState(opState)
+		if pendingOperationProposalNeedsButton(opState.Proposal) ||
+			pendingOperationPlanLeaseNeedsButton(opState.PlanLease) ||
+			operationHasMaterializablePhaseApproval(opState) {
+			return true
+		}
+	}
+	for _, operationKind := range []string{"continuation_lease_request", "authority_bundle_request"} {
+		actions, err := r.store.OpenNextActionsBySessionOperation(key, session.NextActionBlockedNeedsAuthority, "request_approval", operationKind, 1)
+		if err == nil && len(actions) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func operationHasMaterializablePhaseApproval(opState session.OperationState) bool {
@@ -448,6 +509,27 @@ func (r *Runtime) groundFinalReplyWithExecutionEvidence(key session.SessionKey, 
 	return reply, adjudication.Note()
 }
 
+func (r *Runtime) neutralizeUngroundedDeliveryClaims(ctx context.Context, key session.SessionKey, turnRunID int64, reply string, audit *turnAuditRecorder) string {
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return reply
+	}
+	adjudication := r.adjudicateFinalReplyExecutionClaimsWithContext(ctx, key, reply)
+	if !adjudication.HasFindings() {
+		return reply
+	}
+	r.recordExecutionClaimAdjudication(key, adjudication, "delivery_fallback_neutralized")
+	violations := adjudication.ConstitutionViolations()
+	if audit != nil {
+		audit.RecordViolations(violations)
+		audit.RecordExecutionClaimFindings(adjudication.Findings)
+	}
+	if err := r.recordConstitutionJudgmentUse(key, turnRunID, "delivery_fallback", violations, time.Now().UTC()); err != nil {
+		r.recordExecutionEvent(key, core.ExecutionEventDeliveryFinalFailed, "constitution", "judgment_record_failed", map[string]any{"error": trimError(err.Error())}, time.Now().UTC())
+	}
+	return r.neutralizeUnsupportedExecutionClaimsForState(key, reply, adjudication)
+}
+
 func neutralizeUnsupportedExecutionClaims(reply string, adjudication executionClaimAdjudication) string {
 	reply = strings.TrimSpace(reply)
 	if reply == "" || !adjudication.HasFindings() {
@@ -457,6 +539,63 @@ func neutralizeUnsupportedExecutionClaims(reply string, adjudication executionCl
 		return "I need a fresh bounded approval before continuing."
 	}
 	return "I do not have current-turn execution evidence for that claim."
+}
+
+func (r *Runtime) neutralizeUnsupportedExecutionClaimsForState(key session.SessionKey, reply string, adjudication executionClaimAdjudication) string {
+	reply = strings.TrimSpace(reply)
+	if reply == "" || !adjudication.HasFindings() {
+		return reply
+	}
+	if adjudicationHasContinuationSurfaceFinding(adjudication) {
+		if stateText := r.neutralContinuationSurfaceTextFromNextAction(key); stateText != "" {
+			return stateText
+		}
+	}
+	return neutralizeUnsupportedExecutionClaims(reply, adjudication)
+}
+
+func (r *Runtime) neutralContinuationSurfaceTextFromNextAction(key session.SessionKey) string {
+	if r == nil || r.store == nil {
+		return ""
+	}
+	actions, err := r.store.OpenNextActionsBySession(key, 20)
+	if err != nil {
+		return ""
+	}
+	for _, action := range actions {
+		state := session.NormalizeNextActionState(action.State)
+		blocker := strings.TrimSpace(action.ResourceBlocker)
+		retryPolicy := strings.TrimSpace(action.RetryPolicy)
+		projection := strings.TrimSpace(action.OperatorProjection)
+		next := strings.TrimSpace(action.NextAction)
+		switch state {
+		case session.NextActionScheduledRetry:
+			if blocker == "external_transient" || retryPolicy == "bounded_backoff" {
+				return "The child task is parked on a transient blocker. Wait for the bounded backoff window before retrying, or inspect the recorded blocker; no fresh approval is pending right now."
+			}
+			if next != "" {
+				return "The current task is scheduled for retry: " + next
+			}
+			return "The current task is scheduled for retry. Follow the recorded retry policy before continuing; no fresh approval is pending right now."
+		case session.NextActionBlockedNeedsResourceRepair:
+			if projection != "" {
+				return projection
+			}
+			if next != "" {
+				return next
+			}
+			return "The current task is blocked on resource repair, not a missing approval."
+		case session.NextActionNeedsVerification:
+			if projection != "" {
+				return projection
+			}
+			if next != "" {
+				return next
+			}
+			return "The current task needs bounded verification before retrying; no fresh approval is pending right now."
+		}
+	}
+	return ""
 }
 
 func adjudicationHasContinuationSurfaceFinding(adjudication executionClaimAdjudication) bool {
@@ -495,6 +634,13 @@ func (r *Runtime) interpretFinalReplyExecutionClaims(ctx context.Context, reply 
 	return out
 }
 
+func (r *Runtime) finalReplyHasTypedApprovalRequest(ctx context.Context, key session.SessionKey, reply string) bool {
+	if !r.shouldInterpretFinalReplyExecutionClaims(key) {
+		return false
+	}
+	return executionClaimsInclude(r.interpretFinalReplyExecutionClaims(ctx, reply), "approval_request")
+}
+
 func executionClaimRisks(risks []string) []string {
 	out := make([]string, 0, len(risks))
 	seen := map[string]struct{}{}
@@ -526,6 +672,33 @@ func executionClaimsInclude(claims []core.InterpretationClaim, risk string) bool
 			if candidate == risk {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func executionClaimFindingsInclude(findings []ExecutionClaimFinding, claimType string) bool {
+	claimType = strings.TrimSpace(claimType)
+	if claimType == "" {
+		return false
+	}
+	for _, finding := range findings {
+		if strings.TrimSpace(finding.ClaimType) == claimType {
+			return true
+		}
+	}
+	return false
+}
+
+func turnAuditHasExecutionClaimFinding(audit *turnAuditRecorder, claimType string) bool {
+	claimType = strings.TrimSpace(claimType)
+	if audit == nil || claimType == "" {
+		return false
+	}
+	snapshot := audit.Snapshot()
+	for _, finding := range snapshot.ExecutionClaimFindings {
+		if strings.TrimSpace(finding.ClaimType) == claimType || strings.TrimSpace(finding.Kind) == claimType {
+			return true
 		}
 	}
 	return false

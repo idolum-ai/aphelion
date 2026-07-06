@@ -1,5 +1,10 @@
 bin/
 .claude/
+.cache/
+
+# Generated local eval/release outputs. Promote curated public artifacts to docs/.
+reports/
+
 docs/architecture/diagrams/generated/*
 !docs/architecture/diagrams/generated/README.md
 

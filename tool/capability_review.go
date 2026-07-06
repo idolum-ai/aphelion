@@ -11,13 +11,17 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 )
 
-func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRequest, in capabilityInput, actor principal.Principal, key session.SessionKey) (int64, error) {
+func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRequest, in capabilityInput, actor principal.Principal, key session.SessionKey, target capabilityReviewTarget) (int64, error) {
 	if r == nil || r.store == nil {
 		return 0, fmt.Errorf("capability_request review notification requires transcript store")
 	}
 	record = session.NormalizeCapabilityRequest(record)
-	if in.ReviewTargetChatID <= 0 {
+	if target.ChatID == 0 {
 		return 0, nil
+	}
+	target.Scope = session.NormalizeScopeRef(target.Scope)
+	if target.Scope.IsZero() {
+		target.Scope = session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: fmt.Sprintf("%d", target.ChatID)}
 	}
 	metadata := map[string]any{
 		"request_id":       record.RequestID,
@@ -50,18 +54,16 @@ func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRe
 	if summary == "" {
 		summary = capabilityRequestReviewSummary(record)
 	}
-	eventID, err := r.store.InsertReviewEvent(session.ReviewEvent{
+	eventID, err := r.store.EnsurePendingReviewEvent(session.ReviewEvent{
 		SourceChatID:      key.ChatID,
 		SourceUserID:      actor.TelegramUserID,
 		SourceRole:        "capability_request",
 		SourceScope:       sourceScope,
-		TargetAdminChatID: in.ReviewTargetChatID,
-		TargetScope: session.ScopeRef{
-			Kind: session.ScopeKindTelegramDM,
-			ID:   fmt.Sprintf("%d", in.ReviewTargetChatID),
-		},
-		Summary:      summary,
-		MetadataJSON: string(raw),
+		TargetAdminChatID: target.ChatID,
+		TargetScope:       target.Scope,
+		Summary:           summary,
+		MetadataJSON:      string(raw),
+		IdempotencyKey:    capabilityRequestReviewEventIdempotencyKey(target, record.RequestID),
 	})
 	if err != nil {
 		return 0, err
@@ -70,6 +72,23 @@ func (r *Registry) queueCapabilityRequestReviewEvent(record session.CapabilityRe
 		return 0, err
 	}
 	return eventID, nil
+}
+
+func capabilityRequestReviewEventIdempotencyKey(target capabilityReviewTarget, requestID string) string {
+	requestID = strings.TrimSpace(requestID)
+	if target.ChatID == 0 || requestID == "" {
+		return ""
+	}
+	scope := session.NormalizeScopeRef(target.Scope)
+	parts := []string{
+		"capability_request_review",
+		fmt.Sprintf("chat:%d", target.ChatID),
+		"scope_kind:" + string(scope.Kind),
+		"scope_id:" + scope.ID,
+		"durable_agent:" + scope.DurableAgentID,
+		"request:" + requestID,
+	}
+	return strings.Join(parts, "|")
 }
 
 func capabilityRequestActorScope(actor principal.Principal) session.ScopeRef {

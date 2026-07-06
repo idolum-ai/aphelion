@@ -3,9 +3,41 @@
 package core
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestModelSlotNamesIncludeCheapRuntimeLanes(t *testing.T) {
+	t.Parallel()
+
+	got := ModelSlotNames()
+	want := []string{
+		ModelSlotPersona,
+		ModelSlotGovernor,
+		ModelSlotDoctor,
+		ModelSlotChildDefault,
+		ModelSlotStatusReadable,
+		ModelSlotHeartbeat,
+		ModelSlotCuriosity,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ModelSlotNames() = %#v, want %#v", got, want)
+	}
+}
+
+func TestModelSlotUsesToolsForMaintenanceLanes(t *testing.T) {
+	t.Parallel()
+
+	if ModelSlotUsesTools(ModelSlotStatusReadable) {
+		t.Fatal("status uses tools = true, want false")
+	}
+	for _, slot := range []string{ModelSlotHeartbeat, ModelSlotCuriosity} {
+		if !ModelSlotUsesTools(slot) {
+			t.Fatalf("%s uses tools = false, want true", slot)
+		}
+	}
+}
 
 func TestValidateModelSlotConfigRoutesOpenAIGPT5ToolsWithEffortToResponses(t *testing.T) {
 	t.Parallel()
@@ -106,13 +138,13 @@ func TestValidateModelSlotConfigRejectsUnknownSpeed(t *testing.T) {
 func TestParseProviderModel(t *testing.T) {
 	t.Parallel()
 
-	provider, model := ParseProviderModel("anthropic/claude-opus-4.7")
-	if provider != ModelProviderAnthropic || model != "claude-opus-4.7" {
-		t.Fatalf("ParseProviderModel() = (%q, %q), want anthropic/claude-opus-4.7", provider, model)
+	provider, model := ParseProviderModel("anthropic/claude-opus-4-8")
+	if provider != ModelProviderAnthropic || model != "claude-opus-4-8" {
+		t.Fatalf("ParseProviderModel() = (%q, %q), want anthropic/claude-opus-4-8", provider, model)
 	}
 
-	provider, model = ParseProviderModel("openrouter/anthropic/claude-opus-4.7")
-	if provider != ModelProviderOpenRouter || model != "anthropic/claude-opus-4.7" {
+	provider, model = ParseProviderModel("openrouter/anthropic/claude-opus-4-8")
+	if provider != ModelProviderOpenRouter || model != "anthropic/claude-opus-4-8" {
 		t.Fatalf("ParseProviderModel(openrouter) = (%q, %q)", provider, model)
 	}
 

@@ -58,6 +58,23 @@ evidence can project:
 These fields are accounting and diagnosis projections, not billing authority and
 not canonical execution history.
 
+### Stable prompt prefix and evidence admission
+
+Stable governance/persona prompt material should appear before volatile runtime
+awareness so provider prompt caches can hit. Anthropic receives explicit cache
+breakpoints; the official OpenAI API uses automatic exact-prefix prompt caching
+for long prompts, so it benefits from the same stable-prefix/dynamic-tail layout
+without an OpenAI-specific transport cache-control field. Volatile objective,
+evidence, signals, delivery mode, latest user text, and channel facts belong
+late.
+
+The evidence ledger is cheap-to-write and hydrate-on-demand. Ordinary turns carry
+a compact evidence-ledger pointer plus the `evidence_hydrate` affordance; selected
+evidence is pushed automatically only when typed recovery, continuation,
+active-operation, or explicit recall pressure requires source-fact
+fidelity. This keeps the ledger canonical without turning every prompt into an
+audit replay.
+
 ## Proposed remaining shape
 
 ### 1. Tool evidence admission
@@ -145,6 +162,9 @@ Runtime decrements budget from actual provider usage when available and from est
 - Unit tests for future admission classes and digest schema normalization.
 - Golden prompt tests showing large tool results become digest refs, not raw dumps.
 - Runtime tests that budget exhaustion creates typed blocker/status, not silent truncation.
+- Eval cost-fidelity reports that track estimated prompt tokens, model-call
+  count, cache-eligible stable prefixes, and stable-prefix hash stability before
+  paid provider canaries.
 - Telemetry checks: prompt estimated tokens, actual provider input tokens, cache-read ratio, digest token savings, and retry count.
 - Regression tests that execution-event evidence remains accessible through status/doctor even when omitted from prompt.
 

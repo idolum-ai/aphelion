@@ -86,7 +86,7 @@ external_manifest_dir = "./external-tools"
 	if cfg.Work.Executor != "auto" || !reflect.DeepEqual(cfg.Work.AutoOrder, []string{"native", "codex"}) {
 		t.Fatalf("work executor defaults = %#v, want auto native->codex", cfg.Work)
 	}
-	if cfg.Autonomy.DefaultMode != "ask_first" || cfg.Autonomy.Ceiling != "leased" || !cfg.Autonomy.AllowLiveOverrides || cfg.Autonomy.MaxOverrideDuration != "4h" {
+	if cfg.Autonomy.DefaultMode != "ask_first" || cfg.Autonomy.Ceiling != "leased" || !cfg.Autonomy.AllowLiveOverrides || cfg.Autonomy.MaxOverrideDuration != "4h" || cfg.Autonomy.DefaultApprovalWindow != "off" {
 		t.Fatalf("autonomy defaults = %#v, want ask_first default with leased live override ceiling", cfg.Autonomy)
 	}
 	if cfg.Governor.NativeProvider != "anthropic" || cfg.Providers.Default != "anthropic" {
@@ -191,11 +191,11 @@ external_manifest_dir = "./external-tools"
 	if cfg.Memory.WritePolicy.DirectUserWrites != "apply" || cfg.Memory.WritePolicy.ReflectionWrites != "propose" || cfg.Memory.WritePolicy.AggressiveWrites != "propose" || cfg.Memory.WritePolicy.AutoAcceptLowRisk {
 		t.Fatalf("memory.write_policy defaults = %#v, want apply/propose/propose/manual", cfg.Memory.WritePolicy)
 	}
-	if cfg.Thinking.Effort != "medium" || cfg.Thinking.Summary != "auto" {
-		t.Fatalf("thinking defaults = %#v, want medium/auto", cfg.Thinking)
+	if cfg.Thinking.Effort != "high" || cfg.Thinking.Summary != "auto" {
+		t.Fatalf("thinking defaults = %#v, want high/auto", cfg.Thinking)
 	}
-	if cfg.Thinking.Defaults.Default != "medium" || cfg.Thinking.Defaults.Heartbeat != "low" || cfg.Thinking.Defaults.Cron != "low" || cfg.Thinking.Defaults.Recovery != "medium" {
-		t.Fatalf("thinking.defaults = %#v, want medium/low/low/medium", cfg.Thinking.Defaults)
+	if cfg.Thinking.Defaults.Default != "high" || cfg.Thinking.Defaults.Heartbeat != "low" || cfg.Thinking.Defaults.Cron != "low" || cfg.Thinking.Defaults.Recovery != "high" {
+		t.Fatalf("thinking.defaults = %#v, want high/low/low/high", cfg.Thinking.Defaults)
 	}
 	if cfg.Face.Backend != "provider" {
 		t.Fatalf("face.backend = %q, want provider", cfg.Face.Backend)
@@ -442,7 +442,7 @@ native_provider = "anthropic"
 
 [providers.anthropic]
 api_key = "sk-ant-test"
-model = "claude-opus-4-6"
+model = "claude-opus-4-8"
 max_tokens = 8192
 context_window = 190000
 cache_strategy = "hybrid"
@@ -468,6 +468,7 @@ default_mode = "review-only"
 ceiling = "leased"
 allow_live_overrides = true
 max_override_duration = "3h"
+default_approval_window = "30m"
 
 [sessions]
 db_path = "~/tmp/sessions.db"
@@ -630,8 +631,8 @@ elevenlabs_voice_id = "voice-123"
 	if !cfg.Tailscale.Parent.Enabled || cfg.Tailscale.Parent.Hostname != "aphelion-admin" || !strings.HasSuffix(cfg.Tailscale.Parent.StateDir, "/tailnet-parent") || cfg.Tailscale.Parent.ListenAddr != ":9443" || cfg.Tailscale.Parent.AuthKeyEnv != "APHELION_TAILSCALE_TEST_AUTHKEY" || !strings.HasSuffix(cfg.Tailscale.Parent.AuthKeyFile, "/tailnet-auth.key") || !reflect.DeepEqual(cfg.Tailscale.Parent.Tags, []string{"tag:aphelion-admin", "tag:admin"}) || !reflect.DeepEqual(cfg.Tailscale.Parent.AdminLoginNames, []string{"admin@example.com", "ops@example.com"}) {
 		t.Fatalf("tailscale parent = %#v, want explicit normalized parent config", cfg.Tailscale.Parent)
 	}
-	if cfg.Providers.Anthropic.Model != "claude-opus-4-6" {
-		t.Fatalf("model = %q, want claude-opus-4-6", cfg.Providers.Anthropic.Model)
+	if cfg.Providers.Anthropic.Model != "claude-opus-4-8" {
+		t.Fatalf("model = %q, want claude-opus-4-8", cfg.Providers.Anthropic.Model)
 	}
 	if cfg.Providers.Anthropic.MaxTokens != 8192 {
 		t.Fatalf("max_tokens = %d, want 8192", cfg.Providers.Anthropic.MaxTokens)
@@ -648,11 +649,11 @@ elevenlabs_voice_id = "voice-123"
 	if !cfg.OpenAI.VectorStores.Enabled || cfg.OpenAI.VectorStores.DefaultStore != "vs_default" {
 		t.Fatalf("openai.vector_stores = %#v, want enabled/vs_default", cfg.OpenAI.VectorStores)
 	}
-	if cfg.Autonomy.DefaultMode != "review_only" || cfg.Autonomy.Ceiling != "leased" || !cfg.Autonomy.AllowLiveOverrides || cfg.Autonomy.MaxOverrideDuration != "3h" {
+	if cfg.Autonomy.DefaultMode != "review_only" || cfg.Autonomy.Ceiling != "leased" || !cfg.Autonomy.AllowLiveOverrides || cfg.Autonomy.MaxOverrideDuration != "3h" || cfg.Autonomy.DefaultApprovalWindow != "30m" {
 		t.Fatalf("autonomy = %#v, want normalized review_only/leased with live overrides", cfg.Autonomy)
 	}
 	policy := EffectiveAutonomyPolicy(cfg)
-	if policy.DefaultMode != "review_only" || policy.Ceiling != "leased" || !policy.AllowLiveOverrides || policy.MaxOverrideDuration != 3*time.Hour {
+	if policy.DefaultMode != "review_only" || policy.Ceiling != "leased" || !policy.AllowLiveOverrides || policy.MaxOverrideDuration != 3*time.Hour || !policy.DefaultApprovalWindow.Enabled || policy.DefaultApprovalWindow.Duration != 30*time.Minute {
 		t.Fatalf("EffectiveAutonomyPolicy = %#v, want parsed policy", policy)
 	}
 	if cfg.Agent.MaxIterations != 77 || cfg.Agent.ToolTimeout != 9 {

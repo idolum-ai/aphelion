@@ -167,8 +167,9 @@ After install or update, use Telegram to confirm the operator surface:
 `/health` and `/status` show readiness and active work. `/thread` verifies that
 side lanes are attributable. `/context` and `/memory` should be read-only unless
 you explicitly answer a follow-up. `/mission` should show objective review
-state, and `/model` should show the configured admin model slots and any
-provider-specific speed controls.
+state, and `/model` should show the configured admin model slots, including the
+cheap status/heartbeat/curiosity lanes, and any provider-specific speed
+controls.
 
 ## Deploy Gate
 

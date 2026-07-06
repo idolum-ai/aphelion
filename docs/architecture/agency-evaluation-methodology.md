@@ -129,6 +129,20 @@ The repo implements this methodology through complementary surfaces:
   iterative inference pressure. The target is not merely "good next steps";
   the target is rehydrating the underlying evidence objects instead of
   compounding summaries into new facts.
+- Cost-fidelity metrics: local evals record deterministic prompt-cost evidence
+  while assembling the real governor prompt: estimated prompt tokens,
+  model-call count, stable-prefix hash stability, cache-eligible prefix count,
+  and dynamic-lookback omissions. These metrics do not claim real provider
+  billing discounts; they ratchet the cache preconditions and catch prompt
+  accretion before a paid run. Small live canaries and production token/cache
+  telemetry remain the source of truth for actual OpenAI/Anthropic cache
+  discounts.
+- Per-role model bakeoffs: `aphelion eval model-bakeoff` wraps the runnable
+  governor suites and reports route frontiers for quality, context fidelity,
+  deterministic cost shape, provider-reported usage, provider failures, and
+  elapsed time. This is evidence for model selection, not a config mutator.
+  Non-governor roles remain scaffolded until their quality oracles are
+  calibrated.
 
 Secondary prompts follow the same split. Prompt surfaces that affect
 user-visible behavior, memory, authority, proactivity, or durable children need
@@ -170,6 +184,35 @@ then gate the paired reports:
 ```sh
 aphelion eval gate --before baseline.json --after branch.json --format markdown --out gate.md
 ```
+
+When the question is "which model should this role use?", run a bakeoff instead
+of hand-editing the model map:
+
+```sh
+aphelion eval model-bakeoff --role governor --mode live \
+  --routes openai:gpt-5.5,openai:gpt-5.4,anthropic:claude-sonnet-4-6 \
+  --suites canonical,trajectory,boundary_attack --rollouts 3 \
+  --confirm-live-cost --out governor-bakeoff.json
+```
+
+Treat the result as a frontier: cheapest acceptable route, not globally best
+model. Large live bakeoffs estimate provider-call volume before execution and
+require `--confirm-live-cost`; a route-local winner still needs a full-system
+validation pass before it becomes a live default.
+
+Model defaults are therefore release artifacts backed by reports. Fresh installs
+may encode the current frontier, but existing `/model` overrides and runtime
+recipes remain operator-owned state and must not be silently rewritten.
+
+When testing reasoning effort, do not start with the full suite. First run the
+focused `challenge` slice against one model with `--efforts low,medium,high`.
+That slice concentrates authority ambiguity, stale continuation, context
+fidelity, recovery, and boundary-attack cases where extra deliberation can
+plausibly help. Only broaden to Haiku/Sonnet/Opus or full-suite sweeps after the
+challenge report shows effort separation worth paying for.
+Use the current accessible Anthropic tier trio for that broadened challenge
+slice: `anthropic:claude-haiku-4-5-20251001`,
+`anthropic:claude-sonnet-4-6`, and `anthropic:claude-opus-4-8`.
 
 Before a release candidate that materially changes agency, authority,
 continuation, prompt behavior, or operator-facing control surfaces, cite a
@@ -298,7 +341,8 @@ runtime action, memory writes, leases, or consent.
   deterministic hard-failure scanners, judge parsing, score aggregation, and
   human/KV/JSON report rendering.
 - `eval_command.go` and `runtime/eval.go`: canonical local/live scenario runner,
-  report comparison, and baseline-vs-branch stability gate.
+  report comparison, context/cost fidelity summaries, and baseline-vs-branch
+  stability gate.
 - `runtime/eval_boundary_attack.go`: transcript-driven attacker replay and typed
   bounty-condition oracles for authority, completion evidence, capability
   grants, and approval-surface fidelity.

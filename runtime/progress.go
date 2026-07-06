@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/telegram"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
 var turnRunActivityHeartbeatInterval = 30 * time.Second
@@ -44,6 +46,15 @@ type toolObserver interface {
 	ToolFinished(ctx context.Context, name string, input json.RawMessage, output string, err error)
 }
 
+type toolOutputProjectionObserver interface {
+	ProjectToolOutput(ctx context.Context, name string, input json.RawMessage, output string, err error) toolOutputProjection
+	ToolFinishedWithProjection(ctx context.Context, name string, input json.RawMessage, rawOutput string, projectedOutput string, err error, projectionRecorded bool)
+}
+
+type toolInvocationContextBinder interface {
+	ToolInvocationContext(ctx context.Context, name string, input json.RawMessage) context.Context
+}
+
 type observedToolRegistry struct {
 	base     agent.ToolRegistry
 	observer toolObserver
@@ -57,11 +68,38 @@ func (o *observedToolRegistry) Definitions() []agent.ToolDef {
 }
 
 func (o *observedToolRegistry) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {
+	if binder, ok := o.observer.(toolInvocationContextBinder); ok {
+		ctx = binder.ToolInvocationContext(ctx, name, input)
+	}
 	if o.observer != nil {
 		o.observer.ToolStarted(ctx, name, input)
 	}
 	out, err := o.base.Execute(ctx, name, input)
 	if o.observer != nil {
+		if projector, ok := o.observer.(toolOutputProjectionObserver); ok {
+			projection := projector.ProjectToolOutput(ctx, name, input, out, err)
+			if err != nil && projection.Err == nil {
+				signals := classifyProjectedToolFailure(err, out)
+				summary := strings.TrimSpace(signals.SafeSummary)
+				if summary == "" {
+					summary = safeToolFailureSummary(signals.FailureClass, "")
+				}
+				projection.Err = projectedToolFailureError{
+					safe:             summary,
+					failureClass:     signals.FailureClass,
+					retryable:        signals.Retryable,
+					contextCancelled: signals.ContextCancelled,
+					deadlineExceeded: signals.DeadlineExceeded,
+					execRejected:     signals.ExecRejected,
+					policyRef:        session.ExposureProjectionPolicyToolOutputV1,
+				}
+			}
+			projector.ToolFinishedWithProjection(ctx, name, input, out, projection.Output, projection.Err, projection.Recorded)
+			if err != nil {
+				return projection.Output, projection.Err
+			}
+			return projection.Output, nil
+		}
 		o.observer.ToolFinished(ctx, name, input, out, err)
 	}
 	return out, err
@@ -84,11 +122,33 @@ type turnMonitor struct {
 	startedAt                time.Time
 	toolStartsMu             sync.Mutex
 	toolStarts               map[string][]time.Time
+	toolInvocationSeq        int64
 	ctx                      context.Context
 	cancelTurn               context.CancelFunc
 	stopRunActivityHeartbeat context.CancelFunc
+	finishProgress           bool
 	ingressSurface           string
 	ingressUpdateID          int64
+}
+
+func (m *turnMonitor) ToolInvocationContext(ctx context.Context, _ string, _ json.RawMessage) context.Context {
+	if m == nil || m.runID <= 0 {
+		if ctx == nil {
+			return context.Background()
+		}
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.toolStartsMu.Lock()
+	m.toolInvocationSeq++
+	ordinal := m.toolInvocationSeq
+	m.toolStartsMu.Unlock()
+	return toolpkg.WithToolInvocationRef(ctx, toolpkg.ToolInvocationRef{
+		TurnRunID:    m.runID,
+		InvocationID: fmt.Sprintf("turn:%d:tool:%d", m.runID, ordinal),
+	})
 }
 
 func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, kind session.TurnRunKind, requestText string, progress *toolProgressReporter, audit *turnAuditRecorder, msg core.InboundMessage) (*turnMonitor, error) {
@@ -111,6 +171,7 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 		toolStarts:      make(map[string][]time.Time),
 		ctx:             turnCtx,
 		cancelTurn:      cancelTurn,
+		finishProgress:  true,
 		ingressSurface:  ingressSurface,
 		ingressUpdateID: ingressUpdateID,
 	}
@@ -129,6 +190,15 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 		return nil, fmt.Errorf("begin turn run kind=%s chat_id=%d user_id=%d: %w", kind, key.ChatID, key.UserID, err)
 	}
 	monitor.runID = run.ID
+	turnCtx, err = r.bindExecutionRunAuthority(turnCtx, key, run)
+	if err != nil {
+		if completeErr := r.store.CompleteTurnRun(run.ID, session.TurnRunStatusFailed, err.Error()); completeErr != nil {
+			err = fmt.Errorf("%w; complete failed turn run: %v", err, completeErr)
+		}
+		cancelTurn()
+		return nil, err
+	}
+	monitor.ctx = turnCtx
 	r.registerActiveTurn(run.ID, cancelTurn)
 	payload := map[string]any{
 		"run_id":       run.ID,
@@ -141,15 +211,175 @@ func (r *Runtime) startTurnMonitor(ctx context.Context, key session.SessionKey, 
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventTurnStarted, "turn", string(session.TurnRunStatusRunning), payload, time.Now().UTC())
 	if progress != nil {
-		progress.BindTurnRun(run.ID)
 		progress.recordMessageID = func(messageID int64) {
 			if err := r.store.UpdateTurnRunProgressMessage(run.ID, messageID); err != nil {
 				log.Printf("WARN update turn run progress id=%d msg_id=%d err=%v", run.ID, messageID, err)
 			}
 		}
+		progress.BindTurnRun(run.ID)
 	}
 	monitor.startRunActivityHeartbeat()
 	return monitor, nil
+}
+
+func (r *Runtime) bindExecutionRunAuthority(ctx context.Context, key session.SessionKey, run *session.TurnRun) (context.Context, error) {
+	if r == nil || r.store == nil || run == nil {
+		return ctx, nil
+	}
+	admission, ok := toolpkg.ExecutionAuthorityAdmissionFromContext(ctx)
+	if !ok {
+		return ctx, nil
+	}
+	admission.TurnRunID = run.ID
+	admission.SessionID = run.SessionID
+	admission.ChatID = run.ChatID
+	admission.UserID = run.UserID
+	admission.Scope = run.Scope
+	now := time.Now().UTC()
+	switch admission.LeaseKind {
+	case session.ExecutionAuthorityLeaseKindContinuation:
+		if err := r.validateExecutionRunContinuationAuthority(key, admission, now); err != nil {
+			return ctx, err
+		}
+	case session.ExecutionAuthorityLeaseKindOperationPlan:
+		if err := r.validateExecutionRunOperationPlanAuthority(key, admission.OperationPlanLeaseID, now); err != nil {
+			return ctx, err
+		}
+	case session.ExecutionAuthorityLeaseKindChildTask:
+		if err := r.validateExecutionRunChildTaskAuthority(key, admission, now); err != nil {
+			return ctx, err
+		}
+	default:
+		return ctx, fmt.Errorf("execution run authority admission has unsupported lease kind %q", admission.LeaseKind)
+	}
+	stored, err := r.store.UpsertExecutionRunAuthority(admission)
+	if err != nil {
+		return ctx, err
+	}
+	ref := session.AuthorityUseRef{
+		SessionID: stored.SessionID,
+		TurnRunID: stored.TurnRunID,
+	}
+	ctx = toolpkg.WithoutExecutionAuthorityAdmission(ctx)
+	return toolpkg.WithAuthorityUseRef(ctx, ref), nil
+}
+
+func (r *Runtime) validateExecutionRunContinuationAuthority(key session.SessionKey, admission session.ExecutionRunAuthority, now time.Time) error {
+	leaseID := strings.TrimSpace(admission.ContinuationLeaseID)
+	state, exists, err := r.store.ContinuationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("load continuation lease for run authority: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("continuation lease %q is not durable for run authority", strings.TrimSpace(leaseID))
+	}
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	if strings.TrimSpace(lease.ID) != strings.TrimSpace(leaseID) {
+		return fmt.Errorf("continuation lease %q does not match current session lease", strings.TrimSpace(leaseID))
+	}
+	if executionRunContinuationLeaseValid(lease, admission, now) {
+		return nil
+	}
+	return fmt.Errorf("continuation lease %q is not active for run authority", strings.TrimSpace(leaseID))
+}
+
+func executionRunContinuationLeaseValid(lease session.ContinuationLease, admission session.ExecutionRunAuthority, now time.Time) bool {
+	lease = session.NormalizeContinuationLease(lease)
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if !lease.ExpiresAt.IsZero() && !lease.ExpiresAt.After(now.UTC()) {
+		return false
+	}
+	if lease.ActiveAt(now) {
+		return true
+	}
+	if lease.Status != session.ContinuationLeaseStatusConsumed {
+		return false
+	}
+	if session.ContinuationLeaseStatus(admission.LeaseStatus) != session.ContinuationLeaseStatusActive || admission.LeaseRemainingTurns <= 0 {
+		return false
+	}
+	if strings.TrimSpace(admission.ContinuationLeaseID) == "" || strings.TrimSpace(admission.ContinuationLeaseID) != strings.TrimSpace(lease.ID) {
+		return false
+	}
+	return true
+}
+
+func (r *Runtime) validateExecutionRunOperationPlanAuthority(key session.SessionKey, leaseID string, now time.Time) error {
+	_, operation, exists, err := r.store.PlanAndOperationStateIfExists(key)
+	if err != nil {
+		return fmt.Errorf("load operation plan lease for run authority: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("operation plan lease %q is not durable for run authority", strings.TrimSpace(leaseID))
+	}
+	lease := session.NormalizeOperationPlanLease(operation.PlanLease)
+	if strings.TrimSpace(lease.ID) != strings.TrimSpace(leaseID) {
+		return fmt.Errorf("operation plan lease %q does not match current session lease", strings.TrimSpace(leaseID))
+	}
+	if !workRequestOperationPlanLeaseUsable(lease, now) {
+		return fmt.Errorf("operation plan lease %q is not active for run authority", strings.TrimSpace(leaseID))
+	}
+	return nil
+}
+
+func (r *Runtime) validateExecutionRunChildTaskAuthority(key session.SessionKey, admission session.ExecutionRunAuthority, now time.Time) error {
+	constraints := admission.LeaseConstraints
+	packetID := strings.TrimSpace(constraints["packet_id"])
+	attemptID := strings.TrimSpace(constraints["attempt_id"])
+	leaseOwner := strings.TrimSpace(constraints["lease_owner"])
+	fencingToken := strings.TrimSpace(constraints["fencing_token"])
+	agentID := strings.TrimSpace(constraints["agent_id"])
+	leaseGeneration, err := parsePositiveInt64Constraint(constraints["lease_generation"])
+	if err != nil {
+		return fmt.Errorf("child task authority generation: %w", err)
+	}
+	packet, ok, err := r.store.ChildTaskPacket(packetID)
+	if err != nil {
+		return fmt.Errorf("load child task authority packet: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("child task authority packet %q is not durable", packetID)
+	}
+	if packet.SessionID != session.SessionIDForKey(key) {
+		return fmt.Errorf("child task authority packet %q belongs to session %q, not %q", packetID, packet.SessionID, session.SessionIDForKey(key))
+	}
+	if packet.AgentID != agentID {
+		return fmt.Errorf("child task authority packet %q belongs to agent %q, not %q", packetID, packet.AgentID, agentID)
+	}
+	if !childTaskAuthorityPacketLive(packet, attemptID, leaseOwner, leaseGeneration, fencingToken, now) {
+		return fmt.Errorf("child task authority packet %q attempt %q does not own a live task lease", packetID, attemptID)
+	}
+	return nil
+}
+
+func parsePositiveInt64Constraint(raw string) (int64, error) {
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("expected positive integer, got %q", strings.TrimSpace(raw))
+	}
+	return value, nil
+}
+
+func childTaskAuthorityPacketLive(packet session.ChildTaskPacket, attemptID string, leaseOwner string, leaseGeneration int64, fencingToken string, now time.Time) bool {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	if packet.Status != session.ChildTaskPacketInProgress {
+		return false
+	}
+	if packet.ActiveAttemptID != strings.TrimSpace(attemptID) ||
+		packet.LeaseOwner != strings.TrimSpace(leaseOwner) ||
+		packet.LeaseGeneration != leaseGeneration ||
+		packet.FencingToken != strings.TrimSpace(fencingToken) {
+		return false
+	}
+	return packet.LeaseReleasedAt.IsZero() &&
+		!packet.LeaseExpiresAt.IsZero() &&
+		packet.LeaseExpiresAt.After(now)
 }
 
 func (m *turnMonitor) Context() context.Context {

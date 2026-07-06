@@ -226,6 +226,9 @@ func ReviewEventInlineRowsExpanded(event session.ReviewEvent, expanded bool) [][
 		}
 		rows = append(rows, []telegram.InlineButton{{Text: label, CallbackData: core.EncodeReviewEventCallbackData(event.ID, action)}})
 	}
+	if ReviewEventChildWakeRetryActionable(event) {
+		rows = append(rows, []telegram.InlineButton{{Text: "Retry once", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionChildWakeRetry)}})
+	}
 	requestID := reviewEventCapabilityRequestID(event)
 	if requestID == "" {
 		return rows
@@ -238,6 +241,33 @@ func ReviewEventInlineRowsExpanded(event session.ReviewEvent, expanded bool) [][
 		{Text: "Approve", CallbackData: core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionApprove)},
 	})
 	return rows
+}
+
+func ReviewEventChildWakeRetryActionable(event session.ReviewEvent) bool {
+	meta, ok := parseReviewEventArtifactMetadata(event)
+	if !ok {
+		return false
+	}
+	agentID := strings.TrimSpace(meta.AgentID)
+	if agentID == "" {
+		agentID = strings.TrimSpace(meta.Metadata["durable_agent_id"])
+	}
+	if agentID == "" {
+		return false
+	}
+	if strings.TrimSpace(meta.Metadata["child_task_packet_id"]) == "" {
+		return false
+	}
+	if strings.TrimSpace(meta.Metadata["child_blocker_kind"]) != "external_transient" {
+		return false
+	}
+	if strings.TrimSpace(meta.Metadata["child_next_state"]) != string(session.NextActionScheduledRetry) {
+		return false
+	}
+	if strings.TrimSpace(meta.Metadata["retry_policy"]) != "bounded_backoff" {
+		return false
+	}
+	return true
 }
 
 func ReviewEventDetailsButtonOnly(event session.ReviewEvent) bool {

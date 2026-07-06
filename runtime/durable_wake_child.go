@@ -65,10 +65,19 @@ func (r *Runtime) pollDurableAgentWakeViaChild(ctx context.Context, agent core.D
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
-	if suppressed, err := r.shouldSuppressDurableWakeChildPoll(agent, now); err != nil {
+	recovered, handled, err := r.recoverScheduledExternalChannelReadiness(ctx, agent, now)
+	if err != nil {
 		return err
-	} else if suppressed {
+	}
+	if handled {
 		return nil
+	}
+	if !recovered {
+		if suppressed, err := r.shouldSuppressDurableWakeChildPoll(agent, now); err != nil {
+			return err
+		} else if suppressed {
+			return nil
+		}
 	}
 	if err := r.preflightDurableWakeAgent(agent, now); err != nil {
 		if handled, handleErr := r.recordDurableWakeChildRuntimeBlock(agent, err, now); handled {
@@ -128,8 +137,11 @@ func (e *sandboxDurableWakeChildExecutor) Run(ctx context.Context, scope sandbox
 	}
 	defer os.Remove(bootstrapPath)
 
-	stateRoot := filepath.Dir(strings.TrimSpace(e.cfg.Sessions.DBPath))
-	childAccess, err := durableChildSandboxAccessFor(e.binaryPath, agent, e.store)
+	stateRoot, err := durableChildSandboxStateRoot(e.cfg)
+	if err != nil {
+		return err
+	}
+	childAccess, err := durableChildSandboxAccessForScope(e.binaryPath, agent, e.store, scope)
 	if err != nil {
 		return err
 	}
@@ -145,12 +157,21 @@ func (e *sandboxDurableWakeChildExecutor) Run(ctx context.Context, scope sandbox
 		ExtraEnv:           childAccess.env,
 	})
 	if err != nil {
-		if strings.TrimSpace(res.Stderr) != "" {
-			return fmt.Errorf("durable child wake runner failed: %w: %s", err, strings.TrimSpace(res.Stderr))
-		}
-		return fmt.Errorf("durable child wake runner failed: %w", err)
+		return durableWakeChildRunnerError(err, res.Stderr)
 	}
 	return nil
+}
+
+func durableWakeChildRunnerError(err error, stderr string) error {
+	if strings.TrimSpace(stderr) == "" {
+		return fmt.Errorf("durable child wake runner failed: %w", err)
+	}
+	projection := session.ProjectToolResultForPurpose(stderr, session.ExposureAudienceOperator, session.ExposurePurposeToolFailurePreview)
+	preview := truncatePreview(strings.TrimSpace(projection.Text), 220)
+	if preview == "" {
+		preview = "<withheld>"
+	}
+	return fmt.Errorf("durable child wake runner failed: %w; stderr_projection=%s; stderr_policy=%s", err, preview, projection.PolicyRef)
 }
 
 func durableAgentWakeChildCommand(binaryPath string, bootstrapPath string, agentID string, now time.Time) string {

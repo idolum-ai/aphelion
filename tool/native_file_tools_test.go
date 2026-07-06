@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
+	"golang.org/x/sys/unix"
 )
 
 func TestNativeFileToolsStayInsideScopedRoots(t *testing.T) {
@@ -209,6 +212,1010 @@ func TestNativeFileToolsHonorAdminReadonlyPathsForSourceCheckout(t *testing.T) {
 	}
 }
 
+func TestNativeFileToolsUseActiveFileAccessGrantAsReadRoot(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	childRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(childRoot, "runtime-bin"), 0o755); err != nil {
+		t.Fatalf("mkdir child runtime fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(childRoot, "runtime-bin", "gogcli"), []byte("needle child runtime\n"), 0o600); err != nil {
+		t.Fatalf("write child runtime fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("workspace read remains local\n"), 0o600); err != nil {
+		t.Fatalf("write workspace read fixture: %v", err)
+	}
+	outsideRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outsideRoot, "elsewhere.txt"), []byte("not granted\n"), 0o600); err != nil {
+		t.Fatalf("write outside fixture: %v", err)
+	}
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	target := filepath.Join(childRoot, "runtime-bin")
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-child-runtime-read",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: target,
+		AllowedActions: []string{"read"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(file_access) err = %v", err)
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"README.md","full":true}`), scope, p, key)
+	if err != nil {
+		t.Fatalf("read_file workspace path with unrelated external grant err = %v", err)
+	}
+	if !strings.Contains(out, "workspace read remains local") {
+		t.Fatalf("read_file workspace output = %q, want workspace content", out)
+	}
+	if open, err := store.OpenNextActionsBySession(key, 10); err != nil {
+		t.Fatalf("OpenNextActionsBySession(after workspace read) err = %v", err)
+	} else if len(open) != 0 {
+		t.Fatalf("open next actions after workspace read = %#v, want none from unrelated grant", open)
+	}
+
+	outsideKey := session.SessionKey{ChatID: 1902, UserID: 0, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1902"}}
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(outsideRoot, "elsewhere.txt"))+`","full":true}`), scope, p, outsideKey)
+	if err == nil || !strings.Contains(err.Error(), "outside the read roots") {
+		t.Fatalf("read_file outside workspace and grant err = %v, want normal read-root rejection", err)
+	}
+	if open, err := store.OpenNextActionsBySession(outsideKey, 10); err != nil {
+		t.Fatalf("OpenNextActionsBySession(after outside read) err = %v", err)
+	} else {
+		for _, action := range open {
+			if action.ResourceBlocker == "missing_continuation_lease" || action.RequiredAuthority == string(session.ContinuationLeaseClassDataAccess) {
+				t.Fatalf("open next actions after outside read = %#v, want no lease blocker for unrelated grant", open)
+			}
+		}
+	}
+
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "list_dir", json.RawMessage(`{"path":"`+filepath.ToSlash(target)+`"}`), scope, p, key)
+	if err == nil || !strings.Contains(err.Error(), "missing data_access continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
+		t.Fatalf("list_dir without lease err = %v, want materialized data_access lease request", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(read lease blocker) err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority || open[0].RequiredAuthority != string(session.ContinuationLeaseClassDataAccess) || open[0].ResourceBlocker != "missing_continuation_lease" {
+		t.Fatalf("open next actions = %#v, want data_access continuation lease blocker", open)
+	}
+	contract := recoveryContractForWakeTest(t, store, open[0].OperationInputJSON)
+	if contract.LeaseClass != session.ContinuationLeaseClassDataAccess || contract.Tool != "list_dir" || contract.ToolAction != "list_dir" || contract.GrantID != "capg-child-runtime-read" {
+		t.Fatalf("read lease contract = %#v, want data_access list_dir bound to grant", contract)
+	}
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "gogcli"))+`","full":true}`), scope, p, key)
+	if err == nil || !strings.Contains(err.Error(), "missing data_access continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
+		t.Fatalf("read_file without lease err = %v, want materialized data_access lease request", err)
+	}
+	open, err = store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(read-file lease blocker) err = %v", err)
+	}
+	if len(open) != 2 {
+		t.Fatalf("open next actions after list_dir/read_file blockers = %#v, want two operation-specific blockers", open)
+	}
+	seenActions := map[string]bool{}
+	for _, action := range open {
+		contract := recoveryContractForWakeTest(t, store, action.OperationInputJSON)
+		if contract.ToolAction == "list_dir" {
+			seenActions["list_dir"] = true
+		}
+		if contract.ToolAction == "read_file" {
+			seenActions["read_file"] = true
+		}
+	}
+	if !seenActions["list_dir"] || !seenActions["read_file"] {
+		t.Fatalf("open next actions = %#v, want distinct list_dir and read_file lease blockers", open)
+	}
+
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-child-runtime-read")
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-child-runtime-read", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
+	out, err = registry.executeWithScopeAndPrincipal(ctx, "list_dir", json.RawMessage(`{"path":"`+filepath.ToSlash(target)+`"}`), scope, p, key)
+	if err != nil {
+		t.Fatalf("list_dir with file_access grant err = %v", err)
+	}
+	if !strings.Contains(out, "gogcli file") {
+		t.Fatalf("list_dir out = %q, want granted child runtime entry", out)
+	}
+
+	out, err = registry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "gogcli"))+`","full":true}`), scope, p, key)
+	if err != nil {
+		t.Fatalf("read_file with file_access grant err = %v", err)
+	}
+	if !strings.Contains(out, "needle child runtime") {
+		t.Fatalf("read_file out = %q, want granted child runtime content", out)
+	}
+
+	out, err = registry.executeWithScopeAndPrincipal(ctx, "search", json.RawMessage(`{"query":"needle","path":"`+filepath.ToSlash(target)+`"}`), scope, p, key)
+	if err != nil {
+		t.Fatalf("search with file_access grant err = %v", err)
+	}
+	if !strings.Contains(out, "gogcli:1: needle child runtime") {
+		t.Fatalf("search out = %q, want granted child runtime match", out)
+	}
+
+	_, err = registry.executeWithScopeAndPrincipal(ctx, "write_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "created.txt"))+`","content":"no"}`), scope, p, key)
+	if err == nil || !strings.Contains(err.Error(), "outside the write roots") {
+		t.Fatalf("write_file with file_access grant err = %v, want write-root rejection", err)
+	}
+
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-child-runtime-write",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: target,
+		AllowedActions: []string{"write"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(write file_access) err = %v", err)
+	}
+	noLeaseKey := session.SessionKey{ChatID: 1002, UserID: 0, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1002"}}
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "write_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "created-without-lease.txt"))+`","content":"no"}`), scope, p, noLeaseKey)
+	if err == nil || !strings.Contains(err.Error(), "missing local_workspace continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
+		t.Fatalf("write_file write grant without lease err = %v, want materialized local_workspace lease request", err)
+	}
+	open, err = store.OpenNextActionsBySession(noLeaseKey, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(write lease blocker) err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority || open[0].RequiredAuthority != string(session.ContinuationLeaseClassLocalWorkspace) || open[0].ResourceBlocker != "missing_continuation_lease" {
+		t.Fatalf("open next actions = %#v, want local_workspace continuation lease blocker", open)
+	}
+	contract = recoveryContractForWakeTest(t, store, open[0].OperationInputJSON)
+	if contract.LeaseClass != session.ContinuationLeaseClassLocalWorkspace || contract.Tool != "write_file" || contract.ToolAction != "write_file" || contract.GrantID != "capg-child-runtime-write" {
+		t.Fatalf("write lease contract = %#v, want local_workspace write_file bound to grant", contract)
+	}
+	out, err = registry.executeWithScopeAndPrincipal(ctx, "write_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "config", "created.txt"))+`","content":"created under approved child slot","create_dirs":true}`), scope, p, key)
+	if err != nil {
+		t.Fatalf("write_file with write file_access grant err = %v", err)
+	}
+	if !strings.Contains(out, "write_file_ok") {
+		t.Fatalf("write_file out = %q, want success marker", out)
+	}
+	if data, err := os.ReadFile(filepath.Join(target, "config", "created.txt")); err != nil || string(data) != "created under approved child slot" {
+		t.Fatalf("created file data = %q err=%v, want approved child slot write", string(data), err)
+	}
+
+	assertNativeFileAccessInvocations(t, store, "capg-child-runtime-read", map[string]string{
+		"list_dir":  "lease-child-runtime-read",
+		"read_file": "lease-child-runtime-read",
+		"search":    "lease-child-runtime-read",
+	})
+	assertNativeFileAccessInvocations(t, store, "capg-child-runtime-write", map[string]string{
+		"write_file": "lease-child-runtime-read",
+	})
+}
+
+func TestNativeFileAccessGrantKeepsNarrowActionsNarrow(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	childRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(childRoot, "note.txt"), []byte("needle\n"), 0o600); err != nil {
+		t.Fatalf("write child fixture: %v", err)
+	}
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-narrow-file-access")
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-narrow-file-access", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-child-list-only",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: childRoot,
+		AllowedActions: []string{"list"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(list) err = %v", err)
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(ctx, "list_dir", json.RawMessage(`{"path":"`+filepath.ToSlash(childRoot)+`"}`), scope, p, key)
+	if err != nil {
+		t.Fatalf("list_dir with list grant err = %v", err)
+	}
+	if !strings.Contains(out, "note.txt file") {
+		t.Fatalf("list_dir out = %q, want note entry", out)
+	}
+	_, err = registry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(childRoot, "note.txt"))+`","full":true}`), scope, p, key)
+	if err == nil || !strings.Contains(err.Error(), "outside the read roots") {
+		t.Fatalf("read_file with list-only grant err = %v, want read-root rejection", err)
+	}
+
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-child-search-only",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: childRoot,
+		AllowedActions: []string{"search"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(search) err = %v", err)
+	}
+	out, err = registry.executeWithScopeAndPrincipal(ctx, "search", json.RawMessage(`{"query":"needle","path":"`+filepath.ToSlash(childRoot)+`"}`), scope, p, key)
+	if err != nil {
+		t.Fatalf("search with search grant err = %v", err)
+	}
+	if !strings.Contains(out, "note.txt:1: needle") {
+		t.Fatalf("search out = %q, want note match", out)
+	}
+	_, err = registry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(childRoot, "note.txt"))+`","full":true}`), scope, p, key)
+	if err == nil || !strings.Contains(err.Error(), "outside the read roots") {
+		t.Fatalf("read_file with list/search grants err = %v, want read-root rejection", err)
+	}
+}
+
+func TestNativeFileAccessGrantRejectsSymlinkRootRetarget(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	safeRoot := t.TempDir()
+	otherRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(otherRoot, "secret.txt"), []byte("retargeted\n"), 0o600); err != nil {
+		t.Fatalf("write retarget fixture: %v", err)
+	}
+	linkRoot := filepath.Join(t.TempDir(), "child-slot")
+	if err := os.Symlink(safeRoot, linkRoot); err != nil {
+		t.Fatalf("symlink safe root: %v", err)
+	}
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-symlink-file-access")
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-symlink-file-access", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-symlink-root",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: linkRoot,
+		AllowedActions: []string{"read"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(symlink) err = %v", err)
+	}
+	if err := os.Remove(linkRoot); err != nil {
+		t.Fatalf("remove symlink: %v", err)
+	}
+	if err := os.Symlink(otherRoot, linkRoot); err != nil {
+		t.Fatalf("retarget symlink: %v", err)
+	}
+	_, err := registry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(otherRoot, "secret.txt"))+`","full":true}`), scope, p, key)
+	if err == nil || !strings.Contains(err.Error(), "outside the read roots") {
+		t.Fatalf("read_file retargeted symlink grant err = %v, want read-root rejection", err)
+	}
+}
+
+func TestNativeFileAccessGrantRejectsAncestorSymlinkRetarget(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	linkParent := filepath.Join(workspace, "link-parent")
+	safeParent := t.TempDir()
+	otherParent := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(safeParent, "slot"), 0o755); err != nil {
+		t.Fatalf("mkdir safe slot: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(otherParent, "slot"), 0o755); err != nil {
+		t.Fatalf("mkdir other slot: %v", err)
+	}
+	otherSecret := filepath.Join(otherParent, "slot", "secret.txt")
+	if err := os.WriteFile(otherSecret, []byte("retargeted ancestor\n"), 0o600); err != nil {
+		t.Fatalf("write retarget fixture: %v", err)
+	}
+	if err := os.Symlink(safeParent, linkParent); err != nil {
+		t.Fatalf("symlink safe parent: %v", err)
+	}
+
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-ancestor-symlink-file-access")
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-ancestor-symlink-file-access", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-ancestor-symlink-root",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: filepath.Join(linkParent, "slot"),
+		AllowedActions: []string{"read_file"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(ancestor symlink) err = %v", err)
+	}
+	if err := os.Remove(linkParent); err != nil {
+		t.Fatalf("remove ancestor symlink: %v", err)
+	}
+	if err := os.Symlink(otherParent, linkParent); err != nil {
+		t.Fatalf("retarget ancestor symlink: %v", err)
+	}
+
+	_, err := registry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(otherSecret)+`","full":true}`), scope, p, key)
+	if err == nil || !strings.Contains(err.Error(), "outside the read roots") {
+		t.Fatalf("read_file retargeted ancestor symlink grant err = %v, want read-root rejection", err)
+	}
+	invocations, err := store.CapabilityInvocationsByGrant("capg-ancestor-symlink-root", 10)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant(ancestor symlink) err = %v", err)
+	}
+	if len(invocations) != 0 {
+		t.Fatalf("ancestor symlink invocations = %#v, want none because no grant root was authorized", invocations)
+	}
+}
+
+func TestNativeFileAccessGrantRevalidatesAfterStoreReopen(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	target := t.TempDir()
+	targetFile := filepath.Join(target, "note.txt")
+	if err := os.WriteFile(targetFile, []byte("lease-bound\n"), 0o600); err != nil {
+		t.Fatalf("write target fixture: %v", err)
+	}
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	leaseID := "lease-file-access-reopen"
+	grantAuthorityUseLeaseWithID(t, store, key, leaseID)
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, leaseID, session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-file-access-reopen",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: target,
+		AllowedActions: []string{"read_file"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(reopen) err = %v", err)
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(targetFile)+`","full":true}`), scope, p, key)
+	if err != nil {
+		t.Fatalf("read_file before reopen err = %v", err)
+	}
+	if !strings.Contains(out, "lease-bound") {
+		t.Fatalf("read_file before reopen out = %q, want fixture content", out)
+	}
+	dbPath := store.DBPath()
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store before reopen: %v", err)
+	}
+	reopened, err := session.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(reopen) err = %v", err)
+	}
+	defer reopened.Close()
+	storeContinuationLeaseForMatrix(t, reopened, key, session.ContinuationLease{
+		ID:             leaseID,
+		Status:         session.ContinuationLeaseStatusRevoked,
+		RemainingTurns: 1,
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+	})
+	reopenedRegistry := NewRegistry(registry.workspace, 2*time.Second).WithSessionStore(reopened)
+	_, err = reopenedRegistry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(targetFile)+`","full":true}`), scope, p, key)
+	if err == nil || !strings.Contains(err.Error(), "missing data_access continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
+		t.Fatalf("read_file after reopened revocation err = %v, want materialized data_access lease request", err)
+	}
+	open, err := reopened.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(reopened lease blocker) err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsAuthority || open[0].RequiredAuthority != string(session.ContinuationLeaseClassDataAccess) {
+		t.Fatalf("open next actions after revoked lease = %#v, want data_access authority blocker", open)
+	}
+	assertNativeFileAccessInvocations(t, reopened, "capg-file-access-reopen", map[string]string{
+		"read_file": leaseID,
+	})
+}
+
+func TestNativeFileAccessWriteGrantCanCreateGrantedRoot(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	parent := t.TempDir()
+	target := filepath.Join(parent, "new-child-slot")
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-create-file-access-root")
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-create-file-access-root", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-create-root",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: target,
+		AllowedActions: []string{"write"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(create root) err = %v", err)
+	}
+	out, err := registry.executeWithScopeAndPrincipal(ctx, "write_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "config.json"))+`","content":"{}","create_dirs":true}`), scope, p, key)
+	if err != nil {
+		t.Fatalf("write_file create granted root err = %v", err)
+	}
+	if !strings.Contains(out, "write_file_ok") {
+		t.Fatalf("write_file out = %q, want success marker", out)
+	}
+	if _, err := os.Stat(filepath.Join(target, "config.json")); err != nil {
+		t.Fatalf("created granted root file stat err = %v", err)
+	}
+}
+
+func TestNativeWriteFileHostPermissionFailureCreatesRepairNextAction(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("permission-denied fixture is not meaningful as root")
+	}
+
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	target := t.TempDir()
+	if err := os.Chmod(target, 0o500); err != nil {
+		t.Fatalf("chmod target readonly: %v", err)
+	}
+	defer func() { _ = os.Chmod(target, 0o700) }()
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-host-permission-write")
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-host-permission-write", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-host-permission-write",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: target,
+		AllowedActions: []string{"write"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(host permission) err = %v", err)
+	}
+	_, err := registry.executeWithScopeAndPrincipal(ctx, "write_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(target, "blocked.txt"))+`","content":"no"}`), scope, p, key)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "permission") {
+		t.Fatalf("write_file host permission err = %v, want permission denial", err)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].State != session.NextActionBlockedNeedsResourceRepair || open[0].ResourceBlocker != "host_permission_denied" {
+		t.Fatalf("open next actions = %#v, want host_permission_denied repair", open)
+	}
+}
+
+func TestNativeFileAccessGrantDoesNotBypassHiddenPaths(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	secretRoot := t.TempDir()
+	secretPath := filepath.Join(secretRoot, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("hidden secret\n"), 0o600); err != nil {
+		t.Fatalf("write hidden fixture: %v", err)
+	}
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	profile := sandbox.DefaultProfiles().Admin
+	profile.HiddenPaths = append(profile.HiddenPaths, secretRoot)
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          profile,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-hidden-read",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: secretRoot,
+		AllowedActions: []string{"read"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(hidden file_access) err = %v", err)
+	}
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-hidden-read")
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-hidden-read", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
+	_, err := registry.executeWithScopeAndPrincipal(ctx, "read_file", json.RawMessage(`{"path":"`+filepath.ToSlash(secretPath)+`","full":true}`), scope, p, key)
+	if err == nil || !strings.Contains(err.Error(), "hidden by the sandbox profile") {
+		t.Fatalf("read_file hidden grant err = %v, want hidden-path rejection", err)
+	}
+
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-hidden-write",
+		GrantedBy:      "telegram:1001",
+		GrantedTo:      "telegram:1001",
+		Kind:           session.CapabilityKindFileAccess,
+		TargetResource: secretRoot,
+		AllowedActions: []string{"write"},
+		Status:         session.CapabilityGrantStatusActive,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant(hidden write file_access) err = %v", err)
+	}
+	_, err = registry.executeWithScopeAndPrincipal(ctx, "write_file", json.RawMessage(`{"path":"`+filepath.ToSlash(filepath.Join(secretRoot, "created.txt"))+`","content":"hidden","create_dirs":true}`), scope, p, key)
+	if err == nil || !strings.Contains(err.Error(), "hidden by the sandbox profile") {
+		t.Fatalf("write_file hidden grant err = %v, want hidden-path rejection", err)
+	}
+}
+
+func TestNativeSearchSkipsHiddenDescendantsAndReportsPartial(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	hiddenDir := filepath.Join(workspace, ".secrets")
+	publicDir := filepath.Join(workspace, "public")
+	hiddenFile := filepath.Join(publicDir, "hidden.txt")
+	if err := os.MkdirAll(hiddenDir, 0o755); err != nil {
+		t.Fatalf("mkdir hidden dir: %v", err)
+	}
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("mkdir public dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "secret.txt"), []byte("needle hidden secret\n"), 0o600); err != nil {
+		t.Fatalf("write hidden secret: %v", err)
+	}
+	if err := os.WriteFile(hiddenFile, []byte("needle hidden file\n"), 0o600); err != nil {
+		t.Fatalf("write hidden file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicDir, "visible.txt"), []byte("needle visible\n"), 0o600); err != nil {
+		t.Fatalf("write visible file: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	profile := sandbox.DefaultProfiles().Admin
+	profile.HiddenPaths = append(profile.HiddenPaths, hiddenDir, hiddenFile)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          profile,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":".","query":"needle","limit":10}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if !strings.Contains(out, "visible.txt") || !strings.Contains(out, "needle visible") {
+		t.Fatalf("search out = %q, want visible public match", out)
+	}
+	for _, forbidden := range []string{".secrets", "secret.txt", "hidden.txt", "needle hidden"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("search out = %q, exposed hidden marker %q", out, forbidden)
+		}
+	}
+	if !strings.Contains(out, "partial: true") || !strings.Contains(out, "skipped_count: 2") || !strings.Contains(out, "skipped_reasons: hidden_policy=2") {
+		t.Fatalf("search out = %q, want hidden skips reported as partial", out)
+	}
+
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "read_file", json.RawMessage(`{"path":"public/hidden.txt","full":true}`), scope, scope.Principal, session.SessionKey{})
+	if err == nil || !strings.Contains(err.Error(), "hidden by the sandbox profile") {
+		t.Fatalf("read_file hidden descendant err = %v, want hidden-path rejection", err)
+	}
+}
+
+func TestNativeListDirSkipsHiddenChildrenAndReportsPartial(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	hiddenDir := filepath.Join(workspace, ".secrets")
+	publicDir := filepath.Join(workspace, "public")
+	hiddenFile := filepath.Join(publicDir, "hidden.txt")
+	if err := os.MkdirAll(hiddenDir, 0o755); err != nil {
+		t.Fatalf("mkdir hidden dir: %v", err)
+	}
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("mkdir public dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "secret.txt"), []byte("secret\n"), 0o600); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	if err := os.WriteFile(hiddenFile, []byte("hidden\n"), 0o600); err != nil {
+		t.Fatalf("write hidden file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicDir, "visible.txt"), []byte("visible\n"), 0o600); err != nil {
+		t.Fatalf("write visible file: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	profile := sandbox.DefaultProfiles().Admin
+	profile.HiddenPaths = append(profile.HiddenPaths, hiddenDir, hiddenFile)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          profile,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	rootOut, err := registry.executeWithScopeAndPrincipal(context.Background(), "list_dir", json.RawMessage(`{"path":"."}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("list_dir root err = %v", err)
+	}
+	if !strings.Contains(rootOut, "- public dir") {
+		t.Fatalf("list_dir root out = %q, want public entry", rootOut)
+	}
+	if strings.Contains(rootOut, ".secrets") || strings.Contains(rootOut, "secret.txt") {
+		t.Fatalf("list_dir root out = %q, exposed hidden child", rootOut)
+	}
+	if !strings.Contains(rootOut, "partial: true") || !strings.Contains(rootOut, "skipped_count: 1") || !strings.Contains(rootOut, "skipped_reasons: hidden_policy=1") {
+		t.Fatalf("list_dir root out = %q, want hidden child skip evidence", rootOut)
+	}
+
+	publicOut, err := registry.executeWithScopeAndPrincipal(context.Background(), "list_dir", json.RawMessage(`{"path":"public"}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("list_dir public err = %v", err)
+	}
+	if !strings.Contains(publicOut, "- visible.txt file") {
+		t.Fatalf("list_dir public out = %q, want visible file", publicOut)
+	}
+	if strings.Contains(publicOut, "hidden.txt") {
+		t.Fatalf("list_dir public out = %q, exposed hidden file", publicOut)
+	}
+	if !strings.Contains(publicOut, "partial: true") || !strings.Contains(publicOut, "skipped_count: 1") || !strings.Contains(publicOut, "skipped_reasons: hidden_policy=1") {
+		t.Fatalf("list_dir public out = %q, want hidden file skip evidence", publicOut)
+	}
+}
+
+func TestNativeSearchReportsPartialForDescriptorOpenFailure(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "visible.txt"), []byte("ordinary text\n"), 0o600); err != nil {
+		t.Fatalf("write visible file: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(workspace, "missing-target"), filepath.Join(workspace, "race-link")); err != nil {
+		t.Fatalf("create race symlink: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":".","query":"needle","limit":10}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if strings.Contains(out, "race-link") {
+		t.Fatalf("search out = %q, exposed skipped descriptor-open failure path", out)
+	}
+	if !strings.Contains(out, "matches: 0") || !strings.Contains(out, "partial: true") || !strings.Contains(out, "skipped_count: 1") || !strings.Contains(out, "skipped_reasons: open_failed=1") {
+		t.Fatalf("search out = %q, want partial descriptor-open failure evidence", out)
+	}
+}
+
+func TestNativeSearchReportsPartialWhenResultLimitReached(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "many.txt"), []byte("needle one\nneedle two\nneedle three\n"), 0o600); err != nil {
+		t.Fatalf("write many matches: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":"many.txt","query":"needle","limit":2}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if !strings.Contains(out, "matches: 2") || !strings.Contains(out, "partial: true") || !strings.Contains(out, "result_limit=1") {
+		t.Fatalf("search out = %q, want result_limit partial evidence", out)
+	}
+	if strings.Contains(out, "needle three") {
+		t.Fatalf("search out = %q, returned match beyond limit", out)
+	}
+}
+
+func TestNativeSearchReportsPartialWhenContentByteLimitCutsOffMatch(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	content := strings.Repeat("a", 80) + "\nneedle beyond cutoff\n"
+	if err := os.WriteFile(filepath.Join(workspace, "bounded.txt"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write bounded file: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":"bounded.txt","query":"needle","max_bytes":32}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if !strings.Contains(out, "matches: 0") || !strings.Contains(out, "partial: true") || !strings.Contains(out, "content_byte_limit=1") {
+		t.Fatalf("search out = %q, want content_byte_limit partial evidence", out)
+	}
+	if strings.Contains(out, "needle beyond cutoff") {
+		t.Fatalf("search out = %q, returned cutoff match", out)
+	}
+}
+
+func TestNativeSearchReportsPartialOnScannerError(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	oversizedLine := "needle " + strings.Repeat("x", nativeSearchScannerMaxTokenBytes+1024)
+	if err := os.WriteFile(filepath.Join(workspace, "oversized.txt"), []byte(oversizedLine), 0o600); err != nil {
+		t.Fatalf("write oversized file: %v", err)
+	}
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	out, err := registry.executeWithScopeAndPrincipal(context.Background(), "search", json.RawMessage(`{"path":"oversized.txt","query":"needle","max_bytes":200000}`), scope, scope.Principal, session.SessionKey{})
+	if err != nil {
+		t.Fatalf("search err = %v", err)
+	}
+	if !strings.Contains(out, "matches: 0") || !strings.Contains(out, "partial: true") || !strings.Contains(out, "scanner_error=1") {
+		t.Fatalf("search out = %q, want scanner_error partial evidence", out)
+	}
+	if strings.Contains(out, "needle ") {
+		t.Fatalf("search out = %q, returned oversized token content", out)
+	}
+}
+
+func TestNativeFileAccessToolsRejectComponentSwapEscapes(t *testing.T) {
+	registry, store := newDurableAgentToolRegistry(t)
+	workspace := t.TempDir()
+	approvedRoot := filepath.Join(t.TempDir(), "approved")
+	if err := os.MkdirAll(approvedRoot, 0o755); err != nil {
+		t.Fatalf("mkdir approved root: %v", err)
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "leaf.txt"), []byte("outside-marker read\n"), 0o600); err != nil {
+		t.Fatalf("write outside leaf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "outside-marker.txt"), []byte("outside-marker list\n"), 0o600); err != nil {
+		t.Fatalf("write outside marker: %v", err)
+	}
+
+	p := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	grantAuthorityUseLeaseWithID(t, store, key, "lease-component-swap-file-access")
+	ctx, _ := contextWithContinuationRunAuthority(t, store, key, p, "lease-component-swap-file-access", session.ContinuationLeaseStatusActive, 1, time.Now().UTC().Add(time.Hour), "native_file_access")
+	scope := sandbox.Scope{
+		Principal:        p,
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       filepath.Join(workspace, "global"),
+		SharedMemoryRoot: filepath.Join(workspace, "shared"),
+		WorkingRoot:      workspace,
+	}
+	for _, grant := range []session.CapabilityGrant{
+		{
+			GrantID:        "capg-component-swap-read",
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "telegram:1001",
+			Kind:           session.CapabilityKindFileAccess,
+			TargetResource: approvedRoot,
+			AllowedActions: []string{"read"},
+			Status:         session.CapabilityGrantStatusActive,
+		},
+		{
+			GrantID:        "capg-component-swap-write",
+			GrantedBy:      "telegram:1001",
+			GrantedTo:      "telegram:1001",
+			Kind:           session.CapabilityKindFileAccess,
+			TargetResource: approvedRoot,
+			AllowedActions: []string{"write"},
+			Status:         session.CapabilityGrantStatusActive,
+		},
+	} {
+		if _, err := store.UpsertCapabilityGrant(grant); err != nil {
+			t.Fatalf("UpsertCapabilityGrant(%s) err = %v", grant.GrantID, err)
+		}
+	}
+
+	victim := filepath.Join(approvedRoot, "swap")
+	installNativeSwapSafeDir(t, victim)
+	var stop atomic.Bool
+	var mutatorWG sync.WaitGroup
+	mutatorWG.Add(1)
+	go func() {
+		defer mutatorWG.Done()
+		for !stop.Load() {
+			_ = os.RemoveAll(victim)
+			_ = os.MkdirAll(victim, 0o755)
+			_ = os.WriteFile(filepath.Join(victim, "leaf.txt"), []byte("safe-marker read\n"), 0o600)
+			_ = os.RemoveAll(victim)
+			_ = os.Symlink(outside, victim)
+			_ = os.Remove(victim)
+			_ = os.WriteFile(victim, []byte("component is a file\n"), 0o600)
+		}
+	}()
+	t.Cleanup(func() {
+		stop.Store(true)
+		mutatorWG.Wait()
+	})
+
+	errCh := make(chan error, 4)
+	var opsWG sync.WaitGroup
+	runUntil := time.Now().Add(750 * time.Millisecond)
+	readInput := nativeJSON(t, map[string]any{"path": filepath.Join(victim, "leaf.txt"), "full": true})
+	listInput := nativeJSON(t, map[string]any{"path": victim})
+	searchInput := nativeJSON(t, map[string]any{"path": victim, "query": "outside-marker", "limit": 5})
+	writeInput := nativeJSON(t, map[string]any{"path": filepath.Join(victim, "created.txt"), "content": "safe write\n", "create_dirs": true})
+	runOp := func(fn func() error) {
+		defer opsWG.Done()
+		for time.Now().Before(runUntil) {
+			if err := fn(); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}
+	opsWG.Add(4)
+	go runOp(func() error {
+		out, _ := registry.executeWithScopeAndPrincipal(ctx, "read_file", readInput, scope, p, key)
+		if strings.Contains(out, "outside-marker") {
+			return fmt.Errorf("read_file escaped granted root: %s", out)
+		}
+		return nil
+	})
+	go runOp(func() error {
+		out, _ := registry.executeWithScopeAndPrincipal(ctx, "list_dir", listInput, scope, p, key)
+		if strings.Contains(out, "outside-marker") {
+			return fmt.Errorf("list_dir escaped granted root: %s", out)
+		}
+		return nil
+	})
+	go runOp(func() error {
+		out, _ := registry.executeWithScopeAndPrincipal(ctx, "search", searchInput, scope, p, key)
+		if strings.Contains(out, "outside-marker") && !strings.Contains(out, "matches: 0") {
+			return fmt.Errorf("search escaped granted root: %s", out)
+		}
+		return nil
+	})
+	go runOp(func() error {
+		_, _ = registry.executeWithScopeAndPrincipal(ctx, "write_file", writeInput, scope, p, key)
+		if data, err := os.ReadFile(filepath.Join(outside, "created.txt")); err == nil {
+			return fmt.Errorf("write_file escaped granted root and wrote outside content %q", string(data))
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat outside write target: %w", err)
+		}
+		return nil
+	})
+	opsWG.Wait()
+	stop.Store(true)
+	mutatorWG.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func installNativeSwapSafeDir(t *testing.T, victim string) {
+	t.Helper()
+	if err := os.RemoveAll(victim); err != nil {
+		t.Fatalf("remove swap victim: %v", err)
+	}
+	if err := os.MkdirAll(victim, 0o755); err != nil {
+		t.Fatalf("mkdir swap victim: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(victim, "leaf.txt"), []byte("safe-marker read\n"), 0o600); err != nil {
+		t.Fatalf("write swap victim leaf: %v", err)
+	}
+}
+
+func nativeJSON(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal native tool input: %v", err)
+	}
+	return raw
+}
+
+func assertNativeFileAccessInvocations(t *testing.T, store *session.SQLiteStore, grantID string, want map[string]string) {
+	t.Helper()
+
+	invocations, err := store.CapabilityInvocationsByGrant(grantID, len(want)+5)
+	if err != nil {
+		t.Fatalf("CapabilityInvocationsByGrant(%s) err = %v", grantID, err)
+	}
+	seen := make(map[string]session.CapabilityInvocation, len(invocations))
+	for _, invocation := range invocations {
+		seen[invocation.Action] = invocation
+	}
+	for action, leaseID := range want {
+		invocation, ok := seen[action]
+		if !ok {
+			t.Fatalf("grant %s missing invocation action %s; got %#v", grantID, action, invocations)
+		}
+		if invocation.Status != "succeeded" {
+			t.Fatalf("grant %s action %s status = %q, want succeeded", grantID, action, invocation.Status)
+		}
+		if invocation.AuthoritySource != "continuation_lease" {
+			t.Fatalf("grant %s action %s authority source = %q, want continuation_lease", grantID, action, invocation.AuthoritySource)
+		}
+		if invocation.ContinuationLeaseID != leaseID {
+			t.Fatalf("grant %s action %s continuation lease = %q, want %q", grantID, action, invocation.ContinuationLeaseID, leaseID)
+		}
+		if invocation.SessionID != session.SessionIDForKey(adminSessionKey()) {
+			t.Fatalf("grant %s action %s session = %q, want admin session", grantID, action, invocation.SessionID)
+		}
+	}
+}
+
 func TestReadFileRequiresExplicitWindowOrFull(t *testing.T) {
 	t.Parallel()
 
@@ -252,11 +1259,55 @@ func TestWriteFileCreateDirsValidatesSymlinkAncestorBeforeMkdir(t *testing.T) {
 	}
 
 	_, err := registry.executeWithScopeAndPrincipal(context.Background(), "write_file", json.RawMessage(`{"path":"link/newdir/file.txt","content":"nope","create_dirs":true}`), scope, scope.Principal, session.SessionKey{})
-	if err == nil || !strings.Contains(err.Error(), "outside writable sandbox roots") {
-		t.Fatalf("write_file err = %v, want pre-mkdir writable-root rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "refused non-directory or symlink component") {
+		t.Fatalf("write_file err = %v, want descriptor-scoped symlink rejection", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(outside, "newdir")); !os.IsNotExist(statErr) {
 		t.Fatalf("outside newdir stat err = %v, want directory not created", statErr)
+	}
+}
+
+func TestWriteFileRejectsFIFOWithoutWriting(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	fifo := filepath.Join(workspace, "pipe")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("mkfifo fixture: %v", err)
+	}
+	readFD, err := unix.Open(fifo, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("open fifo reader: %v", err)
+	}
+	defer unix.Close(readFD)
+
+	registry := NewRegistry(workspace, 2*time.Second)
+	scope := sandbox.Scope{
+		Principal:        principal.Principal{Role: principal.RoleAdmin},
+		Profile:          sandbox.DefaultProfiles().Admin,
+		GlobalRoot:       workspace,
+		SharedMemoryRoot: workspace,
+		WorkingRoot:      workspace,
+	}
+
+	_, err = registry.executeWithScopeAndPrincipal(context.Background(), "write_file", json.RawMessage(`{"path":"pipe","content":"must not reach fifo"}`), scope, scope.Principal, session.SessionKey{})
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("write_file fifo err = %v, want regular-file rejection", err)
+	}
+	info, err := os.Lstat(fifo)
+	if err != nil {
+		t.Fatalf("lstat fifo after rejected write: %v", err)
+	}
+	if info.Mode()&os.ModeNamedPipe == 0 {
+		t.Fatalf("fifo mode after rejected write = %s, want named pipe", info.Mode())
+	}
+	buf := make([]byte, 64)
+	n, readErr := unix.Read(readFD, buf)
+	if n > 0 {
+		t.Fatalf("fifo received %q, want no write side effect", string(buf[:n]))
+	}
+	if readErr != nil && !errors.Is(readErr, unix.EAGAIN) {
+		t.Fatalf("fifo read err = %v, want empty fifo or EAGAIN", readErr)
 	}
 }
 
@@ -671,12 +1722,22 @@ func TestDefinitionsIncludeNativeFileTools(t *testing.T) {
 
 	defs := NewRegistry(t.TempDir(), 2*time.Second).Definitions()
 	names := make(map[string]agent.ToolDef, len(defs))
-	for _, def := range defs {
+	positions := make(map[string]int, len(defs))
+	for i, def := range defs {
 		names[def.Name] = def
+		positions[def.Name] = i
 	}
 	for _, name := range []string{"read_file", "write_file", "list_dir", "search", "fetch_url"} {
 		if _, ok := names[name]; !ok {
 			t.Fatalf("Definitions() missing %s", name)
+		}
+	}
+	if _, ok := names["exec"]; !ok {
+		t.Fatal("Definitions() missing exec")
+	}
+	for _, name := range []string{"read_file", "list_dir", "search"} {
+		if positions[name] > positions["exec"] {
+			t.Fatalf("Definitions() orders %s after exec; native inspection tools should be visible before shell escape", name)
 		}
 	}
 	for _, name := range []string{"read_file", "list_dir", "search"} {
@@ -684,6 +1745,15 @@ func TestDefinitionsIncludeNativeFileTools(t *testing.T) {
 		if !strings.Contains(desc, "parallel-safe") || !strings.Contains(desc, "together in one response") {
 			t.Fatalf("%s description = %q, want parallel-safe batch affordance", name, names[name].Description)
 		}
+	}
+	execDesc := strings.ToLower(names["exec"].Description)
+	for _, want := range []string{"prefer read_file", "list_dir", "search"} {
+		if !strings.Contains(execDesc, want) {
+			t.Fatalf("exec description = %q, want native inspection guidance %q", names["exec"].Description, want)
+		}
+	}
+	if strings.Contains(execDesc, "use this for git, file inspection") {
+		t.Fatalf("exec description = %q, should not prefer shell for ordinary file inspection", names["exec"].Description)
 	}
 }
 

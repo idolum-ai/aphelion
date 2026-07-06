@@ -96,8 +96,11 @@ func (e *sandboxDurableGroupChildExecutor) Run(ctx context.Context, scope sandbo
 	}
 	defer os.Remove(messagePath)
 
-	stateRoot := filepath.Dir(strings.TrimSpace(e.cfg.Sessions.DBPath))
-	childAccess, err := durableChildSandboxAccessFor(e.binaryPath, agent, e.store)
+	stateRoot, err := durableChildSandboxStateRoot(e.cfg)
+	if err != nil {
+		return nil, err
+	}
+	childAccess, err := durableChildSandboxAccessForScope(e.binaryPath, agent, e.store, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +126,24 @@ func (e *sandboxDurableGroupChildExecutor) Run(ctx context.Context, scope sandbo
 		return nil, fmt.Errorf("decode durable child result: %w", err)
 	}
 	return &out, nil
+}
+
+func durableChildSandboxStateRoot(cfg *config.Config) (string, error) {
+	if cfg == nil {
+		return "", fmt.Errorf("sessions DB path is required for sandboxed child wake")
+	}
+	dbPath := strings.TrimSpace(cfg.Sessions.DBPath)
+	if dbPath == "" {
+		return "", fmt.Errorf("sessions DB path is required for sandboxed child wake")
+	}
+	if !filepath.IsAbs(dbPath) {
+		return "", fmt.Errorf("sessions DB path must be absolute: %q", dbPath)
+	}
+	resolved, err := filepath.EvalSymlinks(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve sessions DB path: %w", err)
+	}
+	return filepath.Dir(resolved), nil
 }
 
 func durableAgentChildConfig(parent *config.Config, agent core.DurableAgent, scope sandbox.Scope) *config.Config {

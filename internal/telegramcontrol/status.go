@@ -209,6 +209,19 @@ func (c CommandControl) TailnetGrantBindings(senderID int64) ([]core.TailnetGran
 	return c.Runtime.TailnetGrantBindingsSnapshot()
 }
 
+func (c CommandControl) AuthorityFrontierStatus(ctx context.Context, senderID int64) (core.AuthorityFrontierStatusSnapshot, error) {
+	if !c.CanRestart(senderID) {
+		return core.AuthorityFrontierStatusSnapshot{}, fmt.Errorf("authority frontier view denied")
+	}
+	if c.Runtime == nil {
+		return core.AuthorityFrontierStatusSnapshot{
+			GeneratedAt: time.Now().UTC(),
+			AdminChatID: senderID,
+		}, nil
+	}
+	return c.Runtime.AuthorityFrontierStatus(ctx, senderID)
+}
+
 func (c CommandControl) RevokeTailnetSurface(ctx context.Context, senderID int64, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error) {
 	if !c.CanRestart(senderID) {
 		return core.TailnetSurfaceStatus{}, false, fmt.Errorf("tailnet surface revoke denied")

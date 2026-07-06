@@ -23,6 +23,7 @@ import (
 	"github.com/idolum-ai/aphelion/face"
 	"github.com/idolum-ai/aphelion/governorauth"
 	"github.com/idolum-ai/aphelion/governorbackend"
+	"github.com/idolum-ai/aphelion/interpretation"
 	"github.com/idolum-ai/aphelion/media"
 	"github.com/idolum-ai/aphelion/memory"
 	"github.com/idolum-ai/aphelion/principal"
@@ -55,6 +56,7 @@ type Runtime struct {
 	native       agent.Provider
 	tools        agent.ToolRegistry
 	outbound     OutboundSender
+	interpret    *interpretation.Service
 	resolver     *principal.Resolver
 	inbound      inboundArtifactFetcher
 	workExecutor *WorkExecutorSelector
@@ -89,40 +91,42 @@ type Runtime struct {
 	activeTurnMu             sync.Mutex
 	activeTurnCancels        map[int64]*activeTurnRun
 
-	scopeResolver          *sandbox.Resolver
-	durableGroupChild      durableGroupChildExecutor
-	durableWakeChild       durableWakeChildExecutor
-	durableWakeAdapters    []durableWakeIngressAdapter
-	constitutionGate       TurnConstitutionGate
-	turnAuditSink          func(TurnAudit)
-	interactiveDMAssembler interactiveDMTurnAssembler
-	maintenanceAssembler   maintenanceTurnAssembler
-	operationalAlertMu     sync.Mutex
-	operationalAlerts      map[string]operationalAlertState
-	operationalAlertClock  func() time.Time
-	operationalAlertWindow time.Duration
-	sessionMu              sync.Mutex
-	sessionLocks           map[string]*sessionLock
-	statusReadableMu       sync.Mutex
-	statusReadableProvider agent.Provider
-	statusReadableReady    bool
-	tailnetBackend         tailnet.Backend
-	tailnetParentStatus    func() core.TailnetParentStatus
-	modelProviderMu        sync.Mutex
-	modelProviderCache     map[string]agent.Provider
-	streamControlMu        sync.Mutex
-	streamControls         map[string]activeStreamControl
-	streamControlSeq       atomic.Uint64
-	faceModelsMu           sync.Mutex
-	recipeMu               sync.Mutex
-	recipeFileMu           sync.Mutex
-	recipePath             string
-	recipeState            runtimeRecipeState
-	shuttingDown           atomic.Bool
-	startupRecoveryWG      sync.WaitGroup
-	backgroundLoopsWG      sync.WaitGroup
-	modelProviderSF        singleflight.Group
-	buildProviderHook      func(*config.Config, core.ModelSlotConfig) (agent.Provider, error)
+	scopeResolver           *sandbox.Resolver
+	durableGroupChild       durableGroupChildExecutor
+	durableWakeChild        durableWakeChildExecutor
+	durableWakeAdapters     []durableWakeIngressAdapter
+	constitutionGate        TurnConstitutionGate
+	turnAuditSink           func(TurnAudit)
+	interactiveDMAssembler  interactiveDMTurnAssembler
+	maintenanceAssembler    maintenanceTurnAssembler
+	operationalAlertMu      sync.Mutex
+	operationalAlerts       map[string]operationalAlertState
+	operationalAlertClock   func() time.Time
+	operationalAlertWindow  time.Duration
+	authorityDiscoveryClock func() time.Time
+	sessionMu               sync.Mutex
+	sessionLocks            map[string]*sessionLock
+	promptStableCache       *promptStableContextCache
+	statusReadableMu        sync.Mutex
+	statusReadableProvider  agent.Provider
+	statusReadableReady     bool
+	tailnetBackend          tailnet.Backend
+	tailnetParentStatus     func() core.TailnetParentStatus
+	modelProviderMu         sync.Mutex
+	modelProviderCache      map[string]agent.Provider
+	streamControlMu         sync.Mutex
+	streamControls          map[string]activeStreamControl
+	streamControlSeq        atomic.Uint64
+	faceModelsMu            sync.Mutex
+	recipeMu                sync.Mutex
+	recipeFileMu            sync.Mutex
+	recipePath              string
+	recipeState             runtimeRecipeState
+	shuttingDown            atomic.Bool
+	startupRecoveryWG       sync.WaitGroup
+	backgroundLoopsWG       sync.WaitGroup
+	modelProviderSF         singleflight.Group
+	buildProviderHook       func(*config.Config, core.ModelSlotConfig) (agent.Provider, error)
 }
 
 func (r *Runtime) ConfigureVoice(cfg config.VoiceConfig, transcriber media.TranscriptionProvider, synth voice.Synthesizer) {
@@ -208,6 +212,17 @@ func New(
 	tools agent.ToolRegistry,
 	outbound OutboundSender,
 ) (*Runtime, error) {
+	return NewWithInterpretationService(cfg, store, nil, provider, tools, outbound)
+}
+
+func NewWithInterpretationService(
+	cfg *config.Config,
+	store *session.SQLiteStore,
+	interpretService *interpretation.Service,
+	provider agent.Provider,
+	tools agent.ToolRegistry,
+	outbound OutboundSender,
+) (*Runtime, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
@@ -216,6 +231,10 @@ func New(
 	}
 	if outbound == nil {
 		return nil, fmt.Errorf("outbound sender is nil")
+	}
+	if interpretService == nil {
+		service := interpretation.NewService(store)
+		interpretService = &service
 	}
 	cfg = normalizeRuntimeConfig(cfg)
 
@@ -264,12 +283,17 @@ func New(
 	default:
 		return nil, fmt.Errorf("unsupported face backend: %q", cfg.Face.Backend)
 	}
+	initialFaceProviderName := ""
+	if chain := config.EffectiveProviderChain(cfg); len(chain) > 0 {
+		initialFaceProviderName = chain[0]
+	}
 
 	faceModel, err := newFaceRenderer(faceProvider, face.ProviderRendererConfig{
 		GovernorName:  config.EffectiveGovernorName(cfg, prompt.DefaultGovernorName),
 		FaceName:      config.EffectiveFaceName(cfg, face.DefaultFaceName),
 		Channel:       "telegram",
 		WorkspaceRoot: cfg.Agent.PromptRoot,
+		CacheStrategy: facePromptCacheStrategyForConfig(cfg, initialFaceProviderName),
 		MaxTokens:     faceRenderMaxTokens,
 	})
 	if err != nil {
@@ -365,13 +389,14 @@ func New(
 	}
 
 	rt := &Runtime{
-		cfg:      cfg,
-		store:    store,
-		provider: activeProvider,
-		native:   provider,
-		tools:    tools,
-		outbound: outbound,
-		inbound:  inbound,
+		cfg:       cfg,
+		store:     store,
+		provider:  activeProvider,
+		native:    provider,
+		tools:     tools,
+		outbound:  outbound,
+		interpret: interpretService,
+		inbound:   inbound,
 		resolver: principal.NewResolver(
 			cfg.Principals.Telegram.AdminUserIDs,
 			cfg.Principals.Telegram.ApprovedUserIDs,
@@ -415,20 +440,26 @@ func New(
 			newCodexWorkExecutor(cfg.Work.Codex),
 			nativeWorkExecutor{},
 		}),
-		durableGroupChild:      newSandboxDurableGroupChildExecutor(cfg, store),
-		durableWakeChild:       newSandboxDurableWakeChildExecutor(cfg, store),
-		durableWakeAdapters:    defaultDurableWakeIngressAdapters(),
-		constitutionGate:       DefaultTurnConstitutionGate(),
-		operationalAlerts:      make(map[string]operationalAlertState),
-		operationalAlertClock:  time.Now,
-		operationalAlertWindow: 10 * time.Minute,
-		sessionLocks:           make(map[string]*sessionLock),
-		activeTurnCancels:      make(map[int64]*activeTurnRun),
+		durableGroupChild:       newSandboxDurableGroupChildExecutor(cfg, store),
+		durableWakeChild:        newSandboxDurableWakeChildExecutor(cfg, store),
+		durableWakeAdapters:     defaultDurableWakeIngressAdapters(),
+		constitutionGate:        DefaultTurnConstitutionGate(),
+		operationalAlerts:       make(map[string]operationalAlertState),
+		operationalAlertClock:   time.Now,
+		operationalAlertWindow:  10 * time.Minute,
+		authorityDiscoveryClock: time.Now,
+		sessionLocks:            make(map[string]*sessionLock),
+		promptStableCache:       newPromptStableContextCache(),
+		activeTurnCancels:       make(map[int64]*activeTurnRun),
 	}
 	if rt.workExecutor != nil {
 		if native, ok := rt.workExecutor.executors["native"].(nativeWorkExecutor); ok {
 			native.runtime = rt
 			rt.workExecutor.executors["native"] = native
+		}
+		if codex, ok := rt.workExecutor.executors["codex"].(codexWorkExecutor); ok {
+			codex.runtime = rt
+			rt.workExecutor.executors["codex"] = codex
 		}
 	}
 	rt.staleTurnSweep = func(activityCutoff time.Time, limit int) ([]session.TurnRun, error) {
@@ -504,7 +535,39 @@ func (r *Runtime) faceName() string {
 
 func (r *Runtime) AgentFunc() core.AgentFunc {
 	return func(ctx context.Context, _ *core.SessionState, msg core.InboundMessage) (*core.TurnResult, error) {
-		return r.HandleInbound(ctx, msg)
+		result, err := r.HandleInbound(ctx, msg)
+		r.completeDispatchableTelegramIngressAfterAgent(ctx, msg, err)
+		return result, err
+	}
+}
+
+func (r *Runtime) completeDispatchableTelegramIngressAfterAgent(ctx context.Context, msg core.InboundMessage, turnErr error) {
+	if r == nil || r.store == nil {
+		return
+	}
+	surface := strings.TrimSpace(msg.IngressSurface)
+	if surface == "" || msg.IngressUpdateID <= 0 {
+		return
+	}
+	record, ok, err := r.store.TelegramIngressUpdate(surface, msg.IngressUpdateID)
+	if err != nil {
+		log.Printf("WARN lookup telegram ingress after agent failed surface=%s update_id=%d err=%v", surface, msg.IngressUpdateID, err)
+		return
+	}
+	if !ok || !session.TelegramIngressUpdateStatusDispatchable(record.Status) {
+		return
+	}
+	status := session.TelegramIngressUpdateCompleted
+	errorText := ""
+	if turnErr != nil {
+		status = session.TelegramIngressUpdateFailed
+		if errors.Is(turnErr, context.Canceled) || ctx.Err() != nil {
+			status = session.TelegramIngressUpdateDropped
+		}
+		errorText = trimError(turnErr.Error())
+	}
+	if err := r.store.MarkTelegramIngressCompleted(surface, msg.IngressUpdateID, 0, status, errorText, time.Now().UTC()); err != nil {
+		log.Printf("WARN complete dispatchable telegram ingress after agent failed surface=%s update_id=%d status=%s err=%v", surface, msg.IngressUpdateID, status, err)
 	}
 }
 

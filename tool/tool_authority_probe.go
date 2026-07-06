@@ -100,6 +100,12 @@ func (r *Registry) toolAuthorityProbeRun(ctx context.Context, in toolAuthorityIn
 	}
 	record.ProbeStatus = session.ToolProbeStatusPassed
 	record.Rationale = "probe_run passed against the declared probe command"
+	record.ProbeOutput = probeOutput
+	record.ArtifactRefs = probeRefs
+	record.ConsecutiveFailures = 0
+	record.LastFailureAt = time.Time{}
+	record.LastProbedAt = now
+	setInstallRecordCurrentAnchors(&record, fingerprint)
 	probeRecord := session.ToolProbeRecord{ToolName: manifest.Name, Status: session.ToolProbeStatusPassed, ProbeOutput: probeOutput, Rationale: "probe_run passed against the declared probe command", ArtifactRefs: probeRefs, ProbedAt: now, ConsecutiveFailures: 0}
 	setProbeRecordBaselineAnchors(&probeRecord, fingerprint)
 	if _, err := r.store.UpsertToolProbeRecord(probeRecord); err != nil {
@@ -140,15 +146,9 @@ func (r *Registry) runExternalManifestLifecycleCommand(ctx context.Context, mani
 	if err != nil {
 		return "", err
 	}
-	timeout := defaultTimeout(15 * time.Second)
-	if manifest.Execution.TimeoutSeconds > 0 {
-		timeout = time.Duration(manifest.Execution.TimeoutSeconds) * time.Second
-	}
-	if manifest.Constraints.MaxRuntimeSeconds > 0 {
-		constraintTimeout := time.Duration(manifest.Constraints.MaxRuntimeSeconds) * time.Second
-		if timeout <= 0 || constraintTimeout < timeout {
-			timeout = constraintTimeout
-		}
+	timeout, err := externalToolExecutionTimeout(manifest, 15*time.Second)
+	if err != nil {
+		return "", err
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

@@ -38,6 +38,11 @@ const (
 	EvidenceRedactionNone     = "none"
 	EvidenceRedactionDigest   = "digest"
 	EvidenceRedactionMetadata = "metadata_only"
+	EvidenceRedactionRedacted = "redacted"
+	EvidenceRedactionPrivate  = "session_private"
+	EvidenceRedactionSecret   = "credential_bearing"
+	EvidenceRedactionOperator = "operator_only"
+	EvidenceRedactionBlocked  = "non_hydratable"
 )
 
 type EvidenceObject struct {

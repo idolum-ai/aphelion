@@ -90,6 +90,7 @@ func continuationStateFromOperationPhaseBundle(opState session.OperationState, p
 		UpdatedAt:        now,
 	}
 	action = applyContinuationLeaseClassBoundaries(action)
+	action = session.ReconcileActionProposalAuthority(action)
 	action.PlanHash = actionProposalHash(action)
 	state.ActionProposal = session.NormalizeActionProposal(action)
 	state.ContinuationLease = buildContinuationLease(state.ActionProposal, len(bundlePhases), now)

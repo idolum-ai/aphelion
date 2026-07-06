@@ -218,7 +218,7 @@ func handleContinuationCallback(ctx context.Context, sender commandCallbackSende
 		}
 		answerContinuationCallback(ctx, sender, router, chatID, cb, "continuation.approve", "")
 		text = renderContinuationDecision(state, action)
-		rows, offerErr := approvalWindowOfferRowsForSource(ctx, router, targetMsg, session.ApprovalWindowOfferSourceContinuation, decisionID, "continuation")
+		rows, offerErr := postApprovalWindowOfferRowsForSource(ctx, router, targetMsg, session.ApprovalWindowOfferSourceContinuation, decisionID, "continuation")
 		if offerErr != nil {
 			return true, offerErr
 		}

@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
+
+var errContinuationApprovalBlockedBeforePrompt = errors.New("continuation approval blocked before prompt")
 
 func (r *Runtime) sendMaterializedContinuationApproval(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, text string, source string) error {
 	if r == nil {
@@ -22,8 +25,10 @@ func (r *Runtime) sendMaterializedContinuationApproval(ctx context.Context, key 
 }
 
 func (r *Runtime) sendMaterializedContinuationApprovalLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, state session.ContinuationState, text string, source string) error {
-	if _, blocked, err := r.blockInvalidContinuationAuthorityContract(ctx, key, msg, state, source, time.Now().UTC(), false); blocked || err != nil {
+	if _, blocked, err := r.blockInvalidContinuationAuthorityContract(ctx, key, msg, state, source, time.Now().UTC(), false); err != nil {
 		return err
+	} else if blocked {
+		return fmt.Errorf("%w: %s", errContinuationApprovalBlockedBeforePrompt, continuationAuthorityContractInvalidReason(continuationAuthorityCompilation(state)))
 	}
 	if approved, err := r.maybeAutoApproveContinuationOfferLocked(ctx, key, msg, state, source); approved || err != nil {
 		return err
@@ -61,18 +66,38 @@ func (r *Runtime) repairInvalidPendingContinuationApprovals(ctx context.Context,
 			return repaired, err
 		}
 		state := session.NormalizeContinuationState(record.State)
-		if state.Status != session.ContinuationStatusPending {
+		if state.Status != session.ContinuationStatusPending && state.Status != session.ContinuationStatusApproved {
 			continue
 		}
 		opState, err := r.store.OperationState(record.Key)
 		if err != nil {
 			return repaired, fmt.Errorf("load operation state chat_id=%d: %w", record.Key.ChatID, err)
 		}
+		if _, ok, err := r.repairTerminalContinuationProjection(ctx, record.Key, core.InboundMessage{ChatID: record.Key.ChatID}, opState, state, true, now, "startup_repair", true); err != nil {
+			return repaired, err
+		} else if ok {
+			repaired++
+			continue
+		}
+		if state.Status != session.ContinuationStatusPending {
+			if _, ok, err := r.repairSupersededContinuationProjection(ctx, record.Key, core.InboundMessage{ChatID: record.Key.ChatID}, opState, state, true, now, "startup_repair"); err != nil {
+				return repaired, err
+			} else if ok {
+				repaired++
+			}
+			continue
+		}
 		_, ok, err := r.repairInvalidPendingPhaseApprovalState(ctx, record.Key, record.Key.ChatID, opState, state, now, true, "startup_repair")
 		if err != nil {
 			return repaired, err
 		}
 		if ok {
+			repaired++
+			continue
+		}
+		if _, ok, err := r.repairSupersededContinuationProjection(ctx, record.Key, core.InboundMessage{ChatID: record.Key.ChatID}, opState, state, true, now, "startup_repair"); err != nil {
+			return repaired, err
+		} else if ok {
 			repaired++
 			continue
 		}
@@ -610,17 +635,7 @@ func continuationApprovalBundleInvalidReason(plan session.OperationPhasePlan, bu
 		phaseID := strings.TrimSpace(bundlePhase.OperationPhaseID)
 		phase, ok := phaseByID[phaseID]
 		if !ok {
-			phase = session.OperationPhase{
-				ID:               phaseID,
-				Summary:          bundlePhase.Summary,
-				AuthorityClass:   bundlePhase.AuthorityClass,
-				WhyNow:           bundlePhase.WhyNow,
-				BoundedEffect:    bundlePhase.BoundedEffect,
-				AllowedActions:   append([]string(nil), bundlePhase.AllowedActions...),
-				ForbiddenActions: append([]string(nil), bundlePhase.ForbiddenActions...),
-				ValidationPlan:   append([]string(nil), bundlePhase.ValidationPlan...),
-				Status:           session.PlanStatusPending,
-			}
+			return "approval bundle phase missing from current operation"
 		}
 		if reason := operationPhaseApprovalExcludedReason(plan, phase); reason != "" {
 			return reason

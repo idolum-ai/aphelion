@@ -37,6 +37,7 @@ type fakeProvider struct {
 	doctorSummaryReplyText  string
 	interpretationReplyText string
 	interpretationReplies   []string
+	governorResponses       []agent.Response
 	streamFaceText          string
 	faceErr                 error
 	proposalErr             error
@@ -192,6 +193,14 @@ func (f *fakeProvider) Complete(_ context.Context, messages []agent.Message, too
 		}
 	}
 
+	if len(f.governorResponses) > 0 {
+		resp := f.governorResponses[0]
+		f.governorResponses = append(f.governorResponses[:0], f.governorResponses[1:]...)
+		resp.ToolCalls = append([]agent.ToolCall(nil), resp.ToolCalls...)
+		resp.Media = append([]core.Media(nil), resp.Media...)
+		return &resp, nil
+	}
+
 	return &agent.Response{
 		Content:  f.replyText,
 		Thinking: f.thinkingText,
@@ -336,6 +345,9 @@ func fakeInterpretationClaimsReply(raw string) string {
 			strings.Contains(text, "cannot continue") ||
 			strings.Contains(text, "can't continue")
 		if !prior && !suggestion && !negated {
+			if needsApproval {
+				addExecutionClaim("approval_request")
+			}
 			if strings.Contains(text, "done") || strings.Contains(text, "finished") || strings.Contains(text, "completed") || strings.Contains(text, "all set") {
 				addExecutionClaim("completion")
 			}
@@ -377,6 +389,10 @@ func fakeInterpretationClaimsReply(raw string) string {
 		Claims:        claims,
 	})
 	return interpretationClaimsMarker + ": " + string(rawContract)
+}
+
+func fakeApprovalRequestInterpretationReply() string {
+	return interpretationClaimsMarker + `: {"schema_version":"` + interpretationClaimsSchema + `","surface":"final_reply","claims":[{"intent":"reply_execution_claim","scope":"final_reply","risk":["approval_request"],"confidence":"high","source":"test_typed_interpretation","proposed_next_action":"materialize_typed_approval_surface"}]}`
 }
 
 type fakeSender struct {

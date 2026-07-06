@@ -108,6 +108,27 @@ func TestDoctorAuthorityProjectionReportsConsistencyFindings(t *testing.T) {
 	}
 }
 
+func TestAuthorityProjectionTreatsContinuationCallbackCardAsDecisionBacking(t *testing.T) {
+	t.Parallel()
+
+	state := session.ContinuationState{
+		Status:            session.ContinuationStatusPending,
+		DecisionID:        "callback-backed-decision",
+		DecisionMessageID: 1234,
+		ActionProposal: session.ActionProposal{
+			ID:     "aprop-callback-backed-decision",
+			Status: session.ProposalStatusPending,
+		},
+	}
+	if authorityPendingContinuationMissingDecision(state, nil) {
+		t.Fatal("authorityPendingContinuationMissingDecision() = true, want callback-backed prompt accepted without pending_decisions row")
+	}
+	state.DecisionMessageID = 0
+	if !authorityPendingContinuationMissingDecision(state, nil) {
+		t.Fatal("authorityPendingContinuationMissingDecision() = false, want missing backing detected")
+	}
+}
+
 func TestDoctorAuthorityProjectionHealthyWhenRecordsConsistent(t *testing.T) {
 	cfg, store, _, _ := buildRuntimeFixtures(t)
 	now := time.Date(2026, 5, 10, 13, 0, 0, 0, time.UTC)
@@ -477,11 +498,14 @@ func TestRunDoctorOncePersistsDeliversAndRedactsDiagnostics(t *testing.T) {
 		"semantic_enabled",
 		"Recent Service Log Tail",
 		"Known Issue Status Checks",
+		"Persistence Health",
 		"Maintainer Delegate",
 		"maintainer_delegate_status=\"absent\"",
 		"issue=prompt_identity_canonical status=likely_fixed",
 		"issue=dynamic_skills_prompt_loading status=likely_fixed",
 		"tailnet_surfaces: none",
+		"classification_scope: operational_tension",
+		"classification_scope: principle_debt",
 		"allowed_statuses: active, likely_fixed, historical_resolved, residual_risk, unknown",
 	} {
 		if !strings.Contains(userPrompt, want) {

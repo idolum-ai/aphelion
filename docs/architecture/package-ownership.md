@@ -139,6 +139,11 @@ Code anchors:
 
 - `session` owns durable storage records and persistence APIs. It should not
   import orchestration packages.
+- `interpretation` owns the central judgment/use service contract over
+  `session` records. It validates and records consequential interpretation
+  commitments, but it must not own domain classification logic or import
+  runtime, tool, pipeline, memory, effect classification, transport, or durable
+  child packages.
 - `telegram` owns Telegram wire/client behavior. It should not import runtime,
   turn, or pipeline orchestration.
 - `tool` owns bounded tool implementations and sandbox integration. It should
@@ -175,6 +180,19 @@ refuse to own. Their boundaries are enforced by `architecture_import_guard_test.
 - The invariant is: credential availability is not authority. A token minted by
   this package is only material; a higher approved grant/lease decides whether it
   may be used.
+
+### `effectauth`: command-effect authorization membrane
+
+- Owns the canonical decision that combines a classified command effect, active
+  continuation envelope, capability-grant coverage, and work-mode fallback into
+  an allow/deny result.
+- May depend on `commandeffect` for classification and `session` for typed lease,
+  proposal, grant, and authority-contract records.
+- Must not own command parsing heuristics, tool execution, provider routing,
+  Telegram UX, continuation mutation, or durable storage writes.
+- The invariant is: an approval can activate or narrow existing authority, but it
+  must never widen the active continuation envelope. Classification says what an
+  effect is; `effectauth` says whether this principal may perform it now.
 
 ### `governorauth`: governor auth material membrane
 

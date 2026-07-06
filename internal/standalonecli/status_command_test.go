@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestRunStatusCommandKVDegradesWhenBuildRevisionUnknown(t *testing.T) {
+func TestRunStatusCommandKVAllowsSourceBuildWithoutRevisionWhenPathAndVersionMatch(t *testing.T) {
 	configPath := writeMinimalStatusConfig(t)
 	metaPath := filepath.Join(t.TempDir(), "release.json")
 	if err := os.WriteFile(metaPath, []byte(`{"latest_version":"v0.2.2","installed_version":"v0.2.2","checked_at":"2026-06-04T14:38:27Z","source":"test"}`), 0o600); err != nil {
@@ -22,7 +22,7 @@ func TestRunStatusCommandKVDegradesWhenBuildRevisionUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
 	}
-	info := readVersionInfo()
+	info := versionInfo{Version: "(devel)"}
 	fake := statusFakeService{
 		show:      "MainPID=123\nExecStart={ path=" + execPath + " ; argv[]=" + execPath + " --config " + configPath + " }\n",
 		unitList:  "aphelion.service loaded active running Aphelion\n",
@@ -32,8 +32,9 @@ func TestRunStatusCommandKVDegradesWhenBuildRevisionUnknown(t *testing.T) {
 	}
 	out, err := captureStandaloneStdout(t, func() error {
 		return runStatusCommandWithOptions([]string{"--config", configPath}, statusCommandOptions{
-			Runner:   fake.run,
-			Readlink: fake.readlink,
+			Runner:       fake.run,
+			Readlink:     fake.readlink,
+			BuildVersion: info,
 			ExecVersion: func(ctx context.Context, path string) (versionInfo, error) {
 				return fake.versions[path], nil
 			},
@@ -45,21 +46,61 @@ func TestRunStatusCommandKVDegradesWhenBuildRevisionUnknown(t *testing.T) {
 	}
 	for _, want := range []string{
 		"action: status",
-		"status: degraded",
+		"status: ready",
 		"config_path: " + configPath,
 		"service_main_pid: 123",
 		"service_running_exec: " + execPath,
-		"service_binary_matches: false",
+		"service_binary_matches: true",
+		"release_status_class: current",
 		"release_installed_version: v0.2.2",
-		"next_action: run doctor",
-		"running service binary does not match expected binary",
+		"next_action: none",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("status output missing %q in %q", want, out)
 		}
 	}
+	if strings.Contains(out, "running service binary does not match expected binary") {
+		t.Fatalf("status output reported a binary mismatch for matching source build: %q", out)
+	}
 	if fake.called("restart") || fake.called("install") || fake.called("verify-deploy") {
 		t.Fatalf("status command invoked mutating command: %#v", fake.calls)
+	}
+}
+
+func TestServiceBinaryMatchesTreatsRevisionAsOptionalOnlyWhenBothSidesAreUnknown(t *testing.T) {
+	base := statusServiceInfo{
+		RunningExecPath:  "/opt/aphelion/bin/aphelion",
+		ExpectedExecPath: "/opt/aphelion/bin/aphelion",
+		RunningVersion:   "(devel)",
+		ExpectedVersion:  "(devel)",
+	}
+	if !serviceBinaryMatches(base) {
+		t.Fatalf("serviceBinaryMatches() = false, want true for matching source build without VCS revisions")
+	}
+
+	withRevision := base
+	withRevision.RunningRevision = "abc123"
+	withRevision.ExpectedRevision = "abc123"
+	if !serviceBinaryMatches(withRevision) {
+		t.Fatalf("serviceBinaryMatches() = false, want true for matching revisions")
+	}
+
+	mismatch := withRevision
+	mismatch.RunningRevision = "def456"
+	if serviceBinaryMatches(mismatch) {
+		t.Fatalf("serviceBinaryMatches() = true, want false for concrete revision mismatch")
+	}
+
+	partial := base
+	partial.ExpectedRevision = "abc123"
+	if serviceBinaryMatches(partial) {
+		t.Fatalf("serviceBinaryMatches() = true, want false when only one side has a revision")
+	}
+
+	missingVersion := base
+	missingVersion.RunningVersion = ""
+	if serviceBinaryMatches(missingVersion) {
+		t.Fatalf("serviceBinaryMatches() = true, want false without a running version")
 	}
 }
 
@@ -98,6 +139,186 @@ func TestRunStatusCommandJSONDegradedForDuplicateUnits(t *testing.T) {
 	wantUnits := strings.Join(got.DuplicateUnits, ",")
 	if !strings.Contains(wantUnits, "aphelion-main-redeploy-1779159152.service") || !strings.Contains(wantUnits, "aphelion-v013-deploy.service") {
 		t.Fatalf("duplicate units = %#v, want both stale units", got.DuplicateUnits)
+	}
+}
+
+func TestRunStatusCommandProjectsReleaseUpdateAlongsideServiceConsistency(t *testing.T) {
+	configPath := writeMinimalStatusConfig(t)
+	metaPath := filepath.Join(t.TempDir(), "release.json")
+	if err := os.WriteFile(metaPath, []byte(`{"latest_version":"v0.3.0","installed_version":"v0.2.0","checked_at":"2026-06-04T14:38:27Z","source":"test"}`), 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
+		execPath = resolved
+	}
+	build := versionInfo{Version: "v0.2.0", VCSRevision: "abc123", VCSModified: "false"}
+	fake := statusFakeService{
+		show:      "MainPID=123\nExecStart={ path=" + execPath + " ; argv[]=" + execPath + " --config " + configPath + " }\n",
+		unitList:  "aphelion.service loaded active running Aphelion\n",
+		unitFiles: "aphelion.service enabled\n",
+		readlinks: map[string]string{"/proc/123/exe": execPath},
+	}
+
+	out, err := captureStandaloneStdout(t, func() error {
+		return runStatusCommandWithOptions([]string{"--config", configPath, "--format=json"}, statusCommandOptions{
+			Runner:       fake.run,
+			Readlink:     fake.readlink,
+			BuildVersion: build,
+			ExecVersion: func(ctx context.Context, path string) (versionInfo, error) {
+				return build, nil
+			},
+			MetadataPath: metaPath,
+		})
+	})
+	if err != nil {
+		t.Fatalf("runStatusCommand(source metadata) err = %v", err)
+	}
+	var got statusSnapshot
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("json.Unmarshal(status) err = %v; output=%q", err, out)
+	}
+	if got.Status != "ready" || got.NextAction != "none" {
+		t.Fatalf("status=%q next=%q service=%#v issues=%#v, want ready/none when service matches source despite newer release metadata", got.Status, got.NextAction, got.Service, got.IssueRecords)
+	}
+	if got.Release.SourceStatus != "release_update_available" {
+		t.Fatalf("release source status = %q, want release_update_available", got.Release.SourceStatus)
+	}
+	if got.Release.CurrentRevision != "abc123" || got.Release.RunningRevision != "abc123" || got.Release.ExpectedRevision != "abc123" {
+		t.Fatalf("release revisions = current %q running %q expected %q, want abc123/abc123/abc123", got.Release.CurrentRevision, got.Release.RunningRevision, got.Release.ExpectedRevision)
+	}
+	if got.Release.StatusClass != "operational_tension" || got.Release.FailureClass != "release_freshness" || got.Release.RetryPolicy != "reinstall_or_restart_service" {
+		t.Fatalf("release classification = %#v, want operational release freshness install/restart guidance", got.Release)
+	}
+	if got.Release.ServiceStatus != "source_service_consistent" || got.Release.ServiceClass != "current" ||
+		got.Release.ServiceFailure != "none" || got.Release.ServiceRetry != "none" || got.Release.ServiceNext != "none" {
+		t.Fatalf("service axis = %#v, want quiet source service consistency", got.Release)
+	}
+	if got.Release.FreshnessStatus != "release_update_available" || got.Release.FreshnessClass != "operational_tension" ||
+		got.Release.FreshnessFailure != "release_freshness" || got.Release.FreshnessRetry != "reinstall_or_restart_service" {
+		t.Fatalf("freshness axis = %#v, want release update availability", got.Release)
+	}
+	if !strings.Contains(got.Release.NextAction, "newer release") {
+		t.Fatalf("release next action = %q, want install guidance", got.Release.NextAction)
+	}
+	if statusIssueCodePresent(got.IssueRecords, "release_update_available") {
+		t.Fatalf("issue records = %#v, did not want release update to degrade coherent source/service status", got.IssueRecords)
+	}
+}
+
+func TestRunStatusCommandKeepsBinaryMismatchVisibleWithMalformedMetadata(t *testing.T) {
+	configPath := writeMinimalStatusConfig(t)
+	metaPath := filepath.Join(t.TempDir(), "release.json")
+	if err := os.WriteFile(metaPath, []byte(`{"latest_version":`), 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
+		execPath = resolved
+	}
+	build := versionInfo{Version: "v0.2.0", VCSRevision: "abc123", VCSModified: "false"}
+	running := versionInfo{Version: "v0.1.0", VCSRevision: "def456", VCSModified: "false"}
+	fake := statusFakeService{
+		show:      "MainPID=123\nExecStart={ path=" + execPath + " ; argv[]=" + execPath + " --config " + configPath + " }\n",
+		unitList:  "aphelion.service loaded active running Aphelion\n",
+		unitFiles: "aphelion.service enabled\n",
+		readlinks: map[string]string{"/proc/123/exe": execPath},
+	}
+
+	out, err := captureStandaloneStdout(t, func() error {
+		return runStatusCommandWithOptions([]string{"--config", configPath, "--format=json"}, statusCommandOptions{
+			Runner:       fake.run,
+			Readlink:     fake.readlink,
+			BuildVersion: build,
+			ExecVersion: func(ctx context.Context, path string) (versionInfo, error) {
+				return running, nil
+			},
+			MetadataPath: metaPath,
+		})
+	})
+	if err != nil {
+		t.Fatalf("runStatusCommand(malformed metadata) err = %v", err)
+	}
+	var got statusSnapshot
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("json.Unmarshal(status) err = %v; output=%q", err, out)
+	}
+	if got.Status != "degraded" || got.NextAction != "run doctor" {
+		t.Fatalf("status=%q next=%q, want degraded/run doctor", got.Status, got.NextAction)
+	}
+	if got.Release.SourceStatus != "source_install_revision_mismatch" || got.Release.ServiceStatus != "source_install_revision_mismatch" {
+		t.Fatalf("release/service status = %q/%q, want source_install_revision_mismatch", got.Release.SourceStatus, got.Release.ServiceStatus)
+	}
+	if got.Release.FreshnessStatus != "release_metadata_unreadable" {
+		t.Fatalf("freshness status = %q, want release_metadata_unreadable", got.Release.FreshnessStatus)
+	}
+	if got.Release.StatusClass != "operational_tension" || got.Release.FailureClass != "source_install_revision_mismatch" ||
+		got.Release.RetryPolicy != "reinstall_or_restart_service" {
+		t.Fatalf("release classification = %#v, want concrete service mismatch to drive overall", got.Release)
+	}
+	if !statusIssueCodePresent(got.IssueRecords, "service_binary_mismatch") || !statusIssueCodePresent(got.IssueRecords, "release_metadata_unreadable") {
+		t.Fatalf("issue records = %#v, want both service mismatch and metadata unreadable", got.IssueRecords)
+	}
+}
+
+func TestRunStatusCommandCurrentSourceInstallHasQuietClassification(t *testing.T) {
+	configPath := writeMinimalStatusConfig(t)
+	metaPath := filepath.Join(t.TempDir(), "release.json")
+	if err := os.WriteFile(metaPath, []byte(`{"latest_version":"v0.2.0","installed_version":"v0.2.0","checked_at":"2026-06-04T14:38:27Z","source":"test"}`), 0o600); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
+		execPath = resolved
+	}
+	build := versionInfo{Version: "v0.2.0", VCSRevision: "abc123", VCSModified: "false"}
+	fake := statusFakeService{
+		show:      "MainPID=123\nExecStart={ path=" + execPath + " ; argv[]=" + execPath + " --config " + configPath + " }\n",
+		unitList:  "aphelion.service loaded active running Aphelion\n",
+		unitFiles: "aphelion.service enabled\n",
+		readlinks: map[string]string{"/proc/123/exe": execPath},
+	}
+
+	out, err := captureStandaloneStdout(t, func() error {
+		return runStatusCommandWithOptions([]string{"--config", configPath, "--format=json"}, statusCommandOptions{
+			Runner:       fake.run,
+			Readlink:     fake.readlink,
+			BuildVersion: build,
+			ExecVersion: func(ctx context.Context, path string) (versionInfo, error) {
+				return build, nil
+			},
+			MetadataPath: metaPath,
+		})
+	})
+	if err != nil {
+		t.Fatalf("runStatusCommand(current source) err = %v", err)
+	}
+	var got statusSnapshot
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("json.Unmarshal(status) err = %v; output=%q", err, out)
+	}
+	if got.Status != "ready" || got.NextAction != "none" || len(got.IssueRecords) != 0 {
+		t.Fatalf("status=%q next=%q issues=%#v, want quiet ready status", got.Status, got.NextAction, got.IssueRecords)
+	}
+	if got.Release.StatusClass != "current" || got.Release.FailureClass != "none" || got.Release.RetryPolicy != "none" || got.Release.NextAction != "none" {
+		t.Fatalf("release classification = %#v, want quiet current classification", got.Release)
+	}
+	if got.Release.ServiceStatus != "source_service_consistent" || got.Release.ServiceClass != "current" ||
+		got.Release.ServiceFailure != "none" || got.Release.ServiceRetry != "none" || got.Release.ServiceNext != "none" {
+		t.Fatalf("service axis = %#v, want quiet current classification", got.Release)
+	}
+	if got.Release.FreshnessStatus != "release_status_current" || got.Release.FreshnessClass != "current" ||
+		got.Release.FreshnessFailure != "none" || got.Release.FreshnessRetry != "none" || got.Release.FreshnessNext != "none" {
+		t.Fatalf("freshness axis = %#v, want quiet current classification", got.Release)
 	}
 }
 

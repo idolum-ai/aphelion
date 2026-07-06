@@ -8,6 +8,8 @@ import (
 	"hash/fnv"
 	"strings"
 	"time"
+
+	"github.com/idolum-ai/aphelion/core"
 )
 
 func (r *Runtime) RunDurableAgentChildWake(ctx context.Context, agentID string, now time.Time) error {
@@ -34,6 +36,51 @@ func (r *Runtime) RunDurableAgentChildWake(ctx context.Context, agentID string, 
 		return r.runDurableWakeTurn(ctx, *agent, *plan, now.UTC())
 	}
 	return r.runDurableAgentChildWakeLoaded(ctx, *agent, now)
+}
+
+func (r *Runtime) RunDurableAgentParentConversationWake(ctx context.Context, agentID string, messageIDs []string, wakeClaimID string, now time.Time) error {
+	if r == nil || r.store == nil {
+		return fmt.Errorf("durable parent conversation wake runtime is unavailable")
+	}
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return fmt.Errorf("durable parent conversation wake agent id is required")
+	}
+	agent, err := r.store.DurableAgent(agentID)
+	if err != nil {
+		return fmt.Errorf("load durable parent conversation wake agent: %w", err)
+	}
+	if agent == nil {
+		return fmt.Errorf("durable agent %q not found", agentID)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	plan, err := prepareDurableParentConversationWakePlanForMessageIDs(r, *agent, messageIDs, now.UTC(), true)
+	if err != nil {
+		return core.NewDurableAgentWakeFailureError(core.DurableAgentWakeFailureParentConversationPrepare, agentID, messageIDs, err)
+	}
+	if plan == nil {
+		if len(durableWakeNonEmptyMessageIDs(messageIDs)) > 0 {
+			return core.NewDurableAgentWakeClaimedParentBatchMissingError(agentID, messageIDs)
+		}
+		return nil
+	}
+	if wakeClaimID = strings.TrimSpace(wakeClaimID); wakeClaimID != "" {
+		plan.WakeClaimID = wakeClaimID
+		plan.TaskPacketID = durableWakeTaskPacketIDForWakeClaim(agentID, messageIDs, wakeClaimID)
+	}
+	return r.runDurableWakeTurn(ctx, *agent, *plan, now.UTC())
+}
+
+func durableWakeNonEmptyMessageIDs(messageIDs []string) []string {
+	out := make([]string, 0, len(messageIDs))
+	for _, id := range messageIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func durableWakeSyntheticChatID(agentID string) int64 {

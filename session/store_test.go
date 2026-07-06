@@ -364,6 +364,51 @@ func TestActiveApprovalWindowOfferForSourceReturnsOpenedUsedOffer(t *testing.T) 
 	}
 }
 
+func TestLatestOperatorAutoApprovalLeaseForScopeAndReasonIgnoresOtherReasons(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	now := time.Now().UTC()
+	defaultLease := OperatorAutoApprovalLease{
+		ID:          "lease-latest-reason-default",
+		AdminUserID: 1001,
+		ChatID:      7006,
+		ScopeKind:   string(ScopeKindTelegramDM),
+		ScopeID:     "7006",
+		Scope:       OperatorAutoApprovalScopeAll,
+		Reason:      "default approval window",
+		CreatedAt:   now.Add(-30 * time.Minute),
+		ExpiresAt:   now.Add(-15 * time.Minute),
+		UpdatedAt:   now.Add(-15 * time.Minute),
+	}
+	manualLease := OperatorAutoApprovalLease{
+		ID:          "lease-latest-reason-manual",
+		AdminUserID: 1001,
+		ChatID:      7006,
+		ScopeKind:   string(ScopeKindTelegramDM),
+		ScopeID:     "7006",
+		Scope:       OperatorAutoApprovalScopeAll,
+		Reason:      "inline approval window",
+		CreatedAt:   now.Add(-time.Minute),
+		ExpiresAt:   now.Add(time.Hour),
+		UpdatedAt:   now.Add(-time.Minute),
+	}
+	if _, err := store.CreateOperatorAutoApprovalLease(defaultLease); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease(default) err = %v", err)
+	}
+	if _, err := store.CreateOperatorAutoApprovalLease(manualLease); err != nil {
+		t.Fatalf("CreateOperatorAutoApprovalLease(manual) err = %v", err)
+	}
+	got, ok, err := store.LatestOperatorAutoApprovalLeaseForScopeAndReason(7006, 1001, string(ScopeKindTelegramDM), "7006", "default approval window")
+	if err != nil || !ok {
+		t.Fatalf("LatestOperatorAutoApprovalLeaseForScopeAndReason() = %#v ok=%v err=%v, want default lease", got, ok, err)
+	}
+	if got.ID != defaultLease.ID {
+		t.Fatalf("latest default lease ID = %q, want %q", got.ID, defaultLease.ID)
+	}
+}
+
 func TestActiveApprovalWindowOfferForSourceExcludesExpiredOpenedOffer(t *testing.T) {
 	t.Parallel()
 

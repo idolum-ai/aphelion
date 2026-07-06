@@ -4,8 +4,7 @@ package runtime
 
 import (
 	"context"
-	"database/sql"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -31,8 +30,10 @@ func (r *Runtime) HandleCapabilityGrantActivated(ctx context.Context, key sessio
 		return
 	}
 	go func() {
-		if err := r.runCapabilityGrantWake(context.Background(), agentID, grant); err != nil {
-			r.recordCapabilityGrantWakeFailure(context.Background(), key, agentID, grant, err)
+		wakeCtx, cancel := context.WithTimeout(context.Background(), durableWakePollAgentTimeout)
+		defer cancel()
+		if err := r.runCapabilityGrantWake(wakeCtx, agentID, grant); err != nil {
+			r.recordCapabilityGrantWakeFailure(wakeCtx, key, agentID, grant, err)
 		}
 	}()
 }
@@ -55,37 +56,70 @@ func (r *Runtime) queueCapabilityGrantWake(ctx context.Context, agentID string, 
 	if err != nil {
 		return fmt.Errorf("load durable agent %q for capability grant wake: %w", agentID, err)
 	}
-	state, err := r.store.DurableAgentState(agentID)
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("load durable agent state %q for capability grant wake: %w", agentID, err)
-		}
-		state = &core.DurableAgentState{AgentID: agentID}
-	}
-	continuity, err := core.ParseDurableAgentContinuityState(state.StateJSON)
-	if err != nil {
-		return fmt.Errorf("parse durable agent continuity for capability grant wake: %w", err)
-	}
 	now := time.Now().UTC()
-	continuity = continuity.WithConversationMessage("parent", capabilityGrantWakeMessage(*agent, grant), now)
-	raw, err := continuity.Marshal()
-	if err != nil {
-		return fmt.Errorf("marshal durable agent continuity for capability grant wake: %w", err)
-	}
-	state.AgentID = agentID
-	state.StateJSON = raw
-	if err := r.store.SaveDurableAgentState(*state); err != nil {
-		return fmt.Errorf("save durable agent capability grant wake queue: %w", err)
+	taskPacketID := capabilityGrantTaskPacketID(agentID, grant)
+	message := core.DurableAgentConversationMessage{
+		MessageID: taskPacketID,
+		Role:      "parent",
+		Text:      capabilityGrantWakeMessage(*agent, grant),
+		CreatedAt: now,
 	}
 	key := r.durableAgentExecutionKey(agentID)
-	r.recordExecutionEvent(key, core.ExecutionEventCapabilityGrantWakeQueued, "capability", "wake_queued", map[string]any{
+	inputRaw, _ := json.Marshal(map[string]any{
+		"grant_id":        grant.GrantID,
+		"request_id":      grant.RequestID,
+		"kind":            string(grant.Kind),
+		"target_resource": grant.TargetResource,
+		"allowed_actions": grant.AllowedActions,
+	})
+	payload := map[string]any{
 		"agent_id":        agentID,
 		"grant_id":        grant.GrantID,
 		"request_id":      grant.RequestID,
 		"kind":            string(grant.Kind),
 		"target_resource": grant.TargetResource,
 		"allowed_actions": grant.AllowedActions,
-	}, now)
+		"task_packet_id":  taskPacketID,
+	}
+	payloadRaw, _ := json.Marshal(payload)
+	if _, err := r.store.RecordChildTaskAdmission(session.ChildTaskAdmissionInput{
+		AgentID:           agentID,
+		ContinuityMessage: message,
+		Packet: session.ChildTaskPacketInput{
+			PacketID:       taskPacketID,
+			TaskLeaseID:    session.ChildTaskLeaseID(taskPacketID),
+			AgentID:        agentID,
+			Key:            key,
+			TaskKind:       "capability_grant_wake",
+			AuthorityKind:  "capability_grant",
+			AuthorityID:    grant.GrantID,
+			GrantID:        grant.GrantID,
+			RequestID:      grant.RequestID,
+			TargetResource: grant.TargetResource,
+			RequiredAction: capabilityGrantWakeRequiredAction(grant),
+			InputJSON:      string(inputRaw),
+			CreatedAt:      now,
+		},
+		QueuedEvents: []session.ExecutionEventInput{{
+			EventType:   core.ExecutionEventCapabilityGrantWakeQueued,
+			Stage:       "capability",
+			Status:      "wake_queued",
+			PayloadJSON: string(payloadRaw),
+			CreatedAt:   now,
+		}},
+		NextAction: &session.NextActionInput{
+			Owner:              "capability_grant_wake",
+			State:              session.NextActionWaitingForChild,
+			CausalRefs:         []string{"capability_grant:" + grant.GrantID, "task_packet:" + taskPacketID},
+			NextAction:         "wake the child with the compact grant task packet",
+			RequiredAuthority:  string(grant.Kind),
+			OperatorProjection: "The grant was activated; the child has one compact task packet to incorporate it and report the typed result.",
+			CreatedAt:          now,
+		},
+		CreatedAt: now,
+	}); err != nil {
+		return fmt.Errorf("record capability grant child task admission: %w", err)
+	}
 	return nil
 }
 
@@ -112,7 +146,10 @@ func (r *Runtime) runCapabilityGrantWake(ctx context.Context, agentID string, gr
 	if plan == nil {
 		return fmt.Errorf("capability grant %s queued no durable wake plan for agent %s", strings.TrimSpace(grant.GrantID), agentID)
 	}
-	return r.runDurableWakeTurn(ctx, *agent, *plan, now)
+	if err := r.runDurableWakeTurn(ctx, *agent, *plan, now); err != nil {
+		return err
+	}
+	return r.deliverDurableReviewEventsForAgent(ctx, *agent)
 }
 
 func (r *Runtime) recordCapabilityGrantWakeFailure(ctx context.Context, key session.SessionKey, agentID string, grant session.CapabilityGrant, cause error) {
@@ -178,4 +215,29 @@ func capabilityGrantWakeMessage(agent core.DurableAgent, grant session.Capabilit
 		"If you cannot wake cleanly, ask the operator to repair the runtime and issue a fresh grant.",
 	}
 	return strings.Join(parts, "\n")
+}
+
+func capabilityGrantTaskPacketID(agentID string, grant session.CapabilityGrant) string {
+	seed := strings.Join([]string{
+		strings.TrimSpace(agentID),
+		strings.TrimSpace(grant.GrantID),
+		strings.TrimSpace(grant.RequestID),
+		string(grant.Kind),
+		strings.TrimSpace(grant.TargetResource),
+		strings.Join(session.NormalizeCapabilityActions(grant.AllowedActions), ","),
+	}, ":")
+	return "grant_task:" + strings.TrimPrefix(session.EffectAttemptCommandHash(seed), "sha256:")[:16]
+}
+
+func capabilityGrantWakeRequiredAction(grant session.CapabilityGrant) string {
+	actions := session.NormalizeCapabilityActions(grant.AllowedActions)
+	for _, action := range actions {
+		if action == "invoke" {
+			return action
+		}
+	}
+	if len(actions) > 0 {
+		return actions[0]
+	}
+	return "invoke"
 }

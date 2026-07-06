@@ -68,6 +68,55 @@ func TestHandleTelegramCommandCallbackContinuationApprove(t *testing.T) {
 	}
 }
 
+func TestHandleTelegramCommandCallbackContinuationApproveSuppressesPostApprovalDefaultWindowRows(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	triggerStarted := make(chan struct{})
+	router := stubCommandRouter{
+		continuationState: session.ContinuationState{
+			Status:         session.ContinuationStatusPending,
+			DecisionID:     "decision-default-window",
+			RemainingTurns: 1,
+			StageSummary:   "Verify the next bounded step.",
+		},
+		canRestart:                        true,
+		triggerContinuationStarted:        triggerStarted,
+		suppressPostApprovalDefaultWindow: true,
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-continue-default-window",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-default-window", continuationActionApproveLease),
+		Message: &telegram.Message{MessageID: 94, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	waitForStubContinuationTrigger(t, triggerStarted)
+	if router.suppressPostApprovalSource != session.ApprovalWindowOfferSourceContinuation+":decision-default-window:continuation" {
+		t.Fatalf("suppress source = %q, want continuation decision source", router.suppressPostApprovalSource)
+	}
+	if router.approvalWindowOfferSource != "" {
+		t.Fatalf("approvalWindowOfferSource = %q, want no visible approval-window offer", router.approvalWindowOfferSource)
+	}
+	if len(sender.editInline) != 0 {
+		t.Fatalf("editInline count = %d, want no post-approval buttons", len(sender.editInline))
+	}
+	if len(sender.edits) != 0 {
+		t.Fatalf("edits count = %d, want no ordinary text edit", len(sender.edits))
+	}
+	if len(sender.editClear) != 1 {
+		t.Fatalf("editClear count = %d, want approved edit with keyboard cleared", len(sender.editClear))
+	}
+	if !strings.Contains(sender.editClear[0].text, "Approved. Next: Verify the next bounded step.") {
+		t.Fatalf("plain edit text = %q, want approved next-step text", sender.editClear[0].text)
+	}
+}
+
 func TestHandleTelegramCommandCallbackContinueOnceFailsClosed(t *testing.T) {
 	t.Parallel()
 
@@ -355,6 +404,58 @@ func TestHandleTelegramCommandCallbackContinuationRejectsStaleDecisionID(t *test
 	}
 	if router.callbackRetireChatID != 7 || router.callbackRetireMessageID != 196 || router.callbackRetireSurface != continuationCallbackRetiredSurface {
 		t.Fatalf("retired callback projection = chat:%d msg:%d surface:%q, want 7/196/%s", router.callbackRetireChatID, router.callbackRetireMessageID, router.callbackRetireSurface, continuationCallbackRetiredSurface)
+	}
+}
+
+func TestHandleTelegramCommandCallbackContinuationApproveStaleRuntimeDoesNotTrigger(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := stubCommandRouter{
+		canRestart: true,
+		continuationState: session.ContinuationState{
+			Status:         session.ContinuationStatusPending,
+			DecisionID:     "decision-terminal",
+			RemainingTurns: 1,
+			StageSummary:   "Run already completed work.",
+		},
+		approveContinuationReturn: session.ContinuationState{
+			Status:         session.ContinuationStatusRevoked,
+			DecisionID:     "decision-terminal",
+			RemainingTurns: 0,
+			StageSummary:   "Run already completed work.",
+		},
+		approveContinuationErr: fmt.Errorf("approve continuation: %w", core.ErrContinuationStale),
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, &router, telegram.CallbackQuery{
+		ID:      "cb-terminal-stale",
+		From:    &telegram.User{ID: 1002, Username: "approved"},
+		Data:    encodeContinuationCallbackData("decision-terminal", continuationActionApproveLease),
+		Message: &telegram.Message{MessageID: 198, Chat: &telegram.Chat{ID: 7, Type: "private"}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approveContinuationInput != 7 || router.approveContinuationApprover != 1002 {
+		t.Fatalf("approve input/approver = %d/%d, want 7/1002", router.approveContinuationInput, router.approveContinuationApprover)
+	}
+	if router.triggerContinuationInput != 0 {
+		t.Fatalf("triggerContinuationInput = %d, want 0 for stale runtime approval", router.triggerContinuationInput)
+	}
+	if len(sender.answers) != 1 || sender.answers[0].text != staleContinuationCallbackText {
+		t.Fatalf("answers = %#v, want stale callback answer", sender.answers)
+	}
+	if len(sender.editClear) != 1 || sender.editClear[0].messageID != 198 || !strings.Contains(sender.editClear[0].text, "old buttons cannot approve a changed plan") {
+		t.Fatalf("editClear = %#v, want stale approval card retired with no authority grant", sender.editClear)
+	}
+	if len(sender.editInline) != 0 {
+		t.Fatalf("editInline count = %d, want no fresh approval or approval-window rows", len(sender.editInline))
+	}
+	if router.callbackRetireChatID != 7 || router.callbackRetireMessageID != 198 || router.callbackRetireSurface != continuationCallbackRetiredSurface {
+		t.Fatalf("retired callback projection = chat:%d msg:%d surface:%q, want 7/198/%s", router.callbackRetireChatID, router.callbackRetireMessageID, router.callbackRetireSurface, continuationCallbackRetiredSurface)
 	}
 }
 

@@ -137,6 +137,24 @@ type updateOperationArtifactInput struct {
 	Ref   string `json:"ref"`
 }
 
+type updateOperationRecoveryHandoffInput struct {
+	Contract          string `json:"contract,omitempty"`
+	OperationKind     string `json:"operation_kind,omitempty"`
+	OperationTool     string `json:"operation_tool,omitempty"`
+	RetryPolicy       string `json:"retry_policy,omitempty"`
+	RequiredAuthority string `json:"required_authority,omitempty"`
+	ResourceBlocker   string `json:"resource_blocker,omitempty"`
+	DurableAgentID    string `json:"durable_agent_id,omitempty"`
+	AgentID           string `json:"agent_id,omitempty"`
+	BlockerKind       string `json:"blocker_kind,omitempty"`
+	TaskPacketID      string `json:"task_packet_id,omitempty"`
+	ChildResultID     string `json:"child_result_id,omitempty"`
+	Tool              string `json:"tool,omitempty"`
+	Adapter           string `json:"adapter,omitempty"`
+	DiagnosticOnly    *bool  `json:"diagnostic_only,omitempty"`
+	NoContentProbe    *bool  `json:"no_content_probe,omitempty"`
+}
+
 type updateOperationPlanLeaseLaneInput struct {
 	ID               string   `json:"id,omitempty"`
 	Summary          string   `json:"summary,omitempty"`
@@ -182,22 +200,42 @@ type updateOperationPlanLeaseInput struct {
 }
 
 type requestApprovalInput struct {
-	Objective string                    `json:"objective,omitempty"`
-	Phase     updateOperationPhaseInput `json:"phase"`
+	Action     string                    `json:"action,omitempty"`
+	Objective  string                    `json:"objective,omitempty"`
+	Phase      updateOperationPhaseInput `json:"phase"`
+	ContractID string                    `json:"contract_id,omitempty"`
+}
+
+type authorityBundleInput struct {
+	Action                        string                     `json:"action"`
+	BundleID                      string                     `json:"bundle_id,omitempty"`
+	RequestInstanceID             string                     `json:"request_instance_id,omitempty"`
+	Objective                     string                     `json:"objective,omitempty"`
+	Summary                       string                     `json:"summary,omitempty"`
+	SourceNextActionRecordIDs     []string                   `json:"source_next_action_record_ids,omitempty"`
+	IncludeOpenAuthorityBlockers  bool                       `json:"include_open_authority_blockers,omitempty"`
+	AllowedActions                []string                   `json:"allowed_actions,omitempty"`
+	ForbiddenActions              []string                   `json:"forbidden_actions,omitempty"`
+	StopConditions                []string                   `json:"stop_conditions,omitempty"`
+	PrimaryContinuationContractID string                     `json:"primary_continuation_contract_id,omitempty"`
+	CapabilityRequestIDs          []string                   `json:"capability_request_ids,omitempty"`
+	RequiredCapabilityGrants      []capabilityGrantSpecInput `json:"required_capability_grants,omitempty"`
+	ExpiresAt                     string                     `json:"expires_at,omitempty"`
 }
 
 type updateOperationInput struct {
-	ID        string                         `json:"id,omitempty"`
-	Objective string                         `json:"objective,omitempty"`
-	Status    string                         `json:"status,omitempty"`
-	Stage     string                         `json:"stage,omitempty"`
-	Summary   string                         `json:"summary,omitempty"`
-	Merge     bool                           `json:"merge,omitempty"`
-	Proposal  *updateOperationProposalInput  `json:"proposal,omitempty"`
-	PhasePlan *updateOperationPhasePlanInput `json:"phase_plan,omitempty"`
-	PlanLease *updateOperationPlanLeaseInput `json:"plan_lease,omitempty"`
-	Findings  []updateOperationFindingInput  `json:"findings,omitempty"`
-	Artifacts []updateOperationArtifactInput `json:"artifacts,omitempty"`
+	ID              string                               `json:"id,omitempty"`
+	Objective       string                               `json:"objective,omitempty"`
+	Status          string                               `json:"status,omitempty"`
+	Stage           string                               `json:"stage,omitempty"`
+	Summary         string                               `json:"summary,omitempty"`
+	Merge           bool                                 `json:"merge,omitempty"`
+	Proposal        *updateOperationProposalInput        `json:"proposal,omitempty"`
+	PhasePlan       *updateOperationPhasePlanInput       `json:"phase_plan,omitempty"`
+	PlanLease       *updateOperationPlanLeaseInput       `json:"plan_lease,omitempty"`
+	Findings        []updateOperationFindingInput        `json:"findings,omitempty"`
+	Artifacts       []updateOperationArtifactInput       `json:"artifacts,omitempty"`
+	RecoveryHandoff *updateOperationRecoveryHandoffInput `json:"recovery_handoff,omitempty"`
 }
 
 type toolAuthorityInput struct {

@@ -40,6 +40,7 @@ type commandRouter interface {
 	TailnetStatus(ctx context.Context, senderID int64) (core.TailnetStatusSnapshot, error)
 	TailnetSurfaces(senderID int64) ([]core.TailnetSurfaceStatus, error)
 	TailnetGrantBindings(senderID int64) ([]core.TailnetGrantBindingStatus, error)
+	AuthorityFrontierStatus(ctx context.Context, senderID int64) (core.AuthorityFrontierStatusSnapshot, error)
 	RevokeTailnetSurface(ctx context.Context, senderID int64, surfaceID string, reason string) (core.TailnetSurfaceStatus, bool, error)
 	ContinuationState(chatID int64) (session.ContinuationState, error)
 	ApproveContinuation(chatID int64, approverID int64) (session.ContinuationState, error)
@@ -104,6 +105,14 @@ type approvalWindowRouter interface {
 	CancelApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) (string, error)
 	CancelApprovalWindowOfferResult(ctx context.Context, offerID string, senderID int64) (core.ApprovalWindowCancelResult, error)
 	CloseApprovalWindowOffer(ctx context.Context, offerID string, senderID int64) error
+}
+
+type approvalWindowDurationRouter interface {
+	DefaultApprovalWindowDuration() time.Duration
+}
+
+type postApprovalDefaultWindowSuppressor interface {
+	SuppressPostApprovalDefaultWindowOfferForMessage(ctx context.Context, msg core.InboundMessage, sourceKind string, sourceID string, sourceDecisionKind string) (bool, error)
 }
 
 type commandScopedMemoryRouter interface {
@@ -235,6 +244,8 @@ func handleTelegramCommand(ctx context.Context, sender commandSender, router com
 			return true, err
 		}
 		return true, nil
+	case "frontier":
+		return handleAuthorityFrontierCommand(ctx, router, sender, msg)
 	case "context":
 		snapshot, err := contextSnapshotForCommand(ctx, router, msg)
 		if err != nil {

@@ -102,6 +102,21 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 	if !strings.Contains(out, "review_status: approved") {
 		t.Fatalf("admin request_review output = %q, want approved", out)
 	}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:               key,
+		Owner:             "tool",
+		State:             session.NextActionBlockedNeedsAuthority,
+		SubjectKind:       "capability_request",
+		SubjectRef:        "cap-family-amazon",
+		NextAction:        "review and grant the exact missing capability before retrying the blocked tool invocation",
+		RequiredAuthority: "capability_grant",
+		ResourceBlocker:   "missing_capability_grant",
+		OperationKind:     "capability_grant_review",
+		OperationTool:     "capability_authority",
+		CreatedAt:         time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(missing grant blocker) err = %v", err)
+	}
 
 	out, err = registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
 		"action":"grant_set",
@@ -116,6 +131,15 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 	}
 	if !strings.Contains(out, "[CAPABILITY_GRANT]") || !strings.Contains(out, "status: active") {
 		t.Fatalf("grant_set output = %q, want active grant", out)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(after grant_set) err = %v", err)
+	}
+	for _, action := range open {
+		if action.SubjectKind == "capability_request" && action.SubjectRef == "cap-family-amazon" {
+			t.Fatalf("open next actions = %#v, want capability request blocker resolved by active grant", open)
+		}
 	}
 
 	out, err = registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_authority", json.RawMessage(`{
@@ -165,6 +189,193 @@ func TestCapabilityRequestParentAdminGrantFlow(t *testing.T) {
 	for _, eventType := range []string{core.ExecutionEventCapabilityRequestCreated, core.ExecutionEventCapabilityReviewed, core.ExecutionEventCapabilityGrantChanged} {
 		if !executionEventTypeExists(events, eventType) {
 			t.Fatalf("missing %s event", eventType)
+		}
+	}
+}
+
+func TestCapabilityRequestSubmitPublishesCompiledGrantHandoff(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	requester := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 300}
+
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), requester, key, "capability_request", json.RawMessage(`{
+		"action":"request_submit",
+		"request_id":"cap-github-draft-pr",
+		"kind":"external_account",
+		"target_resource":"github:idolum-ai/CopilotKit",
+		"requested_for":"telegram:300",
+		"purpose":"Push one reviewed branch and open one draft PR.",
+		"risk_class":"external_write",
+		"allowed_actions":["git_push","pull_request_create"],
+		"contract":{"allowed":["push reviewed branch","open draft PR"],"forbidden":["merge","release","print tokens"]},
+		"constraints":{"fork_repo":"idolum-ai/CopilotKit","draft_pr":true},
+		"expires_in_seconds":3600
+	}`))
+	if err != nil {
+		t.Fatalf("capability_request request_submit err = %v", err)
+	}
+	if !strings.Contains(out, "[CAPABILITY_REQUEST]") {
+		t.Fatalf("request_submit output = %q, want capability request", out)
+	}
+	open, err := store.OpenNextActionsBySessionSubject(key, "capability_request", "cap-github-draft-pr", 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionSubject() err = %v", err)
+	}
+	if len(open) != 1 {
+		t.Fatalf("open next actions = %#v, want one compiled grant handoff", open)
+	}
+	action := open[0]
+	if action.State != session.NextActionBlockedNeedsAuthority ||
+		action.OperationTool != "capability_authority" ||
+		action.OperationKind != "capability_grant_review" ||
+		!strings.Contains(action.OperationInputJSON, `"action":"grant_set"`) ||
+		!strings.Contains(action.OperationInputJSON, `"request_id":"cap-github-draft-pr"`) ||
+		!strings.Contains(action.OperationInputJSON, `"target_resource":"github:idolum-ai/CopilotKit"`) ||
+		!strings.Contains(action.OperationInputJSON, `"git_push"`) ||
+		!strings.Contains(action.OperationInputJSON, `"pull_request_create"`) ||
+		!strings.Contains(action.OperationInputJSON, `"expires_in_seconds":3600`) {
+		t.Fatalf("compiled next action = %#v, want exact capability_authority grant_set handoff", action)
+	}
+}
+
+func TestMaterializeMissingGrantRequirementActivatesAlreadyApprovedRequest(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	const requestID = "cap-approved-account-read"
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      requestID,
+		RequestedBy:    "telegram:1002",
+		RequestedFor:   "telegram:2002",
+		AdminPrincipal: "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "account-primary",
+		Purpose:        "already approved account read",
+		Contract:       `{"surface":"account_read"}`,
+		Constraints:    `{"max_items":10}`,
+		ReviewStatus:   session.CapabilityReviewStatusApproved,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest() err = %v", err)
+	}
+
+	request, reviewEventID, action, err := registry.MaterializeMissingGrantRequirement(context.Background(), key, principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 2002}, MissingGrantRequirement{
+		RequestID:          requestID,
+		Kind:               session.CapabilityKindExternalAccount,
+		TargetResource:     "account-primary",
+		GrantedTo:          "telegram:2002",
+		AllowedActions:     []string{"read"},
+		Contract:           `{"surface":"account_read"}`,
+		Constraints:        `{"max_items":10}`,
+		Purpose:            "already approved account read",
+		ReviewSummary:      "Grant account read",
+		OperatorProjection: "Grant account read",
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("MaterializeMissingGrantRequirement() err = %v", err)
+	}
+	if request.RequestID != requestID {
+		t.Fatalf("request = %#v, want %s", request, requestID)
+	}
+	if reviewEventID != 0 {
+		t.Fatalf("reviewEventID = %d, want no new card for already-approved request", reviewEventID)
+	}
+	if action.RecordID == "" {
+		t.Fatalf("action = %#v, want recorded blocker before activation", action)
+	}
+
+	updated, ok, err := store.CapabilityRequest(requestID)
+	if err != nil || !ok {
+		t.Fatalf("CapabilityRequest() ok=%t err=%v", ok, err)
+	}
+	if strings.TrimSpace(updated.GrantID) == "" {
+		t.Fatalf("updated request = %#v, want linked grant", updated)
+	}
+	grant, ok, err := store.CapabilityGrant(updated.GrantID)
+	if err != nil || !ok {
+		t.Fatalf("CapabilityGrant(%q) ok=%t err=%v", updated.GrantID, ok, err)
+	}
+	if grant.Status != session.CapabilityGrantStatusActive || grant.RequestID != requestID || grant.GrantedTo != "telegram:2002" || grant.TargetResource != "account-primary" {
+		t.Fatalf("grant = %#v, want active linked account grant", grant)
+	}
+	open, err := store.OpenNextActionsBySessionSubject(key, "capability_request", requestID, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySessionSubject() err = %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open next actions = %#v, want approved request blocker resolved", open)
+	}
+}
+
+func TestCapabilityGrantSetResolvesRequesterSessionBlocker(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	requesterKey := session.SessionKey{ChatID: 2200, UserID: 220, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "2200"}}
+	adminKey := session.SessionKey{ChatID: 1001, UserID: 1001, Scope: session.ScopeRef{Kind: session.ScopeKindTelegramDM, ID: "1001"}}
+	requester := principal.Principal{Role: principal.RoleApprovedUser, TelegramUserID: 220}
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), requester, requesterKey, "capability_request", json.RawMessage(`{
+		"action":"request_submit",
+		"request_id":"cap-cross-session",
+		"kind":"tool",
+		"target_resource":"diagnostic_tool",
+		"requested_for":"telegram:220",
+		"purpose":"run one approved diagnostic",
+		"risk_class":"authority",
+		"contract":{"bounded_effect":"diagnostic only"},
+		"constraints":{"tool_invocation":{"actions":{"invoke":{}}}}
+	}`)); err != nil {
+		t.Fatalf("request_submit err = %v", err)
+	}
+	if _, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, adminKey, "capability_authority", json.RawMessage(`{
+		"action":"request_review",
+		"request_id":"cap-cross-session",
+		"review_status":"approved",
+		"rationale":"bounded diagnostic approved"
+	}`)); err != nil {
+		t.Fatalf("admin request_review err = %v", err)
+	}
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:               requesterKey,
+		Owner:             "tool",
+		State:             session.NextActionBlockedNeedsAuthority,
+		SubjectKind:       "capability_request",
+		SubjectRef:        "cap-cross-session",
+		NextAction:        "review and grant the exact missing capability before retrying the blocked tool invocation",
+		RequiredAuthority: "capability_grant",
+		ResourceBlocker:   "missing_capability_grant",
+		OperationKind:     "capability_grant_review",
+		OperationTool:     "capability_authority",
+		CreatedAt:         time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(requester blocker) err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, adminKey, "capability_authority", json.RawMessage(`{
+		"action":"grant_set",
+		"request_id":"cap-cross-session",
+		"grant_id":"capg-cross-session",
+		"principal":"telegram:220",
+		"allowed_actions":["invoke"],
+		"expires_in_seconds":3600
+	}`))
+	if err != nil {
+		t.Fatalf("grant_set err = %v", err)
+	}
+	if !strings.Contains(out, "[CAPABILITY_GRANT]") || !strings.Contains(out, "status: active") {
+		t.Fatalf("grant_set output = %q, want active grant", out)
+	}
+	open, err := store.OpenNextActionsBySession(requesterKey, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(requester) err = %v", err)
+	}
+	for _, action := range open {
+		if action.SubjectKind == "capability_request" && action.SubjectRef == "cap-cross-session" {
+			t.Fatalf("requester open next actions = %#v, want blocker resolved by grant from admin session", open)
 		}
 	}
 }
@@ -388,6 +599,152 @@ func TestCapabilityRequestCanQueueReviewEvent(t *testing.T) {
 	}
 }
 
+func TestCapabilityRequestDefaultsReviewEventToCurrentTelegramChat(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_request", json.RawMessage(`{
+		"action":"request_submit",
+		"request_id":"cap-secret-metadata",
+		"kind":"file_access",
+		"target_resource":"/home/example/secrets/oauth-client.json",
+		"purpose":"metadata-only credential-readiness check after explicit operator request",
+		"risk_class":"sensitive",
+		"contract":{"allowed":"existence and redacted metadata only","forbidden":"raw secret output or credential use"},
+		"constraints":{"read_mode":"metadata_only_redacted"}
+	}`))
+	if err != nil {
+		t.Fatalf("capability_request request_submit without explicit review target err = %v", err)
+	}
+	if !strings.Contains(out, "request_id: cap-secret-metadata") || !strings.Contains(out, "review_event_id:") {
+		t.Fatalf("request_submit output = %q, want defaulted review event id", out)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("pending review events len = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.TargetAdminChatID != 1001 || event.TargetScope.Kind != session.ScopeKindTelegramDM || event.TargetScope.ID != "1001" {
+		t.Fatalf("target = chat:%d scope:%#v, want current telegram chat", event.TargetAdminChatID, event.TargetScope)
+	}
+	if !strings.Contains(event.MetadataJSON, `"request_id":"cap-secret-metadata"`) ||
+		!strings.Contains(event.MetadataJSON, `"target_resource":"/home/example/secrets/oauth-client.json"`) {
+		t.Fatalf("MetadataJSON = %q, want defaulted review event metadata", event.MetadataJSON)
+	}
+}
+
+func TestCapabilityRequestDefaultsReviewEventPreservesCurrentTelegramScope(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		key       session.SessionKey
+		wantScope session.ScopeRef
+	}{
+		{
+			name: "group",
+			key: session.SessionKey{
+				ChatID: -100200,
+				UserID: 1001,
+				Scope:  session.ScopeRef{Kind: session.ScopeKindTelegramGroup, ID: "-100200"},
+			},
+			wantScope: session.ScopeRef{Kind: session.ScopeKindTelegramGroup, ID: "-100200"},
+		},
+		{
+			name: "thread",
+			key: session.SessionKey{
+				ChatID: -100200,
+				UserID: 1001,
+				Scope:  session.TelegramThreadScopeRef(-100200, 42),
+			},
+			wantScope: session.ScopeRef{Kind: session.ScopeKindTelegramThread, ID: "-100200:42"},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			registry, store := newDurableAgentToolRegistry(t)
+			admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+			requestID := "cap-default-" + tc.name
+			out, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, tc.key, "capability_request", json.RawMessage(`{
+				"action":"request_submit",
+				"request_id":"`+requestID+`",
+				"kind":"file_access",
+				"target_resource":"/home/example/secrets/oauth-client.json",
+				"purpose":"metadata-only credential-readiness check after explicit operator request",
+				"risk_class":"sensitive",
+				"contract":{"allowed":"existence and redacted metadata only"},
+				"constraints":{"read_mode":"metadata_only_redacted"}
+			}`))
+			if err != nil {
+				t.Fatalf("capability_request request_submit err = %v", err)
+			}
+			if !strings.Contains(out, "review_event_id:") {
+				t.Fatalf("request_submit output = %q, want defaulted review event id", out)
+			}
+
+			events, err := store.PendingReviewEvents(tc.key.ChatID, 10)
+			if err != nil {
+				t.Fatalf("PendingReviewEvents(%d) err = %v", tc.key.ChatID, err)
+			}
+			if len(events) != 1 {
+				t.Fatalf("pending review events len = %d, want 1", len(events))
+			}
+			event := events[0]
+			if event.TargetAdminChatID != tc.key.ChatID {
+				t.Fatalf("TargetAdminChatID = %d, want %d", event.TargetAdminChatID, tc.key.ChatID)
+			}
+			if event.TargetScope.Kind != tc.wantScope.Kind || event.TargetScope.ID != tc.wantScope.ID {
+				t.Fatalf("TargetScope = %#v, want %#v", event.TargetScope, tc.wantScope)
+			}
+			wantSessionID := session.SessionIDFromParts(tc.key.ChatID, 0, tc.wantScope)
+			if event.TargetSessionID != wantSessionID {
+				t.Fatalf("TargetSessionID = %q, want %q", event.TargetSessionID, wantSessionID)
+			}
+		})
+	}
+}
+
+func TestCapabilityRequestWithoutTelegramScopeRemainsLedgerOnly(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	admin := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := session.SessionKey{Scope: session.ScopeRef{Kind: session.ScopeKindDurableAgent, ID: "child", DurableAgentID: "child"}}
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), admin, key, "capability_request", json.RawMessage(`{
+		"action":"request_submit",
+		"request_id":"cap-headless",
+		"kind":"generic_delegation",
+		"target_resource":"headless-worker",
+		"purpose":"record a ledger-only capability request",
+		"risk_class":"low",
+		"contract":{"allowed":"record only"},
+		"constraints":{"review_surface":"external"}
+	}`))
+	if err != nil {
+		t.Fatalf("capability_request request_submit without telegram scope err = %v", err)
+	}
+	if strings.Contains(out, "review_event_id:") {
+		t.Fatalf("request_submit output = %q, did not want default review event without telegram scope", out)
+	}
+
+	events, err := store.PendingReviewEvents(1001, 10)
+	if err != nil {
+		t.Fatalf("PendingReviewEvents() err = %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("pending review events len = %d, want 0", len(events))
+	}
+}
+
 func TestCapabilityGrantEnablesRegisteredToolWithoutRemovedExposureTable(t *testing.T) {
 	t.Parallel()
 
@@ -431,7 +788,10 @@ func TestCapabilityGrantEnablesRegisteredToolWithoutRemovedExposureTable(t *test
 	if !toolDefExists(defs, "browse_page") {
 		t.Fatalf("DefinitionsForPrincipal() missing grant-authorized browse_page: %#v", defs)
 	}
-	out, err := registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{}`))
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	out, err := registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("ExecuteForSessionPrincipal(browse_page) err = %v", err)
 	}
@@ -443,7 +803,7 @@ func TestCapabilityGrantEnablesRegisteredToolWithoutRemovedExposureTable(t *test
 		t.Fatalf("CapabilityGrant() err = %v", err)
 	}
 	if !ok || grant.InvocationCount != 1 {
-		t.Fatalf("CapabilityGrant invocation count = %#v ok=%t, want one runtime invocation", grant, ok)
+		t.Fatalf("CapabilityGrant invocation count = %#v ok=%t, want one logical invocation", grant, ok)
 	}
 }
 

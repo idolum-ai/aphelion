@@ -21,6 +21,8 @@ const (
 	ReviewEventActionMissionAskEdit ReviewEventAction = "mission_ask_edit"
 	ReviewEventActionMissionPark    ReviewEventAction = "mission_park"
 	ReviewEventActionMissionReject  ReviewEventAction = "mission_reject"
+	ReviewEventActionChildWakeRetry ReviewEventAction = "child_wake_retry"
+	ReviewEventActionLookaheadNext  ReviewEventAction = "lookahead_next"
 )
 
 func EncodeReviewEventCallbackData(eventID int64, action ReviewEventAction) string {
@@ -53,7 +55,8 @@ func DecodeReviewEventCallbackData(data string) (eventID int64, action ReviewEve
 func validReviewEventAction(action ReviewEventAction) bool {
 	switch action {
 	case ReviewEventActionApprove, ReviewEventActionReject, ReviewEventActionParentApprove, ReviewEventActionExpand, ReviewEventActionHide,
-		ReviewEventActionMissionAdd, ReviewEventActionMissionAskEdit, ReviewEventActionMissionPark, ReviewEventActionMissionReject:
+		ReviewEventActionMissionAdd, ReviewEventActionMissionAskEdit, ReviewEventActionMissionPark, ReviewEventActionMissionReject,
+		ReviewEventActionChildWakeRetry, ReviewEventActionLookaheadNext:
 		return true
 	default:
 		return false

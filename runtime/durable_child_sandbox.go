@@ -19,11 +19,16 @@ type durableChildSandboxAccess struct {
 	readonlyPaths []string
 	readonlyBinds []sandbox.BindPath
 	env           map[string]string
+	workingRoot   string
 }
 
 func durableChildSandboxAccessFor(binaryPath string, agent core.DurableAgent, store *session.SQLiteStore) (durableChildSandboxAccess, error) {
+	return durableChildSandboxAccessForScope(binaryPath, agent, store, sandbox.Scope{})
+}
+
+func durableChildSandboxAccessForScope(binaryPath string, agent core.DurableAgent, store *session.SQLiteStore, scope sandbox.Scope) (durableChildSandboxAccess, error) {
 	substrate := durableChildSubstrateFor(binaryPath, agent)
-	access := durableChildSandboxAccess{readonlyPaths: append([]string(nil), substrate.ReadonlyPaths...)}
+	access := durableChildSandboxAccess{readonlyPaths: append([]string(nil), substrate.ReadonlyPaths...), workingRoot: strings.TrimSpace(scope.WorkingRoot)}
 	access.readonlyPaths = compactNonEmptyStrings(access.readonlyPaths)
 
 	if err := access.addGrantedCapabilities(agent, store); err != nil {
@@ -155,35 +160,113 @@ func (a *durableChildSandboxAccess) applyGrantMaterialization(grant session.Capa
 	if a == nil {
 		return nil
 	}
+	grantID := strings.TrimSpace(grant.GrantID)
 	if executable := strings.TrimSpace(material.Executable); executable != "" {
 		path, err := durableChildResolveExecutable(executable)
 		if err != nil {
-			return fmt.Errorf("materialize capability grant %s executable %q: %w", strings.TrimSpace(grant.GrantID), executable, err)
+			return fmt.Errorf("materialize capability grant %s executable %q: %w", grantID, executable, err)
 		}
 		a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: path, Target: filepath.ToSlash(filepath.Join("/usr/local/bin", filepath.Base(path)))})
+		if source := durableChildRuntimeBinCompatibilityRoot(filepath.Dir(path), "/usr/local/bin"); source != "" {
+			a.readonlyPaths = append(a.readonlyPaths, source)
+			if workspaceTarget := a.workspaceRuntimeBinCompatibilityTarget(); workspaceTarget != "" {
+				a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: source, Target: workspaceTarget})
+			}
+		}
 	}
 	for _, path := range material.ReadonlyPaths {
 		path = strings.TrimSpace(path)
 		if path == "" {
 			continue
 		}
-		if !filepath.IsAbs(path) {
-			return fmt.Errorf("materialize capability grant %s readonly path must be absolute: %s", strings.TrimSpace(grant.GrantID), path)
+		canonical, err := durableChildCanonicalRuntimeSourcePath(grantID, "readonly path", path)
+		if err != nil {
+			return err
 		}
-		a.readonlyPaths = append(a.readonlyPaths, path)
+		a.readonlyPaths = append(a.readonlyPaths, canonical)
 	}
 	for _, bind := range material.ReadonlyBinds {
-		a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: bind.Source, Target: bind.Target})
+		canonical, err := durableChildCanonicalRuntimeBind(grantID, "readonly bind", bind)
+		if err != nil {
+			return err
+		}
+		a.readonlyBinds = append(a.readonlyBinds, canonical)
+		if source := durableChildRuntimeBinCompatibilityRoot(canonical.Source, canonical.Target); source != "" {
+			a.readonlyPaths = append(a.readonlyPaths, source)
+			if workspaceTarget := a.workspaceRuntimeBinCompatibilityTarget(); workspaceTarget != "" {
+				a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: source, Target: workspaceTarget})
+			}
+		}
 	}
 	for _, bind := range material.SecretBinds {
-		a.readonlyBinds = append(a.readonlyBinds, sandbox.BindPath{Source: bind.Source, Target: bind.Target})
+		canonical, err := durableChildCanonicalRuntimeBind(grantID, "secret bind", bind)
+		if err != nil {
+			return err
+		}
+		a.readonlyBinds = append(a.readonlyBinds, canonical)
 	}
 	for _, name := range material.EnvFromParent {
 		if err := a.inheritEnv(strings.TrimSpace(name)); err != nil {
-			return fmt.Errorf("materialize capability grant %s environment: %w", strings.TrimSpace(grant.GrantID), err)
+			return fmt.Errorf("materialize capability grant %s environment: %w", grantID, err)
 		}
 	}
 	return nil
+}
+
+func durableChildCanonicalRuntimeBind(grantID string, kind string, bind core.ChildRuntimeBind) (sandbox.BindPath, error) {
+	source, err := durableChildCanonicalRuntimeSourcePath(grantID, kind+" source", bind.Source)
+	if err != nil {
+		return sandbox.BindPath{}, err
+	}
+	target := strings.TrimSpace(bind.Target)
+	if target == "" {
+		return sandbox.BindPath{}, fmt.Errorf("materialize capability grant %s %s target is required", strings.TrimSpace(grantID), kind)
+	}
+	target = filepath.Clean(target)
+	if !filepath.IsAbs(target) {
+		return sandbox.BindPath{}, fmt.Errorf("materialize capability grant %s %s target must be absolute: %s", strings.TrimSpace(grantID), kind, bind.Target)
+	}
+	return sandbox.BindPath{Source: source, Target: target}, nil
+}
+
+func durableChildCanonicalRuntimeSourcePath(grantID string, kind string, value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("materialize capability grant %s %s is required", strings.TrimSpace(grantID), kind)
+	}
+	cleaned := filepath.Clean(value)
+	if !filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("materialize capability grant %s %s must be absolute: %s", strings.TrimSpace(grantID), kind, value)
+	}
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("materialize capability grant %s %s %q: resolve symlinks: %w", strings.TrimSpace(grantID), kind, value, err)
+	}
+	if !filepath.IsAbs(resolved) {
+		return "", fmt.Errorf("materialize capability grant %s %s resolved to non-absolute path: %s", strings.TrimSpace(grantID), kind, resolved)
+	}
+	return filepath.Clean(resolved), nil
+}
+
+func (a durableChildSandboxAccess) workspaceRuntimeBinCompatibilityTarget() string {
+	workingRoot := strings.TrimSpace(a.workingRoot)
+	if workingRoot == "" || !filepath.IsAbs(workingRoot) {
+		return ""
+	}
+	return filepath.Join(workingRoot, "runtime-bin")
+}
+
+func durableChildRuntimeBinCompatibilityRoot(source string, target string) string {
+	source = strings.TrimSpace(source)
+	target = filepath.Clean(strings.TrimSpace(target))
+	if source == "" || target != "/usr/local/bin" {
+		return ""
+	}
+	cleaned := filepath.Clean(source)
+	if !filepath.IsAbs(cleaned) || filepath.Base(cleaned) != "runtime-bin" {
+		return ""
+	}
+	return cleaned
 }
 
 func durableChildResolveExecutable(value string) (string, error) {
@@ -192,22 +275,39 @@ func durableChildResolveExecutable(value string) (string, error) {
 		return "", fmt.Errorf("empty executable")
 	}
 	if strings.Contains(value, "/") {
-		cleaned := filepath.Clean(value)
-		if !filepath.IsAbs(cleaned) {
-			return "", fmt.Errorf("executable path must be absolute")
+		resolved, err := durableChildCanonicalRuntimeSourcePath("", "executable", value)
+		if err != nil {
+			return "", err
 		}
-		if info, err := os.Stat(cleaned); err != nil {
+		if info, err := os.Stat(resolved); err != nil {
 			return "", err
 		} else if info.IsDir() {
 			return "", fmt.Errorf("executable path is a directory")
 		}
-		return cleaned, nil
+		return resolved, nil
 	}
 	path, err := exec.LookPath(value)
 	if err != nil {
 		return "", err
 	}
-	return path, nil
+	cleaned := filepath.Clean(path)
+	if !filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("executable path must be absolute")
+	}
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return "", err
+	}
+	cleaned = filepath.Clean(resolved)
+	if !filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("executable path must be absolute")
+	}
+	if info, err := os.Stat(cleaned); err != nil {
+		return "", err
+	} else if info.IsDir() {
+		return "", fmt.Errorf("executable path is a directory")
+	}
+	return cleaned, nil
 }
 
 func (a *durableChildSandboxAccess) inheritEnv(name string) error {

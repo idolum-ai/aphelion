@@ -10,7 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const schemaVersion = 69
+const schemaVersion = 90
 
 type SQLiteStore struct {
 	db     *sql.DB
@@ -167,6 +167,7 @@ func (s *SQLiteStore) init() error {
 			turn_to INTEGER,
 			summary TEXT NOT NULL,
 			metadata_json TEXT,
+			idempotency_key TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'delivered', 'dismissed')),
 			created_at TEXT NOT NULL DEFAULT (datetime('now')),
 			delivered_at TEXT,
@@ -280,16 +281,44 @@ func (s *SQLiteStore) init() error {
 			action TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT '',
 			error_text TEXT NOT NULL DEFAULT '',
+			outcome_status TEXT NOT NULL DEFAULT '',
+			outcome_error_text TEXT NOT NULL DEFAULT '',
 			session_id TEXT NOT NULL DEFAULT '',
 			turn_run_id INTEGER NOT NULL DEFAULT 0,
 			continuation_lease_id TEXT NOT NULL DEFAULT '',
 			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
 			authority_source TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			completed_at TEXT
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_grant ON capability_invocations(grant_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_authority_session ON capability_invocations(session_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_capability_invocations_lease ON capability_invocations(continuation_lease_id, operation_plan_lease_id, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS execution_run_authority (
+			turn_run_id INTEGER PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			principal TEXT NOT NULL DEFAULT '',
+			principal_role TEXT NOT NULL DEFAULT '',
+			execution_species TEXT NOT NULL DEFAULT '',
+			lease_kind TEXT NOT NULL CHECK(lease_kind IN ('continuation_lease', 'operation_plan_lease', 'child_task_attempt')),
+			continuation_lease_id TEXT NOT NULL DEFAULT '',
+			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
+			lease_status TEXT NOT NULL DEFAULT '',
+			lease_class TEXT NOT NULL DEFAULT '',
+			lease_allowed_actions_json TEXT NOT NULL DEFAULT '[]',
+			lease_constraints_json TEXT NOT NULL DEFAULT '{}',
+			lease_remaining_turns INTEGER NOT NULL DEFAULT 0,
+			lease_expires_at TEXT,
+			admitted_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (turn_run_id) REFERENCES turn_runs(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_run_authority_session ON execution_run_authority(session_id, admitted_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_run_authority_lease ON execution_run_authority(lease_kind, continuation_lease_id, operation_plan_lease_id)`,
 		`CREATE TABLE IF NOT EXISTS tool_install_records (
 			tool_name TEXT PRIMARY KEY,
 			installer TEXT NOT NULL DEFAULT '',
@@ -436,6 +465,7 @@ func (s *SQLiteStore) init() error {
 			message_id INTEGER NOT NULL DEFAULT 0,
 			prompt TEXT NOT NULL DEFAULT '',
 			details TEXT NOT NULL DEFAULT '',
+			metadata_json TEXT NOT NULL DEFAULT '{}',
 			rationale TEXT NOT NULL DEFAULT '',
 			artifact_refs_json TEXT NOT NULL DEFAULT '[]',
 			choices_json TEXT NOT NULL DEFAULT '[]',
@@ -751,6 +781,42 @@ func (s *SQLiteStore) init() error {
 		return err
 	}
 	if err := ensureEvidenceLedgerTables(tx); err != nil {
+		return err
+	}
+	if err := ensureExposureProjectionTables(tx); err != nil {
+		return err
+	}
+	if err := ensureEffectAttemptTables(tx); err != nil {
+		return err
+	}
+	if err := ensureJudgmentUseTables(tx); err != nil {
+		return err
+	}
+	if err := ensureJudgmentTables(tx); err != nil {
+		return err
+	}
+	if err := ensureNextActionTables(tx); err != nil {
+		return err
+	}
+	if err := ensureChildTaskTables(tx); err != nil {
+		return err
+	}
+	if err := ensureDurableAgentWakeClaimTables(tx); err != nil {
+		return err
+	}
+	if err := ensureContinuationRecoveryContractTables(tx); err != nil {
+		return err
+	}
+	if err := ensureAuthorityBundleTables(tx); err != nil {
+		return err
+	}
+	if err := ensureIdentificationLedgerTables(tx); err != nil {
+		return err
+	}
+	if err := ensureLookaheadAllowanceTables(tx); err != nil {
+		return err
+	}
+	if err := ensureCurrentSchemaShapeRepairColumns(tx); err != nil {
 		return err
 	}
 	for _, stmt := range telegramIngressSchemaStatements() {

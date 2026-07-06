@@ -12,6 +12,7 @@ import (
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/prompt"
+	"github.com/idolum-ai/aphelion/workspace"
 )
 
 var (
@@ -27,6 +28,8 @@ type ProviderRendererConfig struct {
 	Channel       string
 	Style         string
 	WorkspaceRoot string
+	CacheStrategy string
+	CacheLookback int
 	Reasoning     agent.ReasoningConfig
 	Verbosity     agent.Verbosity
 	MaxTokens     int
@@ -35,6 +38,7 @@ type ProviderRendererConfig struct {
 type ProviderRenderer struct {
 	provider  agent.Provider
 	cfg       ProviderRendererConfig
+	fileCache *promptFileCache
 	mu        sync.Mutex
 	lastUsage core.TokenUsage
 }
@@ -44,14 +48,15 @@ func NewProviderRenderer(provider agent.Provider, cfg ProviderRendererConfig) (*
 		return nil, fmt.Errorf("provider is nil")
 	}
 	return &ProviderRenderer{
-		provider: provider,
-		cfg:      cfg,
+		provider:  provider,
+		cfg:       cfg,
+		fileCache: newPromptFileCache(),
 	}, nil
 }
 
 func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (string, error) {
 	workspaceRoot := firstNonEmpty(req.WorkspaceRoot, r.cfg.WorkspaceRoot)
-	stableFiles, dynamicFiles, err := LoadIdolumPromptFiles(workspaceRoot)
+	stableFiles, dynamicFiles, err := r.loadPromptFiles(workspaceRoot)
 	if err != nil {
 		return "", err
 	}
@@ -77,6 +82,8 @@ func (r *ProviderRenderer) Render(ctx context.Context, req RenderRequest) (strin
 		StableFiles:     stableFiles,
 		DynamicFiles:    dynamicFiles,
 		Runtime:         req.Runtime,
+		CacheStrategy:   r.cfg.CacheStrategy,
+		CacheLookback:   r.cfg.CacheLookback,
 	}
 	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
@@ -134,7 +141,7 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 	}
 
 	workspaceRoot := firstNonEmpty(req.WorkspaceRoot, r.cfg.WorkspaceRoot)
-	stableFiles, dynamicFiles, err := LoadIdolumPromptFiles(workspaceRoot)
+	stableFiles, dynamicFiles, err := r.loadPromptFiles(workspaceRoot)
 	if err != nil {
 		return "", err
 	}
@@ -160,6 +167,8 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 		StableFiles:     stableFiles,
 		DynamicFiles:    dynamicFiles,
 		Runtime:         req.Runtime,
+		CacheStrategy:   r.cfg.CacheStrategy,
+		CacheLookback:   r.cfg.CacheLookback,
 	}
 	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
@@ -207,7 +216,7 @@ func (r *ProviderRenderer) RenderStream(ctx context.Context, req RenderRequest, 
 
 func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (string, error) {
 	workspaceRoot := firstNonEmpty(req.WorkspaceRoot, r.cfg.WorkspaceRoot)
-	stableFiles, dynamicFiles, err := LoadIdolumPromptFiles(workspaceRoot)
+	stableFiles, dynamicFiles, err := r.loadPromptFiles(workspaceRoot)
 	if err != nil {
 		return "", err
 	}
@@ -229,6 +238,8 @@ func (r *ProviderRenderer) Propose(ctx context.Context, req ProposalRequest) (st
 		Mode:              mode,
 		Scene:             firstNonEmpty(req.Scene),
 		Runtime:           req.Runtime,
+		CacheStrategy:     r.cfg.CacheStrategy,
+		CacheLookback:     r.cfg.CacheLookback,
 	}
 	systemBlocks := prompt.BuildFacePromptBlocks(facePrompt)
 	systemPrompt := prompt.RenderSystemBlocks(systemBlocks)
@@ -254,6 +265,32 @@ func (r *ProviderRenderer) ConsumeLastUsage() core.TokenUsage {
 	usage := r.lastUsage
 	r.lastUsage = core.TokenUsage{}
 	return usage
+}
+
+func (r *ProviderRenderer) InvalidatePromptCache(workspaceRoot string) {
+	if r == nil || r.fileCache == nil {
+		return
+	}
+	r.fileCache.invalidate(workspaceRoot)
+}
+
+func (r *ProviderRenderer) loadPromptFiles(workspaceRoot string) ([]workspace.LoadedFile, []workspace.LoadedFile, error) {
+	if r == nil {
+		return LoadIdolumPromptFiles(workspaceRoot)
+	}
+	root := strings.TrimSpace(workspaceRoot)
+	if root == "" {
+		return nil, nil, nil
+	}
+	stableFiles, err := r.fileCache.loadStable(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	dynamicFiles, err := loadFaceFiles(root, defaultDynamicFiles, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	return stableFiles, dynamicFiles, nil
 }
 
 func (r *ProviderRenderer) recordUsage(usage core.TokenUsage) {

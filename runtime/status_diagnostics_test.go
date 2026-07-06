@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,39 @@ func TestStatusDiagnosticsReturnsEmptyWithoutSessionHistory(t *testing.T) {
 	}
 	if exists {
 		t.Fatalf("ContinuationStateIfExists() = %#v, exists=%v; want no row after status probe", state, exists)
+	}
+}
+
+func TestStatusDiagnosticsSurfacesStrandedCuriosityPressureHandoff(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	obs, err := store.RecordCuriosityObservation(curiositySessionKey(), session.CuriosityObservationInput{
+		LeaseID:     "lease-1",
+		CandidateID: "candidate-1",
+		SourceKind:  session.CuriositySourceWorkspace,
+		SourceRef:   "README.md",
+		SubjectKey:  "release-work",
+		Summary:     "README still mentions the release checklist.",
+		ContentHash: "sha256:abc",
+		Confidence:  0.8,
+		ObservedAt:  now,
+	}, now)
+	if err != nil {
+		t.Fatalf("RecordCuriosityObservation() err = %v", err)
+	}
+
+	lines, err := rt.StatusDiagnostics(9222)
+	if err != nil {
+		t.Fatalf("StatusDiagnostics() err = %v", err)
+	}
+	text := strings.Join(lines, "\n")
+	wantID := "observation_id=" + strconv.FormatInt(obs.ID, 10)
+	if !strings.Contains(text, "Curiosity pressure handoff: stranded") || !strings.Contains(text, wantID) {
+		t.Fatalf("StatusDiagnostics() = %q, want stranded curiosity handoff %s", text, wantID)
 	}
 }
 

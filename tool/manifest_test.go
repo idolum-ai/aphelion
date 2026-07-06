@@ -3,7 +3,6 @@
 package tool
 
 import (
-	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -111,10 +110,11 @@ func TestRegistryManifestIncludesExternalManifestAsNonExecutable(t *testing.T) {
 
 	registry := NewRegistry(t.TempDir(), time.Second)
 	_, err := registry.WithExternalToolManifests([]ExternalToolManifest{{
-		Name:      "browse_page",
-		Owner:     "child-alpha",
-		Execution: ExternalToolManifestExecution{Mode: "container", Entry: "ghcr.io/idolum/child-browser-tool:pilot"},
-		IO:        ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`)},
+		Name:        "browse_page",
+		Owner:       "child-alpha",
+		Description: "Fetch a single governed page summary from a URL.",
+		Execution:   ExternalToolManifestExecution{Mode: "container", Entry: "ghcr.io/idolum/child-browser-tool:pilot"},
+		IO:          ExternalToolManifestIO{InputSchema: json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}`)},
 	}})
 	if err != nil {
 		t.Fatalf("WithExternalToolManifests() err = %v", err)
@@ -122,7 +122,7 @@ func TestRegistryManifestIncludesExternalManifestAsNonExecutable(t *testing.T) {
 
 	manifest := registry.Manifest()
 	for _, needle := range []string{
-		"- browse_page: external tool owned by child-alpha",
+		"- browse_page: Fetch a single governed page summary from a URL. External tool owned by child-alpha",
 		"url(string,required)",
 		"executable: false",
 		"reason: external manifest is visible but executor support is not wired yet",
@@ -150,7 +150,10 @@ func TestRegistryExecuteExternalManifestReturnsCleanNonExecutableError(t *testin
 	}
 	grantToolInvoke(t, store, "browse_page", "telegram:1001")
 
-	_, err = registry.ExecuteForSessionPrincipal(context.Background(), principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}, adminSessionKey(), "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	key := adminSessionKey()
+	ctx := authorityRunContextForPrincipal(t, store, key, actor)
+	_, err = registry.ExecuteForSessionPrincipal(ctx, actor, key, "browse_page", json.RawMessage(`{"url":"https://example.com"}`))
 	if err == nil {
 		t.Fatal("ExecuteForSessionPrincipal() err = nil, want non-executable error")
 	}

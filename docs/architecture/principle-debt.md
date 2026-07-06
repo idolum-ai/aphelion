@@ -26,10 +26,56 @@ Status values:
 
 ## Active Debt
 
-None.
+### PD-2026-06-causal-closure
 
-`None.` means no known uncontained principle violation is being carried here.
-Temporary architecture seams belong in the root
+- **Principle:** Fail closed, but stay useful; Short paths to truth; Continuity
+  over productivity theater.
+- **Status:** migrating.
+- **Surface:** Approval, continuation, capability grant, durable-child wake,
+  tool execution, uncertain outcome, and operator projection handoff.
+- **Why it exists:** Execution-authority continuity is implemented as a
+  point-of-use authority spine, but some end-to-end workflows still stop safely
+  without deterministically producing the next durable operator-legible state.
+  Approval, resource denial, uncertain effects, child reports, and phase
+  supersession can require manual reconstruction of the next action. The current
+  migration records `next_action_records` and matching `workflow.next_state`
+  events for approvals, uncertain effects, resource preflight failures, child
+  wakes, and supersession, then validates executable recovery handoffs against a
+  shared transition contract. The debt remains until every execution species
+  emits these records through its real transition path and all operator
+  projections consume the same contract rather than reconstructing nearby state.
+- **Exit gate:** After every operator decision or execution attempt, exactly one
+  durable typed next-state record exists. The state vocabulary may include
+  ready, blocked, verification, waiting, retry, supersession, cancellation, and
+  terminal variants, but each record must name causal IDs, owner, exact next
+  operation or blocker, required authority when applicable, retry semantics,
+  verifier when applicable, and the exposure-safe operator projection to render.
+
+### PD-2026-06-output-exposure
+
+- **Principle:** Authority before capability; Ledger, not vibes; Operational
+  legibility.
+- **Status:** active.
+- **Surface:** Tool result previews, evidence hydration, logs, operator
+  projections, and model context.
+- **Why it exists:** Command effect authorization answers whether an operation
+  may run; it does not answer whether the resulting bytes, paths, config
+  metadata, or diagnostic text may be shown to a given audience. Some output
+  paths still rely on size-bounded previews or source-local redaction rather
+  than one audience-aware exposure projection policy. The first implementation
+  slices project ordinary turn-run tool previews and recovery transition
+  projections through exposure-safe text or protected evidence references; the
+  debt remains active until evidence hydration, logs, non-recovery operator UI,
+  external delivery, and privileged artifact access share the same projection
+  contract.
+- **Exit gate:** Every tool-result exposure path records or consumes a typed
+  sensitivity/provenance judgment and renders an audience-specific projection:
+  redacted view, digest, withheld marker, protected artifact reference, or
+  privileged hydration with audit evidence.
+
+When this section has no entries, write `None.` to mean no known uncontained
+principle violation is being carried here. Temporary architecture seams belong
+in the root
 [`ARCHITECTURE_WAIVERS.md`](../../ARCHITECTURE_WAIVERS.md) ledger; broader
 pressure that needs watchfulness but not immediate remediation belongs under
 Monitored Tensions.
@@ -42,6 +88,19 @@ Monitored Tensions.
   keep package ownership, capability boundaries, authority gates, evidence
   paths, and recovery surfaces explicit as the system grows. This is not a
   mandate to delete capabilities; it is a mandate to prevent platform gravity.
+- **Execution-authority continuity:** Durable children, operation-plan work,
+  recovery, scheduled continuations, and ordinary interactive turns can enter
+  shared execution machinery. Their lease/grant/resource authority must survive
+  that crossing without becoming either lost or self-asserted. The current
+  point-of-use gate is covered by the conformance matrix in
+  [`execution-authority-continuity.md`](execution-authority-continuity.md); the
+  longer-term pressure is to avoid drifting into per-species authority copies.
+- **Descriptor-relative file authority:** Linux native file access uses
+  no-follow descriptor traversal beneath the selected sandbox or `file_access`
+  root for read, write, list, and search. The remaining tension is to keep this
+  invariant covered as new native operations appear, and to be explicit that
+  hard-link provenance and non-Linux parity are not solved by the Linux
+  descriptor path.
 
 ## Machine-Checked Paths
 

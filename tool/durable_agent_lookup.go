@@ -44,6 +44,25 @@ func (r *Registry) resolveDurableAgent(raw string) (*core.DurableAgent, error) {
 	return nil, fmt.Errorf("durable agent %q not found; available agent_ids: %s", agentID, strings.Join(durableAgentIDOptions(agents), ", "))
 }
 
+func (r *Registry) resolveDurableAgentExact(raw string) (*core.DurableAgent, error) {
+	agentID := strings.TrimSpace(raw)
+	if agentID == "" {
+		return nil, fmt.Errorf("durable_agent agent_id is required")
+	}
+	agent, err := r.store.DurableAgent(agentID)
+	if err == nil {
+		return agent, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	agents, listErr := r.store.ListDurableAgents()
+	if listErr != nil || len(agents) == 0 {
+		return nil, fmt.Errorf("durable agent %q not found; wake_once requires exact agent_id", agentID)
+	}
+	return nil, fmt.Errorf("durable agent %q not found; wake_once requires exact agent_id; available agent_ids: %s", agentID, strings.Join(durableAgentIDOptions(agents), ", "))
+}
+
 func findDurableAgentCandidate(agents []core.DurableAgent, raw string) *core.DurableAgent {
 	normalized := normalizeDurableAgentReference(raw)
 	if normalized == "" {

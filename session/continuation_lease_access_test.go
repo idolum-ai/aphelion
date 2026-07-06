@@ -117,6 +117,14 @@ func TestContinuationLeaseClassConstraintsRequireExactActions(t *testing.T) {
 			wantValue: "local workspace/repository only",
 		},
 		{
+			name:      "repo publication",
+			class:     ContinuationLeaseClassRepoPublication,
+			action:    "git_push",
+			explicit:  "git_push",
+			wantKey:   "scope",
+			wantValue: "remote repository publication only",
+		},
+		{
 			name:      "capability grant",
 			class:     ContinuationLeaseClassCapabilityGrant,
 			action:    "grant_set",
@@ -166,6 +174,7 @@ func TestContinuationLeaseClassInferenceAndBoundaries(t *testing.T) {
 		{name: "deploy", risk: "deploy", actions: []string{"service_restart"}, effect: "restart and verify", want: ContinuationLeaseClassDeployRestart},
 		{name: "workspace", risk: "workspace_write", actions: []string{"focused_tests"}, effect: "patch locally", want: ContinuationLeaseClassLocalWorkspace},
 		{name: "local commit", risk: "workspace_commit_then_repo_write_bounded", actions: []string{"git_commit_validated_slices"}, effect: "commit validated local slices", want: ContinuationLeaseClassLocalWorkspace},
+		{name: "repo publication", risk: "commit", actions: []string{"git_commit", "git_push"}, effect: "commit and push current branch", want: ContinuationLeaseClassRepoPublication},
 		{name: "private data intake", risk: "private_data_intake", actions: nil, effect: "process resource-owner preferences after opt-in", want: ContinuationLeaseClassDataAccess},
 		{name: "email and public web read", risk: "external_account_email_read_public_web_read", actions: nil, effect: "read the approved mailbox and public links after profile approval", want: ContinuationLeaseClassDataAccess},
 	}
@@ -408,5 +417,173 @@ func TestAuthorityContractCompilerAllowsSpecificCommitAndDeployGuardrails(t *tes
 	})
 	if !deploy.Valid() {
 		t.Fatalf("deploy compilation = %#v, want valid with deploy guardrails", deploy)
+	}
+}
+
+func TestAuthorityContractCompilerCanonicalizesRepoPushProse(t *testing.T) {
+	proposal := ReconcileActionProposalAuthority(ActionProposal{
+		RiskClass:        "commit",
+		Summary:          "Bundle artifacts, commit them, and push to the imex repository.",
+		BoundedEffect:    "Commit validated local changes and push the current branch to origin.",
+		AllowedActions:   []string{"git_commit"},
+		ForbiddenActions: []string{"deploy", "restart_service"},
+	})
+	if !actionListMatches(proposal.AllowedActions, "git_push") {
+		t.Fatalf("allowed_actions = %#v, want canonical git_push", proposal.AllowedActions)
+	}
+
+	compilation := CompileActionProposalAuthorityContract(proposal)
+	if !compilation.Valid() {
+		t.Fatalf("compilation = %#v, want valid commit/push authority", compilation)
+	}
+	if compilation.WorkAction != AuthorityWorkActionCommit || !actionListMatches(compilation.AllowedActions, "git_push") {
+		t.Fatalf("compilation = %#v, want commit work action with git_push allowed", compilation)
+	}
+	if compilation.Contract.LeaseClass != ContinuationLeaseClassRepoPublication {
+		t.Fatalf("lease class = %q, want repo publication", compilation.Contract.LeaseClass)
+	}
+	claim, ok := AuthorityInterpretationClaimFor("commit", proposal.AllowedActions, proposal.BoundedEffect)
+	if !ok || claim.AuthorityClass != "repo_publication" {
+		t.Fatalf("authority claim = %#v ok=%v, want repo_publication", claim, ok)
+	}
+}
+
+func TestAuthorityContractCompilerRejectsPushProseForbiddenGitPush(t *testing.T) {
+	compilation := CompileActionProposalAuthorityContract(ActionProposal{
+		RiskClass:        "commit",
+		Summary:          "Bundle artifacts, commit them, and push to the imex repository.",
+		BoundedEffect:    "Commit validated local changes and push the current branch to origin.",
+		AllowedActions:   []string{"git_commit", "push_main_to_origin"},
+		ForbiddenActions: []string{"git_push", "deploy", "restart_service"},
+	})
+	if compilation.Valid() {
+		t.Fatalf("compilation = %#v, want invalid push/prose contradiction", compilation)
+	}
+	if len(compilation.Contradictions) == 0 || compilation.Contradictions[0].Reason != AuthorityContradictionReasonProposalRequiresForbiddenGitPush {
+		t.Fatalf("contradictions = %#v, want proposal_requires_forbidden_git_push", compilation.Contradictions)
+	}
+}
+
+func TestAuthorityContractCompilerDoesNotTreatForbiddenProjectionAsPositivePush(t *testing.T) {
+	compilation := CompileActionProposalAuthorityContract(ActionProposal{
+		RiskClass:      "authority_bundle",
+		OperatorTitle:  "Approve bounded authority bundle",
+		PlanTitle:      "Approve bounded authority bundle",
+		Summary:        "Open one GitHub issue documenting the generated schema blocker.",
+		WhyNow:         "A typed recovery path requested one bounded authority bundle instead of repeated one-step approvals.",
+		BoundedEffect:  "Allowed: github_issue_create\nForbidden: github_repo_push, force-push, push to another branch or repository\nStop: stop after the issue is opened or a typed blocker appears",
+		AllowedActions: []string{"approve_authority_bundle", "github_issue_create"},
+		ForbiddenActions: []string{
+			"github_repo_push",
+			"force-push",
+			"push to another branch or repository",
+		},
+	})
+	if !compilation.Valid() {
+		t.Fatalf("compilation = %#v, want forbidden projection text not to imply positive git push", compilation)
+	}
+}
+
+func TestAuthorityContractCompilerAllowsScopedPushWithOtherBranchForbidden(t *testing.T) {
+	compilation := CompileActionProposalAuthorityContract(ActionProposal{
+		RiskClass:     "authority_bundle",
+		Summary:       "Exact bundle: commit only tool/capability.go capability materialization fix and push to origin/fix/child-wake-authority-context.",
+		BoundedEffect: "Allowed: stage only tool/capability.go, create one local commit, push to origin/fix/child-wake-authority-context. Forbidden: stage/commit unrelated files, force-push, push to another branch or repository.",
+		AllowedActions: []string{
+			"stage only tool/capability.go",
+			"create one local commit for the capability materialization fix",
+			"push to origin/fix/child-wake-authority-context",
+		},
+		ForbiddenActions: []string{
+			"stage/commit unrelated files",
+			"force-push",
+			"push to another branch or repository",
+			"deploy/restart",
+		},
+	})
+	if !compilation.Valid() {
+		t.Fatalf("compilation = %#v, want scoped branch push to coexist with forbidding other push targets", compilation)
+	}
+}
+
+func TestAuthorityContractCompilerRejectsUnscopedPushWithOtherBranchForbidden(t *testing.T) {
+	compilation := CompileActionProposalAuthorityContract(ActionProposal{
+		RiskClass:        "authority_bundle",
+		Summary:          "Commit and push the local fix.",
+		BoundedEffect:    "Commit and push the local fix.",
+		AllowedActions:   []string{"git_push"},
+		ForbiddenActions: []string{"push to another branch or repository"},
+	})
+	if compilation.Valid() {
+		t.Fatalf("compilation = %#v, want unscoped git_push to conflict with forbidding other push targets", compilation)
+	}
+}
+
+func TestAuthorityContractCompilerPushNegationIsClauseScoped(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+		want bool
+	}{
+		{name: "negated same clause", text: "Do not push the release branch to origin.", want: false},
+		{name: "without same clause", text: "Commit locally without pushing the release branch to origin.", want: false},
+		{name: "separate semicolon clause", text: "Do not commit yet; push the release branch to origin.", want: true},
+		{name: "separate sentence", text: "Do not commit yet. Push the release branch to origin.", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proposal := ReconcileActionProposalAuthority(ActionProposal{
+				RiskClass:        "commit",
+				Summary:          tc.text,
+				BoundedEffect:    "Act only on the stated repository step.",
+				AllowedActions:   []string{"git_commit"},
+				ForbiddenActions: []string{"deploy", "restart_service"},
+			})
+			got := actionListMatches(proposal.AllowedActions, "git_push")
+			if got != tc.want {
+				t.Fatalf("allowed_actions = %#v, git_push=%v want %v", proposal.AllowedActions, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAuthorityContractCompilerDoesNotInferFigurativePush(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		summary       string
+		boundedEffect string
+	}{
+		{
+			name:          "push through issue",
+			summary:       "Push through the confusing issue and report what you find.",
+			boundedEffect: "Read status only and summarize the next investigative step.",
+		},
+		{
+			name:          "push for signoff",
+			summary:       "Push for sign-off on the review plan.",
+			boundedEffect: "Draft the local review plan and stop before repository publication.",
+		},
+		{
+			name:          "push changes through review",
+			summary:       "Push the changes through review.",
+			boundedEffect: "Inspect the branch status and recommend a review path without pushing to a remote.",
+		},
+		{
+			name:          "push product direction",
+			summary:       "Push the product direction forward.",
+			boundedEffect: "Summarize the next product decision and stop.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proposal := ReconcileActionProposalAuthority(ActionProposal{
+				RiskClass:        "read_only_review",
+				Summary:          tc.summary,
+				BoundedEffect:    tc.boundedEffect,
+				AllowedActions:   []string{"inspect_status"},
+				ForbiddenActions: []string{"git_push", "deploy", "restart_service"},
+			})
+			if actionListMatches(proposal.AllowedActions, "git_push") {
+				t.Fatalf("allowed_actions = %#v, did not want figurative push to add git_push", proposal.AllowedActions)
+			}
+		})
 	}
 }

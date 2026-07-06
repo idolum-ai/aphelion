@@ -36,10 +36,13 @@ These invariants are normative for architecture and requirements alignment:
 - [design-principles.md](design-principles.md): project-level design principles for Aphelion as a governed, locally operable outpost.
 - [influences-and-departures.md](influences-and-departures.md): attribution ledger for nearby systems, theory, and the points where Aphelion deliberately diverges.
 - [agency-evaluation-methodology.md](agency-evaluation-methodology.md): grounded behavioral methodology for measuring agency prompt quality, drift, and hard authority failures.
+- [per-role-model-evaluation.md](per-role-model-evaluation.md): draft methodology for evidence-backed model bakeoffs and per-role cost/quality frontiers.
 - [principle-debt.md](principle-debt.md): active implementation gaps against the design principles.
 - [package-ownership.md](package-ownership.md): runtime/turn/pipeline ownership boundaries.
 - [memory-perception-budget.md](memory-perception-budget.md): memory as governed perception under context scarcity, with posture-specific layer accounting.
 - [turn-lifecycle.md](turn-lifecycle.md): stage order across interactive, maintenance, and durable-child turns.
+- [execution-authority-continuity.md](execution-authority-continuity.md): horizontal lease/grant/resource continuity contract across execution species.
+- [identification-game.md](identification-game.md): draft direction for roguelike-style authority discovery, per-plan identification ledgers, lookahead, and tail-shedding in long-running plans.
 - [action-proposal-continuation-lease.md](action-proposal-continuation-lease.md): typed bounded action proposals and consumable continuation leases.
 - [constitution-and-delivery.md](constitution-and-delivery.md): floor/scene and commit/delivery invariants.
 - [operator-presentation-contract.md](operator-presentation-contract.md): human Telegram/CLI presentation contract for status, rationale, next action, details, and evidence.
@@ -47,6 +50,8 @@ These invariants are normative for architecture and requirements alignment:
 - [durable-children.md](durable-children.md): bounded child topology and adapters.
 - [thread-native-durable-work.md](thread-native-durable-work.md): exploratory direction for making threads the operator-facing durable work primitive while keeping authority typed.
 - [universal-evidence-ledger.md](universal-evidence-ledger.md): immutable typed evidence objects, audited hydration, and long-horizon context-fidelity invariants.
+- [effect-attempt-ledger.md](effect-attempt-ledger.md): durable side-effect attempt lifecycle for retry-safe completion and verification.
+- [interpretation-surfaces.md](interpretation-surfaces.md): registry and design note for interpretation, judgment, and dissent surfaces that translate messy input into typed runtime objects, then preserve how later evidence can challenge settled conclusions.
 - [state-surfaces.md](state-surfaces.md): transcript, sidecars, and operational state.
 - [transparent-execution-sequence.md](transparent-execution-sequence.md): canonical execution timeline and projection/fallback precedence.
 - [external-tools-pilot.md](external-tools-pilot.md): current external-tool lifecycle, execution-mode semantics, and bundled `browse_page` pilot.

@@ -55,6 +55,13 @@ func (p *toolProgressReporter) recordProgressEvent(eventType string, status stri
 	)
 }
 
+func progressEventPhase(runID int64) string {
+	if runID > 0 {
+		return "turn_bound"
+	}
+	return "pre_turn"
+}
+
 func deliberationControlRows(runID int64, details bool) [][]telegram.InlineButton {
 	if runID <= 0 {
 		return nil

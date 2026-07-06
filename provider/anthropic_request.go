@@ -26,8 +26,9 @@ func (a *Anthropic) buildRequest(messages []agent.Message, tools []agent.ToolDef
 	if len(toolDefs) > 0 {
 		reqBody.Tools = toolDefs
 	}
-	if thinking := anthropicThinkingForOptions(opts.Reasoning, a.maxTokens); thinking != nil {
+	if thinking, outputConfig := anthropicThinkingForOptions(a.model, opts.Reasoning, a.maxTokens); thinking != nil {
 		reqBody.Thinking = thinking
+		reqBody.OutputConfig = outputConfig
 	}
 	return reqBody
 }
@@ -118,13 +119,14 @@ func clearLastToolCacheControl(tools []anthropicToolDef) bool {
 }
 
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens,omitempty"`
-	System    []anthropicContent `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-	Tools     []anthropicToolDef `json:"tools,omitempty"`
-	Thinking  *anthropicThinking `json:"thinking,omitempty"`
-	Stream    bool               `json:"stream,omitempty"`
+	Model        string                 `json:"model"`
+	MaxTokens    int                    `json:"max_tokens,omitempty"`
+	System       []anthropicContent     `json:"system,omitempty"`
+	Messages     []anthropicMessage     `json:"messages"`
+	Tools        []anthropicToolDef     `json:"tools,omitempty"`
+	Thinking     *anthropicThinking     `json:"thinking,omitempty"`
+	OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
+	Stream       bool                   `json:"stream,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -156,7 +158,11 @@ type anthropicContent struct {
 
 type anthropicThinking struct {
 	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
+}
+
+type anthropicOutputConfig struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 type anthropicImageSource struct {
@@ -298,12 +304,65 @@ func toAnthropicTools(tools []agent.ToolDef, cache anthropicCachePolicy) []anthr
 	return out
 }
 
-func anthropicThinkingForOptions(reasoning agent.ReasoningConfig, maxTokens int) *anthropicThinking {
+func anthropicThinkingForOptions(model string, reasoning agent.ReasoningConfig, maxTokens int) (*anthropicThinking, *anthropicOutputConfig) {
 	effort := agent.ReasoningEffort(strings.ToLower(strings.TrimSpace(string(reasoning.Effort))))
 	if effort == "" || effort == agent.ReasoningEffortNone {
-		return nil
+		return nil, nil
 	}
 
+	if anthropicThinkingModeForModel(model) == anthropicThinkingAdaptive {
+		return &anthropicThinking{Type: "adaptive"}, &anthropicOutputConfig{
+			Effort: anthropicAdaptiveEffort(effort),
+		}
+	}
+
+	return anthropicManualThinkingForOptions(effort, maxTokens), nil
+}
+
+type anthropicThinkingMode string
+
+const (
+	anthropicThinkingManual   anthropicThinkingMode = "manual"
+	anthropicThinkingAdaptive anthropicThinkingMode = "adaptive"
+)
+
+func anthropicThinkingModeForModel(model string) anthropicThinkingMode {
+	value := strings.ToLower(strings.TrimSpace(model))
+	value = strings.TrimPrefix(value, "anthropic/")
+	value = strings.ReplaceAll(value, ".", "-")
+	switch {
+	case strings.HasPrefix(value, "claude-fable-5"),
+		strings.HasPrefix(value, "claude-mythos-5"),
+		strings.HasPrefix(value, "claude-sonnet-4-6"),
+		strings.HasPrefix(value, "claude-opus-4-5"),
+		strings.HasPrefix(value, "claude-opus-4-6"),
+		strings.HasPrefix(value, "claude-opus-4-7"),
+		strings.HasPrefix(value, "claude-opus-4-8"):
+		return anthropicThinkingAdaptive
+	case strings.HasPrefix(value, "claude-opus-"):
+		if strings.HasPrefix(value, "claude-opus-4-1") {
+			return anthropicThinkingManual
+		}
+		return anthropicThinkingAdaptive
+	default:
+		return anthropicThinkingManual
+	}
+}
+
+func anthropicAdaptiveEffort(effort agent.ReasoningEffort) string {
+	switch effort {
+	case agent.ReasoningEffortLow,
+		agent.ReasoningEffortMedium,
+		agent.ReasoningEffortHigh:
+		return string(effort)
+	case agent.ReasoningEffortXHigh:
+		return string(agent.ReasoningEffortHigh)
+	default:
+		return string(agent.ReasoningEffortMedium)
+	}
+}
+
+func anthropicManualThinkingForOptions(effort agent.ReasoningEffort, maxTokens int) *anthropicThinking {
 	usable := maxTokens - 1
 	if usable < 1024 {
 		return nil

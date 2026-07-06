@@ -4,7 +4,10 @@ package session
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1333,6 +1336,1399 @@ func TestMigratesSchemaV67ToV68MediaPickerSourceIngressColumns(t *testing.T) {
 	assertSchemaVersion(t, store.db, schemaVersion)
 	assertSQLiteColumn(t, store.db, "telegram_media_thread_pickers", "source_ingress_surface")
 	assertSQLiteColumn(t, store.db, "telegram_media_thread_pickers", "source_ingress_update_id")
+}
+
+func TestMigratesSchemaV69ToV70EffectAttempts(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v69.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v69 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (69)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v69 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v69 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v69) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "effect_attempts", "attempt_id")
+	assertSQLiteColumn(t, store.db, "effect_attempts", "subject_json")
+	assertSQLiteColumn(t, store.db, "effect_attempts", "evidence_refs_json")
+}
+
+func TestMigratesSchemaV73ToV74Judgments(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v73.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v73 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (73)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v73 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v73 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v73) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "judgments", "judgment_id")
+	assertSQLiteColumn(t, store.db, "judgments", "content_hash")
+	assertSQLiteColumn(t, store.db, "judgment_challenge_events", "event_id")
+	assertSQLiteColumn(t, store.db, "judgment_challenge_events", "operational_response")
+}
+
+func TestMigratesSchemaV74ToV75NextActions(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v74.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v74 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (74)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v74 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v74 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v74) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "next_action_records", "record_id")
+	assertSQLiteColumn(t, store.db, "next_action_records", "operator_projection")
+	assertSQLiteColumn(t, store.db, "next_action_records", "operation_input_json")
+}
+
+func TestMigratesSchemaV75ToV76NextActionOperations(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v75.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v75 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE next_action_records (
+			record_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			turn_run_id INTEGER NOT NULL DEFAULT 0,
+			owner TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT '',
+			subject_kind TEXT NOT NULL DEFAULT '',
+			subject_ref TEXT NOT NULL DEFAULT '',
+			causal_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_action TEXT NOT NULL DEFAULT '',
+			required_authority TEXT NOT NULL DEFAULT '',
+			resource_blocker TEXT NOT NULL DEFAULT '',
+			verifier TEXT NOT NULL DEFAULT '',
+			retry_policy TEXT NOT NULL DEFAULT '',
+			operator_projection TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			resolved_at TEXT
+		)`,
+		`INSERT INTO schema_version(version) VALUES (75)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v75 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v75 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v75) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "next_action_records", "operation_kind")
+	assertSQLiteColumn(t, store.db, "next_action_records", "operation_tool")
+	assertSQLiteColumn(t, store.db, "next_action_records", "operation_input_json")
+}
+
+func TestCurrentSchemaRepairsLegacyColumnDrift(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-current-shape-drift.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open current drift db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE next_action_records (
+			record_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			turn_run_id INTEGER NOT NULL DEFAULT 0,
+			owner TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT '',
+			subject_kind TEXT NOT NULL DEFAULT '',
+			subject_ref TEXT NOT NULL DEFAULT '',
+			causal_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_action TEXT NOT NULL DEFAULT '',
+			required_authority TEXT NOT NULL DEFAULT '',
+			resource_blocker TEXT NOT NULL DEFAULT '',
+			verifier TEXT NOT NULL DEFAULT '',
+			retry_policy TEXT NOT NULL DEFAULT '',
+			operator_projection TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			resolved_at TEXT
+		)`,
+		`CREATE TABLE review_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			source_session_id TEXT,
+			source_chat_id INTEGER NOT NULL DEFAULT 0,
+			source_user_id INTEGER NOT NULL DEFAULT 0,
+			source_role TEXT NOT NULL,
+			source_scope_kind TEXT NOT NULL DEFAULT '',
+			source_scope_id TEXT NOT NULL DEFAULT '',
+			source_durable_agent_id TEXT NOT NULL DEFAULT '',
+			target_session_id TEXT,
+			target_chat_id INTEGER NOT NULL DEFAULT 0,
+			target_scope_kind TEXT NOT NULL DEFAULT '',
+			target_scope_id TEXT NOT NULL DEFAULT '',
+			target_durable_agent_id TEXT NOT NULL DEFAULT '',
+			turn_from INTEGER,
+			turn_to INTEGER,
+			summary TEXT NOT NULL,
+			metadata_json TEXT,
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			delivered_at TEXT
+		)`,
+		`CREATE TABLE capability_invocations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			grant_id TEXT NOT NULL,
+			principal TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			error_text TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			turn_run_id INTEGER NOT NULL DEFAULT 0,
+			continuation_lease_id TEXT NOT NULL DEFAULT '',
+			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
+			authority_source TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE turn_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL,
+			status TEXT NOT NULL,
+			request_text TEXT NOT NULL,
+			started_at TEXT NOT NULL DEFAULT (datetime('now')),
+			completed_at TEXT,
+			last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
+			last_tool_name TEXT,
+			last_tool_preview TEXT,
+			tool_calls_started INTEGER NOT NULL DEFAULT 0,
+			tool_calls_finished INTEGER NOT NULL DEFAULT 0,
+			last_tool_result_preview TEXT,
+			last_tool_error TEXT,
+			progress_message_id INTEGER,
+			error_text TEXT,
+			recovery_summary TEXT,
+			recovery_logged_at TEXT
+		)`,
+		`CREATE TABLE approval_window_offers (
+			offer_id TEXT PRIMARY KEY,
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			admin_user_id INTEGER NOT NULL DEFAULT 0,
+			session_id TEXT NOT NULL DEFAULT '',
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			source_kind TEXT NOT NULL DEFAULT '',
+			source_id TEXT NOT NULL DEFAULT '',
+			source_decision_kind TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			expires_at TEXT NOT NULL,
+			used_at TEXT,
+			closed_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE telegram_media_thread_pickers (
+			chat_id INTEGER NOT NULL,
+			picker_message_id INTEGER NOT NULL,
+			source_message_id INTEGER NOT NULL DEFAULT 0,
+			inbound_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'pending',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY(chat_id, picker_message_id)
+		)`,
+		`CREATE TABLE durable_agent_remote_enrollments (
+			agent_id TEXT PRIMARY KEY,
+			parent_control_url TEXT NOT NULL DEFAULT '',
+			protocol_version TEXT NOT NULL DEFAULT 'v1',
+			status TEXT NOT NULL DEFAULT 'active',
+			last_sequence INTEGER NOT NULL DEFAULT 0,
+			enrolled_at TEXT,
+			last_seen_at TEXT,
+			revoked_at TEXT,
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE durable_agent_control_receipts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id TEXT NOT NULL,
+			message_id TEXT NOT NULL,
+			message_kind TEXT NOT NULL,
+			sequence INTEGER NOT NULL,
+			received_at TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(agent_id, message_id)
+		)`,
+		`CREATE TABLE child_task_packets (
+			packet_id TEXT PRIMARY KEY,
+			task_lease_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			task_kind TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'queued',
+			authority_kind TEXT NOT NULL DEFAULT '',
+			authority_id TEXT NOT NULL DEFAULT '',
+			grant_id TEXT NOT NULL DEFAULT '',
+			request_id TEXT NOT NULL DEFAULT '',
+			target_resource TEXT NOT NULL DEFAULT '',
+			required_action TEXT NOT NULL DEFAULT '',
+			input_json TEXT NOT NULL DEFAULT '{}',
+			result_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			terminal_at TEXT
+		)`,
+		`CREATE TABLE child_task_results (
+			result_id TEXT PRIMARY KEY,
+			packet_id TEXT NOT NULL,
+			task_lease_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			result_kind TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			blocker_kind TEXT NOT NULL DEFAULT '',
+			error_text TEXT NOT NULL DEFAULT '',
+			evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_state TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE child_task_outcome_intents (
+			intent_id TEXT PRIMARY KEY,
+			packet_id TEXT NOT NULL DEFAULT '',
+			result_id TEXT NOT NULL DEFAULT '',
+			attempt_id TEXT NOT NULL DEFAULT '',
+			kind TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			payload_json TEXT NOT NULL DEFAULT '{}',
+			result_ref TEXT NOT NULL DEFAULT '',
+			attempts INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			applied_at TEXT
+		)`,
+		fmt.Sprintf(`INSERT INTO schema_version(version) VALUES (%d)`, schemaVersion),
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create current drift fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close current drift db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(current drift) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "next_action_records", "operation_kind")
+	assertSQLiteColumn(t, store.db, "next_action_records", "operation_tool")
+	assertSQLiteColumn(t, store.db, "next_action_records", "operation_input_json")
+	assertSQLiteColumn(t, store.db, "review_events", "delivery_message_id")
+	assertSQLiteColumn(t, store.db, "review_events", "idempotency_key")
+	assertSQLiteColumn(t, store.db, "capability_invocations", "outcome_status")
+	assertSQLiteColumn(t, store.db, "capability_invocations", "outcome_error_text")
+	assertSQLiteColumn(t, store.db, "capability_invocations", "completed_at")
+	assertSQLiteColumn(t, store.db, "turn_runs", "turn_index")
+	assertSQLiteColumn(t, store.db, "turn_runs", "provider_cache_write_tokens")
+	assertSQLiteColumn(t, store.db, "approval_window_offers", "opened_lease_id")
+	assertSQLiteColumn(t, store.db, "approval_window_offers", "opened_override_id")
+	assertSQLiteColumn(t, store.db, "telegram_media_thread_pickers", "source_ingress_surface")
+	assertSQLiteColumn(t, store.db, "telegram_media_thread_pickers", "source_ingress_update_id")
+	assertSQLiteColumn(t, store.db, "durable_agent_remote_enrollments", "tailnet_tags_json")
+	assertSQLiteColumn(t, store.db, "durable_agent_control_receipts", "response_json")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_owner")
+	assertSQLiteColumn(t, store.db, "child_task_results", "intent_set_fingerprint")
+	assertSQLiteColumn(t, store.db, "child_task_outcome_intents", "idempotency_key")
+	assertSQLiteColumn(t, store.db, "child_task_outcome_intents", "dead_letter_at")
+	if summary, err := store.VerifyCriticalSchemaShape(); err != nil {
+		t.Fatalf("VerifyCriticalSchemaShape() err = %v", err)
+	} else if !strings.Contains(summary, "schema_version=") || !strings.Contains(summary, "critical_columns=") {
+		t.Fatalf("VerifyCriticalSchemaShape() = %q, want version and checked column count", summary)
+	}
+}
+
+func TestMigratesSchemaV75ToV80ChildTasks(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v75.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v75 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (75)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v75 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v75 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v75) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "child_task_packets", "packet_id")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "task_lease_id")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "active_attempt_id")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_owner")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_generation")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "fencing_token")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_expires_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_heartbeat_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_released_at")
+	assertSQLiteColumn(t, store.db, "child_task_results", "result_id")
+	assertSQLiteColumn(t, store.db, "child_task_results", "attempt_id")
+	assertSQLiteColumn(t, store.db, "child_task_results", "lease_owner")
+	assertSQLiteColumn(t, store.db, "child_task_results", "lease_generation")
+	assertSQLiteColumn(t, store.db, "child_task_results", "fencing_token")
+	assertSQLiteColumn(t, store.db, "child_task_results", "next_state")
+}
+
+func TestMigratesDraftSchemaV76ToV80ChildTaskAttempts(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v76.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v76 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (76)`,
+		`CREATE TABLE child_task_packets (
+			packet_id TEXT PRIMARY KEY,
+			task_lease_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			task_kind TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'queued',
+			authority_kind TEXT NOT NULL DEFAULT '',
+			authority_id TEXT NOT NULL DEFAULT '',
+			grant_id TEXT NOT NULL DEFAULT '',
+			request_id TEXT NOT NULL DEFAULT '',
+			target_resource TEXT NOT NULL DEFAULT '',
+			required_action TEXT NOT NULL DEFAULT '',
+			input_json TEXT NOT NULL DEFAULT '{}',
+			result_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			terminal_at TEXT
+		)`,
+		`CREATE TABLE child_task_results (
+			result_id TEXT PRIMARY KEY,
+			packet_id TEXT NOT NULL,
+			task_lease_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			result_kind TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			blocker_kind TEXT NOT NULL DEFAULT '',
+			error_text TEXT NOT NULL DEFAULT '',
+			evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_state TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v76 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v76 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v76) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "child_task_results", "attempt_id")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "active_attempt_id")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_owner")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_generation")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "fencing_token")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_expires_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_heartbeat_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_released_at")
+	assertSQLiteColumn(t, store.db, "child_task_results", "lease_owner")
+	assertSQLiteColumn(t, store.db, "child_task_results", "lease_generation")
+	assertSQLiteColumn(t, store.db, "child_task_results", "fencing_token")
+}
+
+func TestMigratesDraftSchemaV77ToV80ChildTaskFencing(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v77.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v77 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (77)`,
+		`CREATE TABLE child_task_packets (
+			packet_id TEXT PRIMARY KEY,
+			task_lease_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			task_kind TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'queued',
+			authority_kind TEXT NOT NULL DEFAULT '',
+			authority_id TEXT NOT NULL DEFAULT '',
+			grant_id TEXT NOT NULL DEFAULT '',
+			request_id TEXT NOT NULL DEFAULT '',
+			target_resource TEXT NOT NULL DEFAULT '',
+			required_action TEXT NOT NULL DEFAULT '',
+			input_json TEXT NOT NULL DEFAULT '{}',
+			result_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			terminal_at TEXT
+		)`,
+		`CREATE TABLE child_task_results (
+			result_id TEXT PRIMARY KEY,
+			packet_id TEXT NOT NULL,
+			attempt_id TEXT NOT NULL DEFAULT '',
+			task_lease_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			result_kind TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			blocker_kind TEXT NOT NULL DEFAULT '',
+			error_text TEXT NOT NULL DEFAULT '',
+			evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_state TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v77 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v77 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v77) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "child_task_packets", "active_attempt_id")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_owner")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_generation")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "fencing_token")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_expires_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_heartbeat_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_released_at")
+	assertSQLiteColumn(t, store.db, "child_task_results", "lease_owner")
+	assertSQLiteColumn(t, store.db, "child_task_results", "lease_generation")
+	assertSQLiteColumn(t, store.db, "child_task_results", "fencing_token")
+}
+
+func TestMigratesDraftSchemaV78ToV80ChildTaskLeases(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v78.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v78 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`INSERT INTO schema_version(version) VALUES (78)`,
+		`CREATE TABLE child_task_packets (
+			packet_id TEXT PRIMARY KEY,
+			task_lease_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			task_kind TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'queued',
+			authority_kind TEXT NOT NULL DEFAULT '',
+			authority_id TEXT NOT NULL DEFAULT '',
+			grant_id TEXT NOT NULL DEFAULT '',
+			request_id TEXT NOT NULL DEFAULT '',
+			target_resource TEXT NOT NULL DEFAULT '',
+			required_action TEXT NOT NULL DEFAULT '',
+			input_json TEXT NOT NULL DEFAULT '{}',
+			active_attempt_id TEXT NOT NULL DEFAULT '',
+			lease_generation INTEGER NOT NULL DEFAULT 0,
+			fencing_token TEXT NOT NULL DEFAULT '',
+			result_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			terminal_at TEXT
+		)`,
+		`CREATE TABLE child_task_results (
+			result_id TEXT PRIMARY KEY,
+			packet_id TEXT NOT NULL,
+			attempt_id TEXT NOT NULL DEFAULT '',
+			lease_generation INTEGER NOT NULL DEFAULT 0,
+			fencing_token TEXT NOT NULL DEFAULT '',
+			task_lease_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			result_kind TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			blocker_kind TEXT NOT NULL DEFAULT '',
+			error_text TEXT NOT NULL DEFAULT '',
+			evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_state TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v78 fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v78 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v78) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_owner")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_expires_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_heartbeat_at")
+	assertSQLiteColumn(t, store.db, "child_task_packets", "lease_released_at")
+	assertSQLiteColumn(t, store.db, "child_task_results", "lease_owner")
+}
+
+func TestMigratesSchemaV82ToV83ContinuationRecoveryContracts(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v82.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v82 db: %v", err)
+	}
+	key := SessionKey{ChatID: 9182, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "9182"}}
+	sessionID := SessionIDForKey(key)
+	validLegacy := `{
+		"action":"request_continuation_lease",
+		"lease_class":"child_wake",
+		"principal":"telegram:1001",
+		"allowed_actions":["wake_named_child"],
+		"constraints":{"agent_id":"child-alpha"},
+		"tool":"durable_agent",
+		"tool_action":"wake_once",
+		"grant_id":"grant-child-alpha-wake",
+		"grant_target_resource":"durable_agent:child-alpha:wake_once",
+		"request_instance_id":"migration-child-alpha-request-1",
+		"agent_id":"child-alpha",
+		"recovery_contract":"aphelion.recovery_handoff.v1",
+		"recovery_operation_kind":"continuation_lease_request",
+		"retry_after_lease":true
+	}`
+	malformedLegacy := `{"action":"request_continuation_lease","lease_class":"child_wake","request_instance_id":"bad"}`
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE next_action_records (
+			record_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			turn_run_id INTEGER NOT NULL DEFAULT 0,
+			owner TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT '',
+			subject_kind TEXT NOT NULL DEFAULT '',
+			subject_ref TEXT NOT NULL DEFAULT '',
+			causal_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_action TEXT NOT NULL DEFAULT '',
+			required_authority TEXT NOT NULL DEFAULT '',
+			resource_blocker TEXT NOT NULL DEFAULT '',
+			verifier TEXT NOT NULL DEFAULT '',
+			retry_policy TEXT NOT NULL DEFAULT '',
+			operation_kind TEXT NOT NULL DEFAULT '',
+			operation_tool TEXT NOT NULL DEFAULT '',
+			operation_input_json TEXT NOT NULL DEFAULT '',
+			operator_projection TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			resolved_at TEXT
+		)`,
+		`INSERT INTO schema_version(version) VALUES (82)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v82 fixture: %v", err)
+		}
+	}
+	insertNextAction := func(recordID string, raw string, createdAt time.Time) {
+		t.Helper()
+		if _, err := db.Exec(`
+			INSERT INTO next_action_records(
+				record_id, session_id, chat_id, user_id, scope_kind, scope_id,
+				owner, state, subject_kind, subject_ref, next_action,
+				required_authority, resource_blocker, operation_kind, operation_tool,
+				operation_input_json, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			recordID, sessionID, key.ChatID, key.UserID, string(key.Scope.Kind), key.Scope.ID,
+			"migration-test", string(NextActionBlockedNeedsAuthority), "continuation_lease_request", "child_wake:child-alpha", "approve child wake",
+			string(ContinuationLeaseClassChildWake), "missing_continuation_lease", "continuation_lease_request", "request_approval",
+			raw, createdAt.UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			t.Fatalf("insert v82 next action %s: %v", recordID, err)
+		}
+	}
+	insertNextAction("legacy-valid-child-wake", validLegacy, time.Now().UTC().Add(-time.Minute))
+	insertNextAction("legacy-malformed-child-wake", malformedLegacy, time.Now().UTC())
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v82 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v82) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteTable(t, store.db, "continuation_recovery_contracts")
+
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	if len(open) != 1 || open[0].RecordID != "legacy-valid-child-wake" {
+		t.Fatalf("open migrated next actions = %#v, want only valid legacy handoff", open)
+	}
+	var projection map[string]any
+	if err := json.Unmarshal([]byte(open[0].OperationInputJSON), &projection); err != nil {
+		t.Fatalf("unmarshal migrated operation input: %v", err)
+	}
+	if projection["action"] != "request_continuation_lease" || strings.TrimSpace(fmt.Sprint(projection["contract_id"])) == "" {
+		t.Fatalf("migrated operation input = %#v, want contract projection", projection)
+	}
+	if _, ok := projection["lease_class"]; ok {
+		t.Fatalf("migrated operation input = %#v, want legacy lease fields removed", projection)
+	}
+	contractID := strings.TrimSpace(fmt.Sprint(projection["contract_id"]))
+	contract, ok, err := store.ContinuationRecoveryContract(contractID)
+	if err != nil {
+		t.Fatalf("ContinuationRecoveryContract(%q) err = %v", contractID, err)
+	}
+	if !ok {
+		t.Fatalf("ContinuationRecoveryContract(%q) ok=false", contractID)
+	}
+	if contract.RequestInstanceID != "migration-child-alpha-request-1" || contract.AgentID != "child-alpha" || contract.LeaseClass != ContinuationLeaseClassChildWake {
+		t.Fatalf("migrated contract = %#v, want exact child_wake contract", contract)
+	}
+
+	var resolvedAt sql.NullString
+	if err := store.db.QueryRow(`SELECT resolved_at FROM next_action_records WHERE record_id = ?`, "legacy-malformed-child-wake").Scan(&resolvedAt); err != nil {
+		t.Fatalf("query malformed legacy row: %v", err)
+	}
+	if !resolvedAt.Valid || strings.TrimSpace(resolvedAt.String) == "" {
+		t.Fatalf("malformed legacy row resolved_at = %#v, want terminalized", resolvedAt)
+	}
+}
+
+func TestMigratesSchemaV83ToV84AllowsChildTaskExecutionAuthority(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v83-child-task-authority.db")
+	seed, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(seed current schema) err = %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v83 db: %v", err)
+	}
+	for _, stmt := range []string{
+		`DROP INDEX IF EXISTS idx_execution_run_authority_session`,
+		`DROP INDEX IF EXISTS idx_execution_run_authority_lease`,
+		`DROP TABLE IF EXISTS execution_run_authority`,
+		`CREATE TABLE execution_run_authority (
+			turn_run_id INTEGER PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			principal TEXT NOT NULL DEFAULT '',
+			principal_role TEXT NOT NULL DEFAULT '',
+			execution_species TEXT NOT NULL DEFAULT '',
+			lease_kind TEXT NOT NULL CHECK(lease_kind IN ('continuation_lease', 'operation_plan_lease')),
+			continuation_lease_id TEXT NOT NULL DEFAULT '',
+			operation_plan_lease_id TEXT NOT NULL DEFAULT '',
+			lease_status TEXT NOT NULL DEFAULT '',
+			lease_class TEXT NOT NULL DEFAULT '',
+			lease_allowed_actions_json TEXT NOT NULL DEFAULT '[]',
+			lease_constraints_json TEXT NOT NULL DEFAULT '{}',
+			lease_remaining_turns INTEGER NOT NULL DEFAULT 0,
+			lease_expires_at TEXT,
+			admitted_at TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (turn_run_id) REFERENCES turn_runs(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX idx_execution_run_authority_session ON execution_run_authority(session_id, admitted_at DESC)`,
+		`CREATE INDEX idx_execution_run_authority_lease ON execution_run_authority(lease_kind, continuation_lease_id, operation_plan_lease_id)`,
+		`DELETE FROM schema_version`,
+		`INSERT INTO schema_version(version) VALUES (83)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v83 execution authority fixture: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v83 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v83) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+
+	key := SessionKey{ChatID: 9484, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindDurableAgent, ID: "child-alpha"}}
+	run, err := store.BeginTurnRun(key, TurnRunKindInteractive, "child task authority after migration")
+	if err != nil {
+		t.Fatalf("BeginTurnRun() err = %v", err)
+	}
+	_, err = store.UpsertExecutionRunAuthority(ExecutionRunAuthority{
+		TurnRunID:        run.ID,
+		SessionID:        run.SessionID,
+		ChatID:           run.ChatID,
+		UserID:           run.UserID,
+		Scope:            run.Scope,
+		Principal:        "durable_agent:child-alpha",
+		PrincipalRole:    "durable_agent",
+		ExecutionSpecies: "durable_child_wake",
+		LeaseKind:        ExecutionAuthorityLeaseKindChildTask,
+		LeaseStatus:      string(ChildTaskPacketInProgress),
+		LeaseClass:       ContinuationLeaseClassChildWake,
+		LeaseConstraints: map[string]string{
+			"agent_id":         "child-alpha",
+			"packet_id":        "child_task:migrated",
+			"attempt_id":       "child_attempt:migrated",
+			"lease_owner":      "worker:migrated",
+			"lease_generation": "1",
+			"fencing_token":    "fence:migrated",
+		},
+		LeaseAllowedActions: []string{"invoke_granted_child_tools"},
+		LeaseRemainingTurns: 1,
+		LeaseExpiresAt:      time.Now().UTC().Add(time.Hour),
+		AdmittedAt:          time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertExecutionRunAuthority(child_task_attempt after v84 migration) err = %v", err)
+	}
+}
+
+func TestTerminalizeLegacyContinuationRecoveryContractsMatchesContractIDFieldExactly(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+	key := SessionKey{ChatID: 7311, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "7311"}}
+	now := time.Now().UTC()
+	legacyContractID := "crc-legacy-exact-field"
+	if _, err := store.db.Exec(`
+		INSERT INTO continuation_recovery_contracts(
+			contract_id, contract_version, request_instance_id, contract_hash,
+			session_id, subject_kind, subject_ref, status, principal, lease_class,
+			allowed_actions_json, constraints_json, tool, tool_action, agent_id,
+			resource, grant_id, grant_target_resource, retry_operation_json,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, legacyContractID, ContinuationRecoveryContractVersionV1, "legacy-exact-field-request", "sha256:legacy",
+		SessionIDForKey(key), "continuation_lease_request", "child_wake:child-alpha", string(ContinuationRecoveryContractStatusRecorded), "telegram:1001", string(ContinuationLeaseClassChildWake),
+		`["wake_named_child"]`, `{"agent_id":"child-alpha"}`, "durable_agent", "wake_once", "child-alpha",
+		"", "grant-child-alpha", "durable_agent:child-alpha:wake_once", `{"contract":"aphelion.recovery_retry.v1"}`,
+		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("insert legacy continuation recovery contract: %v", err)
+	}
+	records := []struct {
+		id    string
+		input string
+	}{
+		{
+			id:    "next-legacy-exact-field",
+			input: `{"action":"request_continuation_lease","contract_id":"crc-legacy-exact-field"}`,
+		},
+		{
+			id:    "next-legacy-substring-only",
+			input: `{"action":"request_continuation_lease","contract_id":"crc-other-contract","note":"diagnostic text mentions crc-legacy-exact-field but is not the handoff contract"}`,
+		},
+	}
+	for _, record := range records {
+		if _, err := store.RecordNextAction(NextActionInput{
+			RecordID:           record.id,
+			Key:                key,
+			Owner:              "legacy-contract-test",
+			State:              NextActionBlockedNeedsAuthority,
+			SubjectKind:        "continuation_lease_request",
+			SubjectRef:         record.id,
+			NextAction:         "materialize continuation approval",
+			RequiredAuthority:  string(ContinuationLeaseClassChildWake),
+			ResourceBlocker:    "missing_continuation_lease",
+			OperationKind:      "continuation_lease_request",
+			OperationTool:      "request_approval",
+			OperationInputJSON: record.input,
+			CreatedAt:          now,
+		}); err != nil {
+			t.Fatalf("RecordNextAction(%s) err = %v", record.id, err)
+		}
+	}
+
+	tx, err := store.db.Begin()
+	if err != nil {
+		t.Fatalf("Begin() err = %v", err)
+	}
+	if err := terminalizeLegacyContinuationRecoveryContracts(tx); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("terminalizeLegacyContinuationRecoveryContracts() err = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit() err = %v", err)
+	}
+
+	assertNextActionState := func(recordID string, want NextActionState, wantResolved bool) {
+		t.Helper()
+		var state string
+		var resolvedAt sql.NullString
+		if err := store.db.QueryRow(`SELECT state, resolved_at FROM next_action_records WHERE record_id = ?`, recordID).Scan(&state, &resolvedAt); err != nil {
+			t.Fatalf("query next action %s: %v", recordID, err)
+		}
+		if state != string(want) || resolvedAt.Valid != wantResolved {
+			t.Fatalf("next action %s state=%q resolved=%t, want state=%q resolved=%t", recordID, state, resolvedAt.Valid, want, wantResolved)
+		}
+	}
+	assertNextActionState("next-legacy-exact-field", NextActionSuperseded, true)
+	assertNextActionState("next-legacy-substring-only", NextActionBlockedNeedsAuthority, false)
+}
+
+func TestMigratesSchemaV85ToV86GenericRecoveryOperationKinds(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v85-generic-recovery.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v85 db: %v", err)
+	}
+	key := SessionKey{ChatID: 9186, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "9186"}}
+	sessionID := SessionIDForKey(key)
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE next_action_records (
+			record_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			turn_run_id INTEGER NOT NULL DEFAULT 0,
+			owner TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT '',
+			subject_kind TEXT NOT NULL DEFAULT '',
+			subject_ref TEXT NOT NULL DEFAULT '',
+			causal_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_action TEXT NOT NULL DEFAULT '',
+			required_authority TEXT NOT NULL DEFAULT '',
+			resource_blocker TEXT NOT NULL DEFAULT '',
+			verifier TEXT NOT NULL DEFAULT '',
+			retry_policy TEXT NOT NULL DEFAULT '',
+			operation_kind TEXT NOT NULL DEFAULT '',
+			operation_tool TEXT NOT NULL DEFAULT '',
+			operation_input_json TEXT NOT NULL DEFAULT '',
+			operator_projection TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			resolved_at TEXT
+		)`,
+		`INSERT INTO schema_version(version) VALUES (85)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v85 fixture: %v", err)
+		}
+	}
+	insertNextAction := func(recordID string, operationKind string, requiredAuthority string, resourceBlocker string, operationInput string, resolved bool) {
+		t.Helper()
+		var resolvedAt any
+		if resolved {
+			resolvedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		if _, err := db.Exec(`
+			INSERT INTO next_action_records(
+				record_id, session_id, chat_id, user_id, scope_kind, scope_id,
+				owner, state, subject_kind, subject_ref, next_action,
+				required_authority, resource_blocker, operation_kind, operation_tool,
+				operation_input_json, created_at, resolved_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			recordID, sessionID, key.ChatID, key.UserID, string(key.Scope.Kind), key.Scope.ID,
+			"migration-test", string(NextActionBlockedNeedsResourceRepair), "task_packet", "child_task:"+recordID, "recover",
+			requiredAuthority, resourceBlocker, operationKind, "update_operation",
+			operationInput, time.Now().UTC().Format(time.RFC3339Nano), resolvedAt,
+		); err != nil {
+			t.Fatalf("insert v85 next action %s: %v", recordID, err)
+		}
+	}
+	insertNextAction(
+		"legacy-child-runtime",
+		"child_tool_runtime_repair",
+		"child_tool_runtime_repair",
+		"tool_runtime_not_executable",
+		`{"durable_agent_id":"child-alpha","child_blocker_kind":"tool_runtime_not_executable","summary":"repair runtime"}`,
+		false,
+	)
+	insertNextAction(
+		"legacy-operator-rewrite",
+		"typed_operation_required",
+		"typed_operation_required",
+		"",
+		`{"reason":"dynamic_shell"}`,
+		false,
+	)
+	insertNextAction(
+		"resolved-legacy-child",
+		"child_resource_repair",
+		"child_resource_repair",
+		"resource_permission_denied",
+		`{"durable_agent_id":"child-resolved"}`,
+		true,
+	)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v85 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v85) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession() err = %v", err)
+	}
+	byID := map[string]NextActionRecord{}
+	for _, action := range open {
+		byID[action.RecordID] = action
+	}
+	child := byID["legacy-child-runtime"]
+	if child.OperationKind != NextActionOperationKindDurableChildRecovery || child.RequiredAuthority != NextActionOperationKindDurableChildRecovery {
+		t.Fatalf("migrated child action = %#v, want durable_child_recovery kind and authority", child)
+	}
+	childInput := map[string]any{}
+	if err := json.Unmarshal([]byte(child.OperationInputJSON), &childInput); err != nil {
+		t.Fatalf("unmarshal child operation input: %v", err)
+	}
+	if childInput["recovery_operation_kind"] != NextActionOperationKindDurableChildRecovery ||
+		childInput["recovery_family"] != NextActionOperationKindDurableChildRecovery ||
+		childInput["legacy_operation_kind"] != "child_tool_runtime_repair" ||
+		childInput["blocker_kind"] != "tool_runtime_not_executable" ||
+		childInput["recovery_action"] != "tool_runtime_not_executable" {
+		t.Fatalf("migrated child operation input = %#v, want generic recovery envelope with legacy blocker labels", childInput)
+	}
+
+	rewrite := byID["legacy-operator-rewrite"]
+	if rewrite.OperationKind != NextActionOperationKindOperatorRewrite || rewrite.RequiredAuthority != NextActionOperationKindOperatorRewrite {
+		t.Fatalf("migrated operator action = %#v, want operator_rewrite kind and authority", rewrite)
+	}
+	rewriteInput := map[string]any{}
+	if err := json.Unmarshal([]byte(rewrite.OperationInputJSON), &rewriteInput); err != nil {
+		t.Fatalf("unmarshal rewrite operation input: %v", err)
+	}
+	if rewriteInput["recovery_operation_kind"] != NextActionOperationKindOperatorRewrite ||
+		rewriteInput["legacy_operation_kind"] != "typed_operation_required" ||
+		rewriteInput["rewrite_reason"] != "dynamic_shell" {
+		t.Fatalf("migrated rewrite operation input = %#v, want generic operator rewrite envelope", rewriteInput)
+	}
+
+	var resolvedKind string
+	if err := store.db.QueryRow(`SELECT operation_kind FROM next_action_records WHERE record_id = ?`, "resolved-legacy-child").Scan(&resolvedKind); err != nil {
+		t.Fatalf("query resolved legacy row: %v", err)
+	}
+	if resolvedKind != "child_resource_repair" {
+		t.Fatalf("resolved legacy operation kind = %q, want unchanged resolved row", resolvedKind)
+	}
+}
+
+func TestMigratesSchemaV86ToV87RetiresLegacyContinuationRecoveryContracts(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v86-retire-legacy-recovery.db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open v86 db: %v", err)
+	}
+	key := SessionKey{ChatID: 9187, UserID: 1001, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "9187"}}
+	sessionID := SessionIDForKey(key)
+	legacyContractID := "cr:v1-legacy-live"
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (
+			version INTEGER NOT NULL,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE continuation_recovery_contracts (
+			contract_id TEXT PRIMARY KEY,
+			contract_version TEXT NOT NULL DEFAULT '',
+			request_instance_id TEXT NOT NULL DEFAULT '',
+			contract_hash TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL DEFAULT '',
+			subject_kind TEXT NOT NULL DEFAULT '',
+			subject_ref TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			principal TEXT NOT NULL DEFAULT '',
+			lease_class TEXT NOT NULL DEFAULT '',
+			allowed_actions_json TEXT NOT NULL DEFAULT '[]',
+			constraints_json TEXT NOT NULL DEFAULT '{}',
+			tool TEXT NOT NULL DEFAULT '',
+			tool_action TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
+			resource TEXT NOT NULL DEFAULT '',
+			grant_id TEXT NOT NULL DEFAULT '',
+			grant_target_resource TEXT NOT NULL DEFAULT '',
+			retry_operation_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE next_action_records (
+			record_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			chat_id INTEGER NOT NULL DEFAULT 0,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			scope_kind TEXT NOT NULL DEFAULT '',
+			scope_id TEXT NOT NULL DEFAULT '',
+			durable_agent_id TEXT NOT NULL DEFAULT '',
+			turn_run_id INTEGER NOT NULL DEFAULT 0,
+			owner TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT '',
+			subject_kind TEXT NOT NULL DEFAULT '',
+			subject_ref TEXT NOT NULL DEFAULT '',
+			causal_refs_json TEXT NOT NULL DEFAULT '[]',
+			next_action TEXT NOT NULL DEFAULT '',
+			required_authority TEXT NOT NULL DEFAULT '',
+			resource_blocker TEXT NOT NULL DEFAULT '',
+			verifier TEXT NOT NULL DEFAULT '',
+			retry_policy TEXT NOT NULL DEFAULT '',
+			operation_kind TEXT NOT NULL DEFAULT '',
+			operation_tool TEXT NOT NULL DEFAULT '',
+			operation_input_json TEXT NOT NULL DEFAULT '',
+			operator_projection TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			resolved_at TEXT
+		)`,
+		`INSERT INTO schema_version(version) VALUES (86)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create v86 fixture: %v", err)
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO continuation_recovery_contracts(
+			contract_id, contract_version, request_instance_id, contract_hash,
+			subject_kind, subject_ref, status, principal, lease_class,
+			allowed_actions_json, constraints_json, tool, tool_action,
+			agent_id, grant_id, grant_target_resource, retry_operation_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		legacyContractID, ContinuationRecoveryContractVersionV1, "legacy-live-request", "sha256:legacy",
+		"continuation_lease_request", "child_wake:child-alpha", string(ContinuationRecoveryContractStatusRecorded), "telegram:1001", string(ContinuationLeaseClassChildWake),
+		`["wake_named_child"]`, `{"agent_id":"child-alpha"}`, "durable_agent", "wake_once",
+		"child-alpha", "grant-child-alpha-wake", "durable_agent:child-alpha:wake_once", `{"tool":"durable_agent"}`,
+	); err != nil {
+		t.Fatalf("insert v1 recovery contract: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO next_action_records(
+			record_id, session_id, chat_id, user_id, scope_kind, scope_id,
+			owner, state, subject_kind, subject_ref, next_action,
+			required_authority, resource_blocker, operation_kind, operation_tool,
+			operation_input_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		"legacy-v1-handoff", sessionID, key.ChatID, key.UserID, string(key.Scope.Kind), key.Scope.ID,
+		"migration-test", string(NextActionBlockedNeedsAuthority), "continuation_lease_request", "child_wake:child-alpha", "approve child wake",
+		string(ContinuationLeaseClassChildWake), "missing_continuation_lease", "continuation_lease_request", "request_approval",
+		`{"action":"request_continuation_lease","contract_id":"`+legacyContractID+`"}`, time.Now().UTC().Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert v1 handoff: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close v86 db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v86) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+
+	var contractStatus string
+	if err := store.db.QueryRow(`SELECT status FROM continuation_recovery_contracts WHERE contract_id = ?`, legacyContractID).Scan(&contractStatus); err != nil {
+		t.Fatalf("query legacy contract status: %v", err)
+	}
+	if contractStatus != string(ContinuationRecoveryContractStatusTerminal) {
+		t.Fatalf("legacy contract status = %q, want terminal", contractStatus)
+	}
+	var actionState string
+	var resolvedAt sql.NullString
+	if err := store.db.QueryRow(`SELECT state, resolved_at FROM next_action_records WHERE record_id = ?`, "legacy-v1-handoff").Scan(&actionState, &resolvedAt); err != nil {
+		t.Fatalf("query legacy handoff: %v", err)
+	}
+	if actionState != string(NextActionSuperseded) || !resolvedAt.Valid || strings.TrimSpace(resolvedAt.String) == "" {
+		t.Fatalf("legacy handoff state=%q resolved_at=%v, want superseded resolved row", actionState, resolvedAt)
+	}
+}
+
+func TestMigratesSchemaV87ToV88IdentificationLedger(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v87-identification-ledger.db")
+	seed, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(seed current schema) err = %v", err)
+	}
+	if _, err := seed.db.Exec(`DROP TABLE IF EXISTS identification_ledger_observations`); err != nil {
+		t.Fatalf("drop identification_ledger_observations: %v", err)
+	}
+	if _, err := seed.db.Exec(`DROP TABLE IF EXISTS identification_ledger_entries`); err != nil {
+		t.Fatalf("drop identification_ledger_entries: %v", err)
+	}
+	if _, err := seed.db.Exec(`DELETE FROM schema_version`); err != nil {
+		t.Fatalf("delete schema_version: %v", err)
+	}
+	if _, err := seed.db.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion87); err != nil {
+		t.Fatalf("insert v87 schema_version: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v87) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteTable(t, store.db, "identification_ledger_entries")
+	assertSQLiteTable(t, store.db, "identification_ledger_observations")
+	assertSQLiteColumn(t, store.db, "identification_ledger_entries", "expires_at")
+	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "method")
+	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "last_observed_at")
+	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "occurrence_count")
+}
+
+func TestMigratesSchemaV88ToV89LookaheadAllowancesAndActorProvenance(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "sessions-v88-identification-ledger.db")
+	seed, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(seed current schema) err = %v", err)
+	}
+	for _, stmt := range []string{
+		`DROP TABLE IF EXISTS authority_lookahead_allowances`,
+		`DROP TABLE IF EXISTS identification_ledger_observations`,
+		`CREATE TABLE identification_ledger_observations (
+			observation_id TEXT PRIMARY KEY,
+			entry_id TEXT NOT NULL,
+			method TEXT NOT NULL DEFAULT '' CHECK(method IN ('collision', 'static', 'lookahead', 'operator')),
+			property TEXT NOT NULL DEFAULT '' CHECK(property IN ('approval_class', 'tool', 'resource', 'retryability', 'bundle_fit', 'contract')),
+			value TEXT NOT NULL DEFAULT '',
+			evidence_ref TEXT NOT NULL DEFAULT '',
+			observed_at TEXT NOT NULL DEFAULT '',
+			last_observed_at TEXT NOT NULL DEFAULT '',
+			occurrence_count INTEGER NOT NULL DEFAULT 1,
+			expires_at TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY(entry_id) REFERENCES identification_ledger_entries(entry_id) ON DELETE CASCADE
+		)`,
+		`DELETE FROM identification_ledger_entries`,
+		`INSERT INTO identification_ledger_entries(
+			entry_id, plan_id, plan_version, session_id, step_ref, shape_hash, label_ref, status, created_at, updated_at
+		) VALUES (
+			'ident:v88-entry', 'plan:v88', 'current', 'telegram_dm:1001', 'step:v88', 'shape:v88', 'crc-v88', 'proposed', '2026-07-03T00:00:00Z', '2026-07-03T00:00:00Z'
+		)`,
+		`INSERT INTO identification_ledger_observations(
+			observation_id, entry_id, method, property, value, evidence_ref, observed_at, last_observed_at, occurrence_count
+		) VALUES (
+			'idobs:v88-observation', 'ident:v88-entry', 'lookahead', 'contract', 'crc-v88', 'review_event:42', '2026-07-03T00:00:00Z', '2026-07-03T00:00:00Z', 2
+		)`,
+		`DELETE FROM schema_version`,
+		fmt.Sprintf(`INSERT INTO schema_version(version) VALUES (%d)`, schemaVersion88),
+	} {
+		if _, err := seed.db.Exec(stmt); err != nil {
+			t.Fatalf("seed v88 fixture statement %q: %v", stmt, err)
+		}
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore(v88) err = %v", err)
+	}
+	defer store.Close()
+	assertSchemaVersion(t, store.db, schemaVersion)
+	assertSQLiteTable(t, store.db, "authority_lookahead_allowances")
+	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "actor_kind")
+	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "actor_principal")
+	assertSQLiteColumn(t, store.db, "identification_ledger_observations", "actor_action")
+
+	var actorKind, actorPrincipal, actorAction string
+	var occurrenceCount int
+	if err := store.db.QueryRow(`
+		SELECT actor_kind, actor_principal, actor_action, occurrence_count
+		FROM identification_ledger_observations
+		WHERE observation_id = 'idobs:v88-observation'
+	`).Scan(&actorKind, &actorPrincipal, &actorAction, &occurrenceCount); err != nil {
+		t.Fatalf("query migrated v88 observation: %v", err)
+	}
+	if actorKind != "" || actorPrincipal != "" || actorAction != "" || occurrenceCount != 2 {
+		t.Fatalf("migrated actor fields kind=%q principal=%q action=%q count=%d, want empty actor fields and preserved count", actorKind, actorPrincipal, actorAction, occurrenceCount)
+	}
 }
 
 func sqliteColumnExistsInTestDB(t *testing.T, db *sql.DB, tableName string, columnName string) bool {

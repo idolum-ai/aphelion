@@ -47,6 +47,7 @@ func EditDecisionMessageClearingInlineKeyboard(ctx context.Context, sender Decis
 
 type ApprovalWindowOfferer interface {
 	CreateApprovalWindowOfferForKey(ctx context.Context, key session.SessionKey, adminUserID int64, sourceKind string, sourceID string, sourceDecisionKind string) (session.ApprovalWindowOffer, bool, error)
+	DefaultApprovalWindowDuration() time.Duration
 }
 
 type ExecApprover struct {
@@ -200,6 +201,7 @@ func (a *ExecApprover) ConfirmExec(ctx context.Context, req toolpkg.ExecApproval
 		DurableAgentID: durableAgentID,
 		Prompt:         "Approve this proposal?",
 		Details:        formatExecProposalDetails(req),
+		Metadata:       execApprovalDecisionMetadata(req),
 		Choices:        []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
 		DefaultChoice:  "deny",
 		Timeout:        a.timeout,
@@ -455,7 +457,7 @@ func (a *ExecApprover) approvalWindowOfferRows(ctx context.Context, key session.
 	if err != nil || !created {
 		return nil, err
 	}
-	return telegramcommands.ApprovalWindowRowsForLiveOffer(offer), nil
+	return telegramcommands.ApprovalWindowRowsForLiveOfferForDuration(offer, a.approvalWindows.DefaultApprovalWindowDuration()), nil
 }
 
 func appendTelegramRows(base [][]telegram.InlineButton, extra [][]telegram.InlineButton) [][]telegram.InlineButton {
@@ -471,6 +473,25 @@ func appendTelegramRows(base [][]telegram.InlineButton, extra [][]telegram.Inlin
 
 func formatExecProposalDetails(req toolpkg.ExecApprovalRequest) string {
 	return decisionprojection.FormatExecApprovalDetails(req.Proposal, req.Reason, req.Command, req.Workdir)
+}
+
+func execApprovalDecisionMetadata(req toolpkg.ExecApprovalRequest) map[string]string {
+	metadata := map[string]string{
+		"approval_kind": strings.TrimSpace(req.Proposal.Kind),
+		"proposal_id":   strings.TrimSpace(req.Proposal.ID),
+		"reason":        strings.TrimSpace(req.Reason),
+		"command_hash":  session.EffectAttemptCommandHash(strings.TrimSpace(req.Command)),
+		"workdir":       strings.TrimSpace(req.Workdir),
+	}
+	for key, value := range metadata {
+		if strings.TrimSpace(value) == "" {
+			delete(metadata, key)
+		}
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
 }
 
 func formatDurableMemoryDelegationDetails(req toolpkg.DurableMemoryDelegationApprovalRequest) string {

@@ -267,6 +267,7 @@ func (r *Runtime) doctorRuntime() *doctor.Runtime {
 		StaleRunningTurnRuns:                          r.staleRunningTurnRuns,
 		WriteAuthorityProjection:                      r.writeDoctorAuthorityProjection,
 		WriteProviderHealth:                           r.writeDoctorProviderHealth,
+		WritePersistenceHealth:                        r.writeDoctorPersistenceHealth,
 		WritePerceptionBudget:                         r.writeDoctorPerceptionBudget,
 		WriteExternalChannelAdapterReadiness:          r.writeDoctorExternalChannelAdapterReadiness,
 		ReasoningOptionsForRun:                        r.reasoningOptionsForRun,

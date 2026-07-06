@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,6 +16,109 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/tool/sandbox"
 )
+
+func TestDurableChildSandboxStateRootRequiresCanonicalAbsoluteDBPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "state", "sessions.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll(state) err = %v", err)
+	}
+	if err := os.WriteFile(dbPath, []byte("sqlite-placeholder"), 0o600); err != nil {
+		t.Fatalf("WriteFile(db) err = %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		dbPath  string
+		wantErr string
+	}{
+		{name: "empty", dbPath: "", wantErr: "sessions DB path is required"},
+		{name: "relative", dbPath: "sessions.db", wantErr: "must be absolute"},
+		{name: "missing absolute", dbPath: filepath.Join(root, "missing", "sessions.db"), wantErr: "resolve sessions DB path"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Sessions.DBPath = tc.dbPath
+			got, err := durableChildSandboxStateRoot(&cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("durableChildSandboxStateRoot(%q) = %q, %v; want error containing %q", tc.dbPath, got, err, tc.wantErr)
+			}
+		})
+	}
+
+	linkDir := filepath.Join(root, "links")
+	if err := os.MkdirAll(linkDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(links) err = %v", err)
+	}
+	linkPath := filepath.Join(linkDir, "sessions-link.db")
+	if err := os.Symlink(dbPath, linkPath); err != nil {
+		t.Fatalf("Symlink(db) err = %v", err)
+	}
+	cfg := config.Default()
+	cfg.Sessions.DBPath = linkPath
+	got, err := durableChildSandboxStateRoot(&cfg)
+	if err != nil {
+		t.Fatalf("durableChildSandboxStateRoot(symlink) err = %v", err)
+	}
+	if got != filepath.Dir(dbPath) {
+		t.Fatalf("state root = %q, want canonical target dir %q", got, filepath.Dir(dbPath))
+	}
+}
+
+func TestDurableWakeChildBootstrapPayloadIsMountedInsideSandbox(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	scope, err := sandbox.DurableAgentScope(
+		"child-alpha",
+		filepath.Join(root, "global"),
+		filepath.Join(root, "workspace"),
+		filepath.Join(root, "memory"),
+		"default",
+	)
+	if err != nil {
+		t.Fatalf("DurableAgentScope() err = %v", err)
+	}
+	payloadRoot := filepath.Join(scope.SharedMemoryRoot, ".aphelion", "child-wake-run")
+	if err := os.MkdirAll(payloadRoot, 0o700); err != nil {
+		t.Fatalf("MkdirAll(payloadRoot) err = %v", err)
+	}
+	bootstrapPath := filepath.Join(payloadRoot, "bootstrap-test.json")
+	if err := os.WriteFile(bootstrapPath, []byte(`{"config":{}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(bootstrap) err = %v", err)
+	}
+	stateRoot := filepath.Join(root, "state")
+	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
+		t.Fatalf("MkdirAll(stateRoot) err = %v", err)
+	}
+	fakeBwrap := filepath.Join(root, "bwrap")
+	if err := os.WriteFile(fakeBwrap, []byte("#!/usr/bin/env bash\nexec \"$@\"\n"), 0o700); err != nil {
+		t.Fatalf("WriteFile(fake bwrap) err = %v", err)
+	}
+
+	runner := sandbox.NewRunnerWithLookPath(func(_ string) (string, error) {
+		return fakeBwrap, nil
+	})
+	plan, err := runner.Plan(sandbox.ExecRequest{
+		Scope:              scope,
+		Command:            "cat " + shellQuote(bootstrapPath),
+		Workdir:            scope.WorkingRoot,
+		ExtraWritablePaths: []string{stateRoot},
+	})
+	if err != nil {
+		t.Fatalf("Plan(child wake) err = %v", err)
+	}
+	args := strings.Join(plan.Args, " ")
+	if !strings.Contains(args, "--bind "+scope.SharedMemoryRoot+" "+scope.SharedMemoryRoot) {
+		t.Fatalf("bwrap args = %s, want shared memory root mounted for bootstrap payload", args)
+	}
+	if !strings.HasPrefix(bootstrapPath, scope.SharedMemoryRoot+string(os.PathSeparator)) {
+		t.Fatalf("bootstrap path = %q, want under shared memory root %q", bootstrapPath, scope.SharedMemoryRoot)
+	}
+}
 
 func TestDurableChildSandboxAccessDoesNotSpecialCaseChannelAdapter(t *testing.T) {
 	t.Setenv("CHILD_ADAPTER_TOKEN", "secret-for-test")
@@ -97,6 +201,226 @@ func TestDurableChildSandboxAccessMaterializesGrantedRuntimeCapability(t *testin
 	}
 	if !containsBind(access.readonlyBinds, exe, "/usr/local/bin/mail-reader") {
 		t.Fatalf("readonlyBinds = %#v, want executable bind", access.readonlyBinds)
+	}
+}
+
+func TestDurableChildSandboxAccessMaterializesRuntimeBinCompatibilityRoot(t *testing.T) {
+	root := t.TempDir()
+	runtimeBin := filepath.Join(root, "runtime-bin")
+	childWorkspace := filepath.Join(root, "child-workspace")
+	if err := os.MkdirAll(runtimeBin, 0o700); err != nil {
+		t.Fatalf("MkdirAll(runtimeBin) err = %v", err)
+	}
+	for _, name := range []string{"gog", "gog_cli"} {
+		if err := os.WriteFile(filepath.Join(runtimeBin, name), []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("WriteFile(%s) err = %v", name, err)
+		}
+	}
+	otherBin := filepath.Join(root, "tools")
+	if err := os.MkdirAll(otherBin, 0o700); err != nil {
+		t.Fatalf("MkdirAll(otherBin) err = %v", err)
+	}
+	store, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-gog-runtime",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "gog_cli",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract: `{
+			"child_runtime": {
+				"readonly_binds": [
+					{"source": "` + runtimeBin + `", "target": "/usr/local/bin"},
+					{"source": "` + otherBin + `", "target": "/opt/tools"}
+				]
+			}
+		}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	access, err := durableChildSandboxAccessForScope("/srv/aphelion/bin/aphelion", core.DurableAgent{
+		AgentID:      "child-alpha",
+		BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexHome: "/srv/codex"},
+	}, store, sandbox.Scope{WorkingRoot: childWorkspace})
+	if err != nil {
+		t.Fatalf("durableChildSandboxAccessFor() err = %v", err)
+	}
+
+	if !containsBind(access.readonlyBinds, runtimeBin, "/usr/local/bin") {
+		t.Fatalf("readonlyBinds = %#v, want approved runtime-bin bind", access.readonlyBinds)
+	}
+	if !containsBind(access.readonlyBinds, runtimeBin, filepath.Join(childWorkspace, "runtime-bin")) {
+		t.Fatalf("readonlyBinds = %#v, want runtime-bin visible at child workspace compatibility path", access.readonlyBinds)
+	}
+	if !containsString(access.readonlyPaths, runtimeBin) {
+		t.Fatalf("readonlyPaths = %#v, want runtime-bin source compatibility path", access.readonlyPaths)
+	}
+	if containsString(access.readonlyPaths, otherBin) {
+		t.Fatalf("readonlyPaths = %#v, did not expect compatibility path for non-runtime-bin bind", access.readonlyPaths)
+	}
+}
+
+func TestDurableChildSandboxAccessMaterializesExecutableRuntimeBinCompatibilityRoot(t *testing.T) {
+	root := t.TempDir()
+	runtimeBin := filepath.Join(root, "runtime-bin")
+	childWorkspace := filepath.Join(root, "child-workspace")
+	if err := os.MkdirAll(runtimeBin, 0o700); err != nil {
+		t.Fatalf("MkdirAll(runtimeBin) err = %v", err)
+	}
+	gog := filepath.Join(runtimeBin, "gog")
+	gogCLI := filepath.Join(runtimeBin, "gog_cli")
+	for _, path := range []string{gog, gogCLI} {
+		if err := os.WriteFile(path, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("WriteFile(%s) err = %v", path, err)
+		}
+	}
+	store, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-gog-cli-runtime",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "gog_cli",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract: `{
+			"child_runtime": {
+				"executable": "` + gogCLI + `"
+			}
+		}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	access, err := durableChildSandboxAccessForScope("/srv/aphelion/bin/aphelion", core.DurableAgent{
+		AgentID:      "child-alpha",
+		BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexHome: "/srv/codex"},
+	}, store, sandbox.Scope{WorkingRoot: childWorkspace})
+	if err != nil {
+		t.Fatalf("durableChildSandboxAccessForScope() err = %v", err)
+	}
+
+	if !containsBind(access.readonlyBinds, gogCLI, "/usr/local/bin/gog_cli") {
+		t.Fatalf("readonlyBinds = %#v, want executable bind", access.readonlyBinds)
+	}
+	if !containsBind(access.readonlyBinds, runtimeBin, filepath.Join(childWorkspace, "runtime-bin")) {
+		t.Fatalf("readonlyBinds = %#v, want executable runtime-bin visible at child workspace compatibility path", access.readonlyBinds)
+	}
+	if !containsString(access.readonlyPaths, runtimeBin) {
+		t.Fatalf("readonlyPaths = %#v, want executable runtime-bin source compatibility path", access.readonlyPaths)
+	}
+}
+
+func TestDurableChildSandboxAccessCanonicalizesRuntimeGrantPathsAndBinds(t *testing.T) {
+	root := t.TempDir()
+	realRuntimeBin := filepath.Join(root, "real", "runtime-bin")
+	realConfigDir := filepath.Join(root, "real", "config")
+	realSecretDir := filepath.Join(root, "real", "secrets")
+	for _, path := range []string{realRuntimeBin, realConfigDir, realSecretDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("MkdirAll(%s) err = %v", path, err)
+		}
+	}
+	realExe := filepath.Join(realRuntimeBin, "gog_cli")
+	if err := os.WriteFile(realExe, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(real exe) err = %v", err)
+	}
+	realSecret := filepath.Join(realSecretDir, "mail.env")
+	if err := os.WriteFile(realSecret, []byte("MAIL_TOKEN=test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(real secret) err = %v", err)
+	}
+	linkRuntimeBin := filepath.Join(root, "runtime-bin")
+	linkConfigDir := filepath.Join(root, "config-link")
+	linkSecret := filepath.Join(root, "mail.env")
+	if err := os.Symlink(realRuntimeBin, linkRuntimeBin); err != nil {
+		t.Fatalf("Symlink(runtime-bin) err = %v", err)
+	}
+	if err := os.Symlink(realConfigDir, linkConfigDir); err != nil {
+		t.Fatalf("Symlink(config) err = %v", err)
+	}
+	if err := os.Symlink(realSecret, linkSecret); err != nil {
+		t.Fatalf("Symlink(secret) err = %v", err)
+	}
+
+	store, err := session.NewSQLiteStore(filepath.Join(root, "sessions.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() err = %v", err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCapabilityGrant(session.CapabilityGrant{
+		GrantID:        "capg-canonical-runtime",
+		GrantedTo:      core.DurableAgentPrincipal("child-alpha"),
+		Kind:           session.CapabilityKindTool,
+		TargetResource: "gog_cli",
+		AllowedActions: []string{"invoke"},
+		Status:         session.CapabilityGrantStatusActive,
+		Contract: `{
+			"child_runtime": {
+				"executable": "` + filepath.Join(linkRuntimeBin, "gog_cli") + `",
+				"readonly_paths": ["` + linkConfigDir + `"],
+				"readonly_binds": [
+					{"source": "` + linkRuntimeBin + `", "target": "/usr/local/bin/."}
+				],
+				"secret_binds": [
+					{"source": "` + linkSecret + `", "target": "/run/secrets/../secrets/mail.env"}
+				]
+			}
+		}`,
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityGrant() err = %v", err)
+	}
+
+	childWorkspace := filepath.Join(root, "child-workspace")
+	access, err := durableChildSandboxAccessForScope("/srv/aphelion/bin/aphelion", core.DurableAgent{
+		AgentID:      "child-alpha",
+		BootstrapLLM: core.NodeLLMBootstrap{Backend: "codex", CodexHome: "/srv/codex"},
+	}, store, sandbox.Scope{WorkingRoot: childWorkspace})
+	if err != nil {
+		t.Fatalf("durableChildSandboxAccessForScope() err = %v", err)
+	}
+
+	if !containsString(access.readonlyPaths, realConfigDir) {
+		t.Fatalf("readonlyPaths = %#v, want canonical config dir %q", access.readonlyPaths, realConfigDir)
+	}
+	if containsString(access.readonlyPaths, linkConfigDir) {
+		t.Fatalf("readonlyPaths = %#v, did not expect symlink config dir %q", access.readonlyPaths, linkConfigDir)
+	}
+	if !containsBind(access.readonlyBinds, realExe, "/usr/local/bin/gog_cli") {
+		t.Fatalf("readonlyBinds = %#v, want canonical executable bind", access.readonlyBinds)
+	}
+	if !containsBind(access.readonlyBinds, realRuntimeBin, "/usr/local/bin") {
+		t.Fatalf("readonlyBinds = %#v, want canonical runtime-bin bind", access.readonlyBinds)
+	}
+	if !containsBind(access.readonlyBinds, realRuntimeBin, filepath.Join(childWorkspace, "runtime-bin")) {
+		t.Fatalf("readonlyBinds = %#v, want canonical workspace runtime-bin compatibility bind", access.readonlyBinds)
+	}
+	if !containsBind(access.readonlyBinds, realSecret, "/run/secrets/mail.env") {
+		t.Fatalf("readonlyBinds = %#v, want canonical secret bind", access.readonlyBinds)
+	}
+	if containsBind(access.readonlyBinds, linkRuntimeBin, "/usr/local/bin") || containsBind(access.readonlyBinds, linkSecret, "/run/secrets/mail.env") {
+		t.Fatalf("readonlyBinds = %#v, did not expect symlink runtime material sources", access.readonlyBinds)
+	}
+}
+
+func TestDurableWakeChildRunnerErrorProjectsStderr(t *testing.T) {
+	err := durableWakeChildRunnerError(errors.New("exit status 1"), "Authorization: Bearer super-secret-token-value\napi_key=runner-secret-value\n")
+	text := err.Error()
+	for _, leak := range []string{"super-secret-token-value", "runner-secret-value"} {
+		if strings.Contains(text, leak) {
+			t.Fatalf("durableWakeChildRunnerError() = %q, leaked %q", text, leak)
+		}
+	}
+	if !strings.Contains(text, "stderr_projection=") || !strings.Contains(text, "stderr_policy=") {
+		t.Fatalf("durableWakeChildRunnerError() = %q, want projected stderr metadata", text)
 	}
 }
 

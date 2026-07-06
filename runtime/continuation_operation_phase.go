@@ -107,6 +107,7 @@ func continuationStateFromOperationPhase(opState session.OperationState, phase s
 		action.ValidationPlan = []string{"verify the action stays within the phase bounded effect", "update operation phase status and report evidence"}
 	}
 	action = applyContinuationLeaseClassBoundaries(action)
+	action = session.ReconcileActionProposalAuthority(action)
 	action.PlanHash = actionProposalHash(action)
 	state.ActionProposal = session.NormalizeActionProposal(action)
 	state.ContinuationLease = buildContinuationLease(state.ActionProposal, 1, now)

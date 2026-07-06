@@ -297,7 +297,7 @@ func durableWizardChoicesForStep(step string, card durableWizardCard) []durableW
 		return []durableWizardChoice{
 			{Key: "keep_parent_model", Label: "Parent model"},
 			{Key: "claude-sonnet-4-6", Label: "Sonnet 4.6"},
-			{Key: "claude-opus-4-6", Label: "Opus 4.6"},
+			{Key: "claude-opus-4-8", Label: "Opus 4.8"},
 		}
 	case "autonomy":
 		return []durableWizardChoice{
@@ -380,8 +380,10 @@ func durableWizardAnswersForChoice(step string, option string, card durableWizar
 				return nil, false
 			}
 			return map[string]any{"bootstrap_model": strings.TrimSpace(card.BootstrapModel)}, true
-		case "claude-sonnet-4-6", "claude-opus-4-6":
+		case "claude-sonnet-4-6", "claude-opus-4-8":
 			return map[string]any{"bootstrap_model": option}, true
+		case "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4.7":
+			return map[string]any{"bootstrap_model": "claude-opus-4-8"}, true
 		}
 	case "autonomy":
 		switch option {

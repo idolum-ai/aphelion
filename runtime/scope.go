@@ -84,7 +84,7 @@ func (r *Runtime) promptContextForScope(scope sandbox.Scope, now time.Time) (*wo
 	stableCfg.DynamicFiles = nil
 	stableCfg.DailyNotes = false
 
-	stable, err := workspace.LoadPromptContext(stableCfg, now)
+	stable, err := r.loadStablePromptContext(stableCfg, now)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +103,13 @@ func (r *Runtime) promptContextForScope(scope sandbox.Scope, now time.Time) (*wo
 		Stable:    stable.Stable,
 		Dynamic:   dynamic.Dynamic,
 	}, nil
+}
+
+func (r *Runtime) loadStablePromptContext(cfg config.AgentConfig, now time.Time) (*workspace.PromptContext, error) {
+	if r == nil || r.promptStableCache == nil {
+		return workspace.LoadPromptContext(cfg, now)
+	}
+	return r.promptStableCache.load(cfg, now)
 }
 
 func dynamicPromptRoot(scope sandbox.Scope) string {

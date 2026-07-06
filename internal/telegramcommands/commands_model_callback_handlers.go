@@ -180,17 +180,25 @@ func modelPresetConfig(status core.ModelSlotStatus, preset string) (core.ModelSl
 	effort := core.NormalizeModelEffort(cfg.Effort)
 	serviceTier := cfg.ServiceTier
 	switch strings.ToLower(strings.TrimSpace(preset)) {
+	case "cheap":
+		if !modelSlotSupportsCheapPreset(slot) {
+			return core.ModelSlotConfig{}, fmt.Errorf("cheap preset is only available for status, heartbeat, and curiosity")
+		}
+		cfg = status.Default
+		cfg.Slot = slot
+		effort = core.NormalizeModelEffort(firstNonEmptyModelCallback(cfg.Effort, "low"))
+		serviceTier = cfg.ServiceTier
 	case "sonnet":
 		cfg.Provider = core.ModelProviderAnthropic
 		cfg.Model = "claude-sonnet-4-6"
 		if effort == "" {
 			effort = "medium"
 		}
-	case "opus47":
+	case "opus48", "opus47":
 		cfg.Provider = core.ModelProviderAnthropic
-		cfg.Model = "claude-opus-4.7"
+		cfg.Model = "claude-opus-4-8"
 		if effort == "" {
-			effort = "xhigh"
+			effort = "high"
 		}
 	case "gpt55":
 		if slot == core.ModelSlotDoctor {
@@ -213,4 +221,13 @@ func modelPresetConfig(status core.ModelSlotStatus, preset string) (core.ModelSl
 	}
 	cfg.Transport = core.ModelTransportAuto
 	return core.NormalizeModelSlotConfig(cfg), nil
+}
+
+func firstNonEmptyModelCallback(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

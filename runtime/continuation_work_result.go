@@ -4,6 +4,9 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -19,6 +22,8 @@ import (
 )
 
 var errWorkExecutorNoCompletionEvidence = errors.New("work executor returned no completion evidence")
+
+const workFailureRetryFingerprintVersion = "v1"
 
 func (r *Runtime) persistWorkResult(key session.SessionKey, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error) session.OperationArtifact {
 	if r == nil || r.store == nil {
@@ -314,6 +319,125 @@ func (r *Runtime) offerWorkFailureRetry(ctx context.Context, key session.Session
 			"error":  trimError(cause.Error()),
 		}, time.Now().UTC())
 	}
+}
+
+func (r *Runtime) blockRepeatedWorkFailureRetry(ctx context.Context, key session.SessionKey, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error, payload map[string]any) error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	reason := "Repeated work executor failure with the same retry fingerprint; ask for a fresh bounded plan before retrying."
+	if payload == nil {
+		payload = workResultPayload(req, result, status, cause)
+	}
+	class, fingerprint := addWorkFailureRetryFingerprintPayload(payload, req, result, status, cause)
+	payload["reason"] = "repeat_work_failure"
+	payload["operator_projection"] = reason
+	if class != "" {
+		payload["failure_class"] = class
+	}
+	if fingerprint != "" {
+		payload["retry_fingerprint"] = fingerprint
+	}
+
+	unlock := r.lockSession(key)
+	state, stateErr := r.store.ContinuationState(key)
+	if stateErr == nil {
+		state = repeatedWorkFailureContinuationState(state, reason, now)
+		stateErr = r.store.UpdateContinuationState(key, state)
+	}
+	op, opErr := r.store.OperationState(key)
+	if opErr == nil {
+		op = repeatedWorkFailureOperationState(op, reason, now)
+		opErr = r.store.UpdateOperationState(key, op)
+	}
+	unlock()
+	if stateErr != nil {
+		return fmt.Errorf("block repeated work failure continuation: %w", stateErr)
+	}
+	if opErr != nil {
+		return fmt.Errorf("block repeated work failure operation: %w", opErr)
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "repeat_work_failure", payload, now)
+	if sendErr := r.sendRepeatedWorkFailureBlockedNotice(ctx, key, cause, fingerprint); sendErr != nil {
+		log.Printf("WARN send repeated work failure notice failed chat_id=%d err=%v", key.ChatID, sendErr)
+	}
+	return nil
+}
+
+func repeatedWorkFailureContinuationState(state session.ContinuationState, reason string, now time.Time) session.ContinuationState {
+	state = session.NormalizeContinuationState(state)
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	state.HandshakeBlockedReason = strings.TrimSpace(reason)
+	state.ParkedAt = now
+	state.ParkedSource = "repeat_work_failure"
+	state.ParkedReason = strings.TrimSpace(reason)
+	state.RemainingTurns = 0
+	state.ApprovedBy = 0
+	state.DecisionID = ""
+	if state.Status == session.ContinuationStatusPending || state.Status == session.ContinuationStatusApproved {
+		state.Status = session.ContinuationStatusRevoked
+	} else {
+		state.Status = session.ContinuationStatusIdle
+	}
+	if state.ActionProposal.Status == session.ProposalStatusPending {
+		state.ActionProposal.Status = session.ProposalStatusSuperseded
+		state.ActionProposal.WhyNow = strings.TrimSpace(reason)
+		state.ActionProposal.UpdatedAt = now
+	}
+	switch state.ContinuationLease.Status {
+	case session.ContinuationLeaseStatusPending, session.ContinuationLeaseStatusActive:
+		state.ContinuationLease.Status = session.ContinuationLeaseStatusRevoked
+		state.ContinuationLease.RemainingTurns = 0
+		state.ContinuationLease.RevokedAt = now
+		state.ContinuationLease.UpdatedAt = now
+	}
+	state.UpdatedAt = now
+	return session.NormalizeContinuationState(state)
+}
+
+func repeatedWorkFailureOperationState(op session.OperationState, reason string, now time.Time) session.OperationState {
+	op = session.NormalizeOperationState(op)
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	op.Status = session.OperationStatusBlocked
+	op.Stage = "work_executor_repeat_failure"
+	summary := strings.TrimSpace(op.Summary)
+	line := strings.TrimSpace(reason)
+	if line != "" && !strings.Contains(summary, line) {
+		if summary != "" {
+			summary += "\n"
+		}
+		summary += line
+	}
+	op.Summary = summary
+	op.UpdatedAt = now
+	return session.NormalizeOperationState(op)
+}
+
+func (r *Runtime) sendRepeatedWorkFailureBlockedNotice(ctx context.Context, key session.SessionKey, cause error, fingerprint string) error {
+	if r == nil || r.outbound == nil || key.ChatID == 0 {
+		return nil
+	}
+	lines := []string{
+		"I stopped retrying this approved step because it failed the same way twice.",
+		"",
+		"Ask for a fresh bounded plan before retrying this work.",
+	}
+	if cause != nil {
+		lines = append(lines, "", "Failure: "+trimError(cause.Error()))
+	}
+	if fingerprint = strings.TrimSpace(fingerprint); fingerprint != "" {
+		lines = append(lines, "Retry fingerprint: "+fingerprint)
+	}
+	text := r.prefixTelegramPresentedText(r.telegramPresentationForKey(key), strings.Join(lines, "\n"))
+	_, err := r.outbound.SendMessage(ctx, core.OutboundMessage{ChatID: key.ChatID, Text: text})
+	return err
 }
 
 func (r *Runtime) sendWorkFailureRetryFallback(ctx context.Context, key session.SessionKey, chatID int64, cause error, refreshErr error) bool {
@@ -647,6 +771,100 @@ func workResultRecoverySummary(result WorkResult) string {
 		return "turn recovery handoff: " + kind
 	}
 	return "turn recovery handoff: " + kind + ": " + summary
+}
+
+func workFailureRetryClass(cause error, result WorkResult) string {
+	if errors.Is(cause, errWorkExecutorNoCompletionEvidence) {
+		return "no_completion_evidence"
+	}
+	var providerErr nativeWorkProviderFailureError
+	if errors.As(cause, &providerErr) || strings.TrimSpace(result.ProviderFailure) != "" {
+		return "provider_failure"
+	}
+	var recoveryErr nativeWorkRecoveryError
+	if errors.As(cause, &recoveryErr) || strings.TrimSpace(result.RecoveryKind) != "" {
+		return "turn_recovery"
+	}
+	if errors.Is(cause, context.Canceled) {
+		return "context_canceled"
+	}
+	if errors.Is(cause, context.DeadlineExceeded) {
+		return "deadline_exceeded"
+	}
+	if workResultFailureInvalidatesMaterialCompletion(result) {
+		return "authority_or_tool_denial"
+	}
+	if result.ToolFailures > 0 || strings.TrimSpace(result.ToolFailure) != "" {
+		return "tool_failure"
+	}
+	if cause != nil {
+		return "executor_error"
+	}
+	return ""
+}
+
+func workFailureRetryFingerprint(req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error) (string, string) {
+	class := workFailureRetryClass(cause, result)
+	if class == "" {
+		return "", ""
+	}
+	state := session.NormalizeContinuationState(req.State)
+	fields := []string{
+		workFailureRetryFingerprintVersion,
+		class,
+		strings.TrimSpace(req.OperationID),
+		strings.TrimSpace(string(req.Mode)),
+		strings.TrimSpace(req.Workdir),
+		strings.TrimSpace(req.RepoRoot),
+		firstRuntimeWorkNonEmpty(result.ExecutorName, status.Active, status.LastAttempted),
+		strings.TrimSpace(result.CompletionKind),
+		strings.TrimSpace(state.ActionProposal.RiskClass),
+		strings.TrimSpace(state.ActionProposal.BoundedEffect),
+	}
+	sum := sha256.Sum256([]byte(strings.Join(fields, "\x1f")))
+	return class, "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func addWorkFailureRetryFingerprintPayload(payload map[string]any, req WorkRequest, result WorkResult, status WorkExecutorStatus, cause error) (string, string) {
+	class, fingerprint := workFailureRetryFingerprint(req, result, status, cause)
+	if payload != nil && fingerprint != "" {
+		payload["failure_class"] = class
+		payload["retry_fingerprint"] = fingerprint
+		payload["retry_fingerprint_version"] = workFailureRetryFingerprintVersion
+	}
+	return class, fingerprint
+}
+
+func (r *Runtime) workFailureRetryFingerprintSeen(key session.SessionKey, fingerprint string) bool {
+	if r == nil || r.store == nil || strings.TrimSpace(fingerprint) == "" {
+		return false
+	}
+	afterSeq := int64(0)
+	for {
+		events, err := r.store.ExecutionEventsBySession(key, afterSeq, 200)
+		if err != nil {
+			return false
+		}
+		if len(events) == 0 {
+			return false
+		}
+		for _, event := range events {
+			afterSeq = event.Seq
+			if strings.TrimSpace(event.EventType) != core.ExecutionEventWorkExecutorFailed {
+				continue
+			}
+			payload := map[string]any{}
+			if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+				continue
+			}
+			if workPayloadString(payload, "retry_fingerprint") == fingerprint {
+				return true
+			}
+		}
+		if len(events) < 200 {
+			return false
+		}
+	}
 }
 
 func actorLabel(actor principal.Principal) string {

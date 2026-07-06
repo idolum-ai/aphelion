@@ -239,17 +239,19 @@ See `config.md`, but heartbeat ownership should include:
 [heartbeat]
 enabled = true
 every = "30m"
-model = "anthropic"
-model_override = ""
 active_hours = { start = "08:00", end = "24:00", timezone = "America/New_York" }
 target = "last"               # "last" | "none" | explicit admin target
 ```
+
+Heartbeat model routing is owned by the first-class `/model heartbeat` slot,
+not by `[heartbeat]` TOML keys. Clearing that slot restores the install's
+cheap-lane default.
 
 The implementation may later add more knobs, but the contract should preserve:
 
 - cadence
 - active-hours policy
-- backend/model override
+- slot-scoped model override through `/model heartbeat`
 - delivery target
 
 ## Startup Recovery

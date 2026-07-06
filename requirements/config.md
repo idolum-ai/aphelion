@@ -126,15 +126,15 @@ chars_per_token = 4              # Rough estimate; actual usage from provider re
 
 [providers.anthropic]
 api_key = ""
-model = "claude-sonnet-4-6"     # Current flagship: claude-opus-4-6 (1M ctx), claude-sonnet-4-6 (1M ctx), claude-haiku-4-5 (200K ctx)
-max_tokens = 64000               # Sonnet 4.6 max output: 64K. Opus 4.6: 128K.
-context_window = 1000000         # Opus 4.6 and Sonnet 4.6: 1M tokens. Haiku 4.5: 200K.
+model = "claude-sonnet-4-6"     # Current accessible tiers: claude-opus-4-8 (1M ctx), claude-sonnet-4-6 (1M ctx), claude-haiku-4-5-20251001 (200K ctx)
+max_tokens = 64000               # Sonnet 4.6 max output: 64K. Opus 4.8 supports adaptive thinking.
+context_window = 1000000         # Opus 4.8 and Sonnet 4.6: 1M tokens. Haiku 4.5: 200K.
 anthropic_version = "2023-06-01"
 
 # Cache strategy (see providers.md for full architecture)
 cache_strategy = "hybrid"        # "auto" | "explicit" | "hybrid" | "off"
 cache_ttl = "1h"                 # "5m" (1.25x write cost) or "1h" (2x write cost, 10x cheaper reads)
-min_cache_tokens = 2048          # Minimum cacheable prefix. Opus 4.6/4.5: 4096, Sonnet 4.6: 2048, Haiku 4.5: 4096
+min_cache_tokens = 2048          # Minimum cacheable prefix. Opus 4.8/4.5: 4096, Sonnet 4.6: 2048, Haiku 4.5: 4096
 
 # Cache-TTL pruning: trim old tool results after TTL to shrink re-cache writes
 cache_ttl_pruning = true
@@ -335,6 +335,11 @@ default_mode = "ask_first"
 ceiling = "leased"
 allow_live_overrides = true
 max_override_duration = "4h"
+# Off by default. Set to "15m", "30m", or "always" to lazily open finite
+# approval-window lease/override rows for eligible admin-owned requests in the
+# current chat/thread. "always" means rolling finite 15m windows, not
+# non-expiring authority.
+default_approval_window = "off"
 
 # Context management thresholds — push close to the provider's actual limit.
 # These are in tokens. Compaction kicks in when the assembled prompt exceeds max_context_tokens.
@@ -385,10 +390,12 @@ network_allow = []             # host:port, ip:port, or cidr:port when network="
 [heartbeat]
 enabled = true
 every = "30m"
-model = "anthropic"           # Can point to a cheaper provider/model for heartbeats
-model_override = ""           # e.g. "claude-haiku-3.5" — overrides the provider's default model
 active_hours = { start = "08:00", end = "24:00", timezone = "America/New_York" }
 target = "last"               # "last" | "none" | specific chat ID
+
+Heartbeat model routing is not a TOML key. Use the admin-only `/model heartbeat`
+slot to override the runtime default; clearing the slot returns to the
+install's configured cheap-lane default.
 
 [curiosity]
 enabled = false

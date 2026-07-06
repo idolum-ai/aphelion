@@ -7,6 +7,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSaveUpdatesCacheTotalsAndState(t *testing.T) {
@@ -276,6 +277,50 @@ func TestSavePersistsSessionScopeMetadata(t *testing.T) {
 	}
 	if got.Scope.Kind != ScopeKindHeartbeat || got.Scope.ID != "admin-house" {
 		t.Fatalf("Scope = %#v, want heartbeat admin-house", got.Scope)
+	}
+}
+
+func TestExpireIdlePreservesStructuralScopeSessions(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	defer store.Close()
+
+	ordinary := SessionKey{ChatID: 5010, Scope: ScopeRef{Kind: ScopeKindTelegramDM, ID: "5010"}}
+	thread := SessionKey{ChatID: -100200, Scope: TelegramThreadScopeRef(-100200, 42)}
+	heartbeat := SessionKey{ChatID: -1, Scope: ScopeRef{Kind: ScopeKindHeartbeat, ID: "admin-house"}}
+	for _, key := range []SessionKey{ordinary, thread, heartbeat} {
+		sess, err := store.Load(key)
+		if err != nil {
+			t.Fatalf("Load(%#v) err = %v", key, err)
+		}
+		sess.TurnCount = 1
+		if err := store.Save(sess, []Message{{Role: "assistant", Content: "old", TurnIndex: 1}}, core.TokenUsage{}); err != nil {
+			t.Fatalf("Save(%#v) err = %v", key, err)
+		}
+		if _, err := store.db.Exec(`UPDATE sessions SET updated_at = datetime('now', '-48 hours') WHERE session_id = ?`, SessionIDForKey(key)); err != nil {
+			t.Fatalf("age session %#v: %v", key, err)
+		}
+	}
+
+	expired, err := store.ExpireIdle(time.Hour)
+	if err != nil {
+		t.Fatalf("ExpireIdle() err = %v", err)
+	}
+	if expired != 1 {
+		t.Fatalf("expired = %d, want only ordinary DM session expired", expired)
+	}
+	if _, err := store.Load(ordinary); err != nil {
+		t.Fatalf("Load ordinary after expiry err = %v; Load recreates missing sessions but should not affect structural checks", err)
+	}
+	for _, key := range []SessionKey{thread, heartbeat} {
+		var count int
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE session_id = ?`, SessionIDForKey(key)).Scan(&count); err != nil {
+			t.Fatalf("count structural session %#v: %v", key, err)
+		}
+		if count != 1 {
+			t.Fatalf("structural session %#v count = %d, want preserved", key, count)
+		}
 	}
 }
 

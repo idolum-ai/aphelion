@@ -127,7 +127,7 @@ func TestArchitectureImportBoundaries(t *testing.T) {
 func loadArchitecturePackages(t *testing.T) []architecturePackage {
 	t.Helper()
 
-	cmd := exec.Command("go", "list", "-e", "-json", "./...")
+	cmd := exec.Command("go", "list", "-buildvcs=false", "-e", "-json", "./...")
 	if strings.TrimSpace(os.Getenv("GOCACHE")) == "" {
 		cmd.Env = append(os.Environ(), "GOCACHE="+t.TempDir())
 	}
@@ -226,6 +226,18 @@ func assertLayerImportBoundaries(t *testing.T, pkg architecturePackage) {
 			"runtime",
 			"turn",
 			"pipeline",
+		})
+	case aphelionModulePath + "/interpretation":
+		assertDoesNotImportAny(t, pkg, []string{
+			"runtime",
+			"turn",
+			"pipeline",
+			"telegram",
+			"tool",
+			"memory",
+			"commandeffect",
+			"effectauth",
+			"durableagent",
 		})
 	}
 }

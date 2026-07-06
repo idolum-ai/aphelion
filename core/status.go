@@ -80,6 +80,52 @@ type AuthorityStatusSnapshot struct {
 	TruncatedCapabilitySet bool
 }
 
+type AuthorityFrontierStatusSnapshot struct {
+	GeneratedAt time.Time
+	AdminChatID int64
+	Budget      int
+	Used        int
+	Reserved    int
+	Open        int
+	Expired     int
+	Empty       int
+	Slots       []AuthorityFrontierSlot
+	Recent      []AuthorityFrontierEvent
+}
+
+type AuthorityFrontierSlot struct {
+	Index              int
+	Status             string
+	AllowanceID        string
+	ReviewEventID      int64
+	SourceSessionID    string
+	TargetSessionID    string
+	NextActionRecordID string
+	EntryID            string
+	Reason             string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	ExpiresAt          time.Time
+	ReleasedAt         time.Time
+	TTLSeconds         int64
+}
+
+type AuthorityFrontierEvent struct {
+	ObservedAt           time.Time
+	Status               string
+	AdminChatID          int64
+	AllowanceID          string
+	ReviewEventID        int64
+	NextActionRecordID   string
+	EntryID              string
+	ShapeHash            string
+	StepRef              string
+	LabelRef             string
+	Reason               string
+	InterArrivalSeconds  int64
+	RepeatedShapeOrdinal int
+}
+
 type ExecutionEventSummary struct {
 	SessionID string
 	ChatID    int64
@@ -204,6 +250,10 @@ type ProviderHealthSnapshot struct {
 	GeneratedAt         time.Time
 	Window              time.Duration
 	Status              string
+	StatusClass         string
+	FailureClass        string
+	RetryPolicy         string
+	NextAction          string
 	RecentFailures      int
 	RecentRetries       int
 	RecentFailovers     int
@@ -215,6 +265,20 @@ type ProviderHealthSnapshot struct {
 	LastFailureReason   string
 	LastFailureError    string
 	LastSuccessAt       time.Time
+}
+
+type PersistenceHealthSnapshot struct {
+	GeneratedAt   time.Time
+	Window        time.Duration
+	Status        string
+	StatusClass   string
+	FailureClass  string
+	RetryPolicy   string
+	NextAction    string
+	RecentSlow    int
+	LastEventAt   time.Time
+	LastComponent string
+	LastLatency   time.Duration
 }
 
 type AutoApprovalStatusSnapshot struct {
@@ -325,14 +389,18 @@ type SandboxReadinessSnapshot struct {
 }
 
 type TelegramIngressFailureSnapshot struct {
-	Surface    string
-	UpdateID   int64
-	UpdateKind string
-	ChatID     int64
-	SenderID   int64
-	MessageID  int64
-	ErrorText  string
-	CreatedAt  time.Time
+	Surface      string
+	UpdateID     int64
+	UpdateKind   string
+	ChatID       int64
+	SenderID     int64
+	MessageID    int64
+	ErrorText    string
+	StatusClass  string
+	FailureClass string
+	RetryPolicy  string
+	NextAction   string
+	CreatedAt    time.Time
 }
 
 type TelegramIngressUpdateSnapshot struct {
@@ -437,6 +505,7 @@ type SystemStatusSnapshot struct {
 	RestartHealth                RestartHealthSnapshot
 	ReleaseNotice                ReleaseNoticeSnapshot
 	ProviderHealth               ProviderHealthSnapshot
+	PersistenceHealth            PersistenceHealthSnapshot
 	Tailnet                      *TailnetStatusSnapshot
 	Autonomy                     AutonomyStatusSnapshot
 	Sandbox                      SandboxReadinessSnapshot

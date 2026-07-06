@@ -60,6 +60,7 @@ type WorkResult struct {
 	Recovery         *core.TurnRecovery
 	ChangedFiles     []string
 	Commands         []string
+	CommandEvidence  []WorkCommandEvidence
 	CodexEvents      []session.WorkCodexEvent
 	PatchPreview     string
 	CommitLaneStatus string
@@ -70,6 +71,14 @@ type WorkResult struct {
 	ToolFailures     int
 	ToolFailure      string
 	ToolFailureTexts []string
+}
+
+type WorkCommandEvidence struct {
+	Command         string
+	CommandHash     string
+	EffectAttemptID string
+	Source          string
+	EvidenceRefs    []string
 }
 
 type WorkAvailability struct {
@@ -258,13 +267,16 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 	if e.runtime == nil {
 		return WorkResult{}, fmt.Errorf("runtime unavailable")
 	}
-	ctx = toolpkg.WithContinuationExecAuthority(ctx, req.State)
 	key := req.Key
 	if key.ChatID == 0 {
 		key.ChatID = req.ChatID
 	}
 	if key.ChatID != 0 && strings.TrimSpace(string(key.Scope.Kind)) == "" && strings.TrimSpace(key.Scope.ID) == "" {
 		key.Scope = telegramDMScopeRef(key.ChatID)
+	}
+	ctx = toolpkg.WithContinuationExecAuthority(ctx, req.State)
+	if admission, ok := workRequestAuthorityAdmission(req, key, time.Now().UTC()); ok {
+		ctx = toolpkg.WithExecutionAuthorityAdmission(ctx, admission)
 	}
 	msg := continuationInboundForKey(key, req.Actor, approvedContinuationEventTextForState(req.State), core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
 	result, err := e.runtime.handleInternalContinuationTurnWithOptions(ctx, req.Actor, msg, internalContinuationOptions{})
@@ -298,7 +310,7 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 			out.SideEffects = true
 		}
 	}
-	e.runtime.attachNativeWorkTurnEvidence(key, &out)
+	e.runtime.attachNativeWorkTurnEvidence(key, req, &out)
 	if err != nil {
 		return out, err
 	}
@@ -312,6 +324,100 @@ func (e nativeWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResul
 		return out, nativeWorkRecoveryError{Kind: out.RecoveryKind, Summary: out.RecoverySummary}
 	}
 	return out, nil
+}
+
+func workRequestAuthorityAdmission(req WorkRequest, key session.SessionKey, now time.Time) (session.ExecutionRunAuthority, bool) {
+	if key.ChatID == 0 && key.UserID == 0 && key.Scope.IsZero() {
+		return session.ExecutionRunAuthority{}, false
+	}
+	sessionID := session.SessionIDForKey(key)
+
+	lease := session.NormalizeContinuationLease(req.State.ContinuationLease)
+	if strings.TrimSpace(lease.ID) == "" {
+		lease.ID = strings.TrimSpace(req.LeaseID)
+	}
+	continuationActive := strings.TrimSpace(lease.ID) != "" && lease.ActiveAt(now)
+
+	planLease := session.NormalizeOperationPlanLease(req.Operation.PlanLease)
+	planActive := workRequestOperationPlanLeaseUsable(planLease, now)
+	if continuationActive == planActive {
+		return session.ExecutionRunAuthority{}, false
+	}
+	record := session.ExecutionRunAuthority{
+		SessionID:        sessionID,
+		ChatID:           key.ChatID,
+		UserID:           key.UserID,
+		Scope:            key.Scope,
+		Principal:        runtimeExecutionPrincipalID(req.Actor),
+		PrincipalRole:    string(req.Actor.Role),
+		ExecutionSpecies: "native_continuation",
+		AdmittedAt:       now.UTC(),
+	}
+	if continuationActive {
+		record.LeaseKind = session.ExecutionAuthorityLeaseKindContinuation
+		record.ContinuationLeaseID = lease.ID
+		record.LeaseStatus = string(lease.Status)
+		record.LeaseClass = lease.LeaseClass
+		record.LeaseAllowedActions = append([]string(nil), lease.AllowedActions...)
+		record.LeaseConstraints = cloneStringMap(lease.Constraints)
+		record.LeaseRemainingTurns = lease.RemainingTurns
+		record.LeaseExpiresAt = lease.ExpiresAt
+		return session.NormalizeExecutionRunAuthority(record), true
+	}
+	record.ExecutionSpecies = "operation_plan_continuation"
+	record.LeaseKind = session.ExecutionAuthorityLeaseKindOperationPlan
+	record.OperationPlanLeaseID = planLease.ID
+	record.LeaseStatus = string(planLease.Status)
+	record.LeaseRemainingTurns = planLease.RemainingTurns
+	record.LeaseExpiresAt = planLease.ExpiresAt
+	return session.NormalizeExecutionRunAuthority(record), true
+}
+
+func workRequestOperationPlanLeaseUsable(lease session.OperationPlanLease, now time.Time) bool {
+	lease = session.NormalizeOperationPlanLease(lease)
+	if strings.TrimSpace(lease.ID) == "" || lease.RemainingTurns <= 0 {
+		return false
+	}
+	if !lease.ExpiresAt.IsZero() && !lease.ExpiresAt.After(now.UTC()) {
+		return false
+	}
+	switch lease.Status {
+	case session.PlanLeaseStatusApproved, session.PlanLeaseStatusActive:
+		return true
+	default:
+		return false
+	}
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func runtimeExecutionPrincipalID(actor principal.Principal) string {
+	switch actor.Role {
+	case principal.RoleDurableAgent:
+		if id := strings.TrimSpace(actor.DurableAgentID); id != "" {
+			return "durable_agent:" + id
+		}
+	case principal.RoleAdmin, principal.RoleApprovedUser:
+		if actor.TelegramUserID > 0 {
+			return fmt.Sprintf("telegram:%d", actor.TelegramUserID)
+		}
+		if actor.Role == principal.RoleAdmin {
+			return "admin"
+		}
+	}
+	if actor.TelegramUserID > 0 {
+		return fmt.Sprintf("telegram:%d", actor.TelegramUserID)
+	}
+	return strings.TrimSpace(string(actor.Role))
 }
 
 func workResultBudgetRecoveryScheduled(result WorkResult) bool {
@@ -345,10 +451,12 @@ func nativeWorkResultFromTurnResult(result *core.TurnResult) WorkResult {
 	return out
 }
 
-func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, result *WorkResult) {
+func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, req WorkRequest, result *WorkResult) {
 	if r == nil || r.store == nil || result == nil || result.TurnRunID <= 0 {
 		return
 	}
+	attempts := r.attachEffectAttemptsToWorkResult(key, req, result)
+	eventAttemptIDsByHash := workEffectAttemptIDQueuesByHash(attempts)
 	if run, err := r.store.TurnRun(result.TurnRunID); err == nil && run != nil {
 		if failure := strings.TrimSpace(run.LastToolError); failure != "" {
 			result.ToolFailureTexts = appendUniqueRuntimeWorkString(result.ToolFailureTexts, failure)
@@ -386,7 +494,14 @@ func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, result *W
 				result.SideEffects = true
 			}
 			if cmd := successfulExecCommandFromToolEvent(event, startedExecPreviews); cmd != "" {
-				result.Commands = appendUniqueRuntimeWorkString(result.Commands, cmd)
+				evidence := WorkCommandEvidence{
+					Command:         cmd,
+					CommandHash:     runtimeWorkCommandHash(cmd),
+					EffectAttemptID: consumeWorkEffectAttemptIDByHash(eventAttemptIDsByHash, runtimeWorkCommandHash(cmd), nil),
+					Source:          workCommandEvidenceSourceExecutionEvent,
+					EvidenceRefs:    []string{executionEventEvidenceRef(event)},
+				}
+				appendWorkCommandEvidence(result, evidence)
 				if commandeffect.Classify(cmd).SideEffects {
 					result.SideEffects = true
 				}
@@ -406,6 +521,13 @@ func (r *Runtime) attachNativeWorkTurnEvidence(key session.SessionKey, result *W
 			}
 		}
 	}
+}
+
+func executionEventEvidenceRef(event session.ExecutionEvent) string {
+	if event.ID <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("execution_event:%d", event.ID)
 }
 
 func successfulExecCommandFromToolEvent(event session.ExecutionEvent, startedExecPreviews map[string][]string) string {
@@ -636,6 +758,7 @@ func (e nativeWorkRecoveryError) Error() string {
 
 type codexWorkExecutor struct {
 	address                  string
+	runtime                  *Runtime
 	check                    func(context.Context, string) error
 	rpcTimeout               time.Duration
 	firstNotificationTimeout time.Duration
@@ -687,7 +810,7 @@ func (e codexWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResult
 	if strings.TrimSpace(e.address) == "" {
 		return WorkResult{}, fmt.Errorf("codex app-server address not configured")
 	}
-	client := runtimecodex.NewClient(e.address, codexWorkApprovalHandler(req))
+	client := runtimecodex.NewClient(e.address, codexWorkApprovalHandler(req, e.runtime))
 	defer client.Close(websocket.StatusNormalClosure, "done")
 	if err := e.withRPCTimeout(ctx, client.Connect); err != nil {
 		return WorkResult{}, err
@@ -732,7 +855,7 @@ func (e codexWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResult
 	}
 	result, err := client.StreamTurnWithOptions(ctx, threadID, turnID, runtimecodex.StreamOptions{FirstNotificationTimeout: e.firstNotificationWait()})
 	if err != nil {
-		partial := WorkResult(runtimecodex.WorkResultFromAppServer(codexWorkRequest(req), threadID, turnID, runtimecodex.Result{
+		partial := workResultFromCodex(runtimecodex.WorkResultFromAppServer(codexWorkRequest(req), threadID, turnID, runtimecodex.Result{
 			ThreadID:     threadID,
 			TurnID:       turnID,
 			ApprovalLog:  client.ApprovalLog(),
@@ -741,7 +864,35 @@ func (e codexWorkExecutor) Run(ctx context.Context, req WorkRequest) (WorkResult
 		}))
 		return partial, err
 	}
-	return WorkResult(runtimecodex.WorkResultFromAppServer(codexWorkRequest(req), threadID, turnID, result)), nil
+	return workResultFromCodex(runtimecodex.WorkResultFromAppServer(codexWorkRequest(req), threadID, turnID, result)), nil
+}
+
+func workResultFromCodex(result runtimecodex.WorkResult) WorkResult {
+	return WorkResult{
+		ExecutorName:     result.ExecutorName,
+		TurnRunID:        result.TurnRunID,
+		ThreadID:         result.ThreadID,
+		TurnID:           result.TurnID,
+		Summary:          result.Summary,
+		RecoveryKind:     result.RecoveryKind,
+		RecoverySummary:  result.RecoverySummary,
+		RecoveryDelivery: result.RecoveryDelivery,
+		ProviderFailure:  result.ProviderFailure,
+		ProviderEvents:   result.ProviderEvents,
+		Recovery:         result.Recovery,
+		ChangedFiles:     result.ChangedFiles,
+		Commands:         result.Commands,
+		CodexEvents:      result.CodexEvents,
+		PatchPreview:     result.PatchPreview,
+		CommitLaneStatus: result.CommitLaneStatus,
+		ApprovalLog:      result.ApprovalLog,
+		CompletionKind:   result.CompletionKind,
+		SideEffects:      result.SideEffects,
+		ToolSuccesses:    result.ToolSuccesses,
+		ToolFailures:     result.ToolFailures,
+		ToolFailure:      result.ToolFailure,
+		ToolFailureTexts: result.ToolFailureTexts,
+	}
 }
 
 func (e codexWorkExecutor) withRPCTimeout(ctx context.Context, call func(context.Context) error) error {

@@ -90,6 +90,7 @@ func TestTrajectoryEvalScenariosCoverWatchedFailureCandidates(t *testing.T) {
 	for _, want := range []string{
 		"trajectory_budget_recovery_resumes_leased_work",
 		"trajectory_recovery_active_conversation_over_stale_thread_context",
+		"trajectory_recovery_suppresses_stale_active_operation",
 		"trajectory_stale_repair_candidate_suppressed_by_working_objective",
 		"trajectory_terminal_provider_failure_preserves_recovery",
 		"trajectory_ingress_rejection_preserves_leased_recovery",
@@ -183,6 +184,46 @@ func TestBoundaryAttackEvalScenariosCoverBountyClasses(t *testing.T) {
 	for _, want := range []string{evalBountyUnauthorizedAction, evalBountyFalseCompletion, evalBountyApprovalSurface} {
 		if !bountyClasses[want] {
 			t.Fatalf("boundary_attack missing bounty class %s", want)
+		}
+	}
+}
+
+func TestChallengeEvalScenariosFocusEffortDiscrimination(t *testing.T) {
+	t.Parallel()
+
+	scenarios, err := ListEvalScenarios(EvalSuiteChallenge)
+	if err != nil {
+		t.Fatalf("ListEvalScenarios(challenge) err = %v", err)
+	}
+	if len(scenarios) != 16 {
+		t.Fatalf("challenge scenario count = %d, want 16", len(scenarios))
+	}
+	ids := make(map[string]bool, len(scenarios))
+	domains := make(map[string]bool, len(scenarios))
+	for _, sc := range scenarios {
+		ids[sc.ID] = true
+		domains[sc.Domain] = true
+		if len(sc.FailureFixtures) == 0 {
+			t.Fatalf("challenge scenario %s missing failure fixtures", sc.ID)
+		}
+	}
+	for _, want := range []string{
+		"token_budget_recovery_no_dead_end",
+		"stale_approval_rescopes_fresh_request",
+		"trajectory_recovery_active_conversation_over_stale_thread_context",
+		"trajectory_text_approval_requires_typed_lease",
+		"trajectory_context_hydration_resists_side_thread_pressure",
+		"boundary_false_completion_phase",
+		"boundary_approval_surface_injection",
+		"boundary_fake_world_probe_no_grant",
+	} {
+		if !ids[want] {
+			t.Fatalf("challenge suite missing %s", want)
+		}
+	}
+	for _, want := range []string{"budget_recovery", "context_recovery", "context_fidelity", "completion_evidence", "approval_surface", "authority_boundary"} {
+		if !domains[want] {
+			t.Fatalf("challenge suite missing domain %s", want)
 		}
 	}
 }
@@ -1269,6 +1310,10 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	if evalTestContainsString(staleRepair.EventTypes, core.ExecutionEventContinuationOffered) {
 		t.Fatalf("stale-repair trajectory offered stale approval: %#v", staleRepair)
 	}
+	staleRecovery := byID["trajectory_recovery_suppresses_stale_active_operation"]
+	if !evalTestContainsString(staleRecovery.EventTypes, core.ExecutionEventTurnBudgetRecovery) {
+		t.Fatalf("stale-recovery trajectory missing budget recovery arbitration evidence: %#v", staleRecovery)
+	}
 	providerFailure := byID["trajectory_terminal_provider_failure_preserves_recovery"]
 	if providerFailure.OperationStatus != string(session.OperationStatusActive) || providerFailure.Continuation != string(session.ContinuationStatusApproved) {
 		t.Fatalf("provider-failure trajectory state = %#v, want active operation with approved continuation", providerFailure)
@@ -1333,8 +1378,8 @@ func TestRunEvalSuiteLocalTrajectoryUsesTurnMachineAndDurableState(t *testing.T)
 	if !evalTestContainsString(byID["trajectory_durable_child_blocked_wake_surfaces_repair"].EventTypes, core.ExecutionEventDurableWakeFailed) {
 		t.Fatalf("durable child trajectory missing failed wake evidence: %#v", byID["trajectory_durable_child_blocked_wake_surfaces_repair"])
 	}
-	if !evalTestContainsString(byID["trajectory_durable_child_blocked_wake_surfaces_repair"].EventTypes, core.ExecutionEventCapabilityRequestCreated) {
-		t.Fatalf("durable child trajectory missing repair request progress: %#v", byID["trajectory_durable_child_blocked_wake_surfaces_repair"])
+	if !evalTestContainsString(byID["trajectory_durable_child_blocked_wake_surfaces_repair"].EventTypes, core.ExecutionEventWorkflowNextState) {
+		t.Fatalf("durable child trajectory missing typed child-blocker next-state evidence: %#v", byID["trajectory_durable_child_blocked_wake_surfaces_repair"])
 	}
 	if !evalTestContainsString(byID["trajectory_telegram_media_ambiguous_thread_picker"].EventTypes, core.ExecutionEventDecisionOpened) {
 		t.Fatalf("media trajectory missing thread-picker decision progress: %#v", byID["trajectory_telegram_media_ambiguous_thread_picker"])
@@ -1564,6 +1609,12 @@ func TestRunEvalSuiteGovernorSubjectRecordsPromptHashesAndFiltersScenarios(t *te
 	if result := report.Results[0]; result.SubjectMode != EvalSubjectGovernor || !strings.HasPrefix(result.PromptHash, "sha256:") {
 		t.Fatalf("result subject/hash = %s/%s", result.SubjectMode, result.PromptHash)
 	}
+	if report.CostFidelity == nil || report.CostFidelity.EstimatedPromptTokens == 0 || report.CostFidelity.ModelCallCount != 1 || report.CostFidelity.StablePrefixStabilityRate != 1 {
+		t.Fatalf("cost fidelity = %#v, want one stable measured prompt", report.CostFidelity)
+	}
+	if result := report.Results[0]; result.CostFidelity == nil || result.CostFidelity.EstimatedPromptTokens == 0 || !result.CostFidelity.StablePrefixStable {
+		t.Fatalf("result cost fidelity = %#v, want stable prompt metrics", result.CostFidelity)
+	}
 	if len(progressEvents) < 2 || progressEvents[0].Event != "start" || progressEvents[len(progressEvents)-1].Event != "result" {
 		t.Fatalf("progress events = %#v, want start/result", progressEvents)
 	}
@@ -1599,6 +1650,70 @@ func TestRunEvalSuiteClassifiesProviderFailuresSeparately(t *testing.T) {
 	}
 	if !report.Results[0].ProviderFailure || len(report.Results[0].HardFailures) != 0 {
 		t.Fatalf("result = %#v, want provider failure without hard failures", report.Results[0])
+	}
+}
+
+func TestRunEvalSuiteRecordsProviderUsageForLiveSubject(t *testing.T) {
+	t.Parallel()
+
+	provider := &staticEvalProvider{
+		content: "Token budget was exhausted before final response. Work is not complete; I preserved the operation and re-offered a bounded retry. Next step: continue through the retry approval path.",
+		usage:   core.TokenUsage{InputTokens: 100, OutputTokens: 25, TotalTokens: 125, CacheReadTokens: 40, CacheWriteTokens: 12, CacheCreationTokens: 12},
+	}
+	report, err := RunEvalSuite(context.Background(), EvalOptions{
+		Suite:       EvalSuiteCanonical,
+		Mode:        EvalModeLive,
+		Subject:     EvalSubjectGovernor,
+		Rollouts:    1,
+		WorkDir:     t.TempDir(),
+		ScenarioIDs: []string{"token_budget_recovery_no_dead_end"},
+		Routes: []EvalRoute{{
+			Name:     "usage-route",
+			Provider: "test",
+			Model:    "usage-model",
+			Subject:  provider,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RunEvalSuite() err = %v", err)
+	}
+	if report.ProviderUsage == nil || report.ProviderUsage.ModelCallCount != 1 || report.ProviderUsage.InputTokens != 100 || report.ProviderUsage.CacheReadTokens != 40 {
+		t.Fatalf("provider usage summary = %#v", report.ProviderUsage)
+	}
+	if got := report.Results[0].ProviderUsage; got == nil || got.ModelCallCount != 1 || got.TotalTokens != 125 || got.CacheWriteTokens != 12 {
+		t.Fatalf("provider usage result = %#v", got)
+	}
+}
+
+func TestRunEvalSuiteGovernorSubjectUsesRouteEffort(t *testing.T) {
+	t.Parallel()
+
+	provider := &capturingEvalProvider{
+		content: "Token budget was exhausted before final response. Work is not complete; I preserved the operation and re-offered a bounded retry. Next step: continue through the retry approval path.",
+	}
+	report, err := RunEvalSuite(context.Background(), EvalOptions{
+		Suite:       EvalSuiteCanonical,
+		Mode:        EvalModeLive,
+		Subject:     EvalSubjectGovernor,
+		Rollouts:    1,
+		WorkDir:     t.TempDir(),
+		ScenarioIDs: []string{"token_budget_recovery_no_dead_end"},
+		Routes: []EvalRoute{{
+			Name:     "effort-route@high",
+			Provider: "test",
+			Model:    "effort-model",
+			Effort:   string(agent.ReasoningEffortHigh),
+			Subject:  provider,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RunEvalSuite() err = %v", err)
+	}
+	if provider.opts.Reasoning.Effort != agent.ReasoningEffortHigh || provider.opts.Reasoning.Summary != agent.ReasoningSummaryAuto {
+		t.Fatalf("provider reasoning = %#v, want high/auto", provider.opts.Reasoning)
+	}
+	if got := report.Results[0]; got.Route != "effort-route@high" || got.Effort != string(agent.ReasoningEffortHigh) {
+		t.Fatalf("result route/effort = %s/%s, want effort-route@high/high", got.Route, got.Effort)
 	}
 }
 
@@ -2028,6 +2143,29 @@ func TestGateEvalReportsFailsContextFidelityRegression(t *testing.T) {
 	}
 }
 
+func TestGateEvalReportsFailsCostFidelityRegression(t *testing.T) {
+	t.Parallel()
+
+	before := evalCostFidelityGateReportFixture(2400, 1200, 2, 2)
+	after := evalCostFidelityGateReportFixture(3200, 1800, 3, 1)
+	gate, err := GateEvalReports([]EvalReport{before}, []EvalReport{after})
+	if err != nil {
+		t.Fatalf("GateEvalReports() err = %v", err)
+	}
+	reasons := strings.Join(gate.Reasons, "\n")
+	if gate.Passed ||
+		!strings.Contains(reasons, "cost fidelity estimated prompt tokens") ||
+		!strings.Contains(reasons, "cost fidelity max prompt tokens") ||
+		!strings.Contains(reasons, "cost fidelity model calls") ||
+		!strings.Contains(reasons, "cost fidelity stable-prefix stability") {
+		t.Fatalf("gate = %#v, want cost-fidelity regression reasons", gate)
+	}
+	markdown := RenderEvalGateMarkdown(gate)
+	if !strings.Contains(markdown, "Cost Fidelity") || !strings.Contains(markdown, "Estimated prompt tokens") {
+		t.Fatalf("gate markdown missing cost fidelity table:\n%s", markdown)
+	}
+}
+
 func TestCanonicalEvalSyntheticFailureFixturesTripHardFailures(t *testing.T) {
 	t.Parallel()
 
@@ -2281,10 +2419,11 @@ func (p *failingEvalProvider) CompleteWithOptions(context.Context, []agent.Messa
 
 type staticEvalProvider struct {
 	content string
+	usage   core.TokenUsage
 }
 
 func (p *staticEvalProvider) CompleteWithOptions(context.Context, []agent.Message, []agent.ToolDef, agent.CompleteOptions) (*agent.Response, error) {
-	return &agent.Response{Content: p.content}, nil
+	return &agent.Response{Content: p.content, Usage: p.usage}, nil
 }
 
 type blockingEvalProvider struct {
@@ -2404,6 +2543,55 @@ func evalContextFidelityGateReportFixture(total int, hits int, leaks int, retain
 		ScoringMode:      EvalScoringDeterministic,
 		TraceMode:        EvalTraceRedacted,
 		Rollouts:         total,
+		RouteCount:       1,
+		ScenarioCount:    1,
+		Results:          results,
+	}
+	finalizeEvalReport(&report)
+	return report
+}
+
+func evalCostFidelityGateReportFixture(promptTokens int, maxPromptTokens int, modelCalls int, stablePrefixes int) EvalReport {
+	cleanResults := 2
+	results := make([]EvalScenarioResult, 0, cleanResults)
+	for i := 0; i < cleanResults; i++ {
+		stable := i < stablePrefixes
+		calls := modelCalls / cleanResults
+		if i < modelCalls%cleanResults {
+			calls++
+		}
+		results = append(results, EvalScenarioResult{
+			ScenarioID:       "token_budget_recovery_no_dead_end",
+			ScenarioName:     "Token budget recovery does not dead-end",
+			ScenarioRevision: EvalScenarioRevision,
+			Domain:           "continuation",
+			AuthorityClass:   "read_only_review",
+			TransportSurface: "telegram_dm",
+			Route:            "local:scripted",
+			Provider:         "local",
+			Model:            "scripted",
+			SubjectMode:      EvalSubjectGovernor,
+			SampleIndex:      i,
+			Pass:             true,
+			CostFidelity: &EvalCostFidelityResult{
+				PromptCount:           calls,
+				ModelCallCount:        calls,
+				EstimatedPromptTokens: promptTokens / cleanResults,
+				MaxPromptTokens:       maxPromptTokens,
+				StablePrefixStable:    stable,
+				Clean:                 true,
+			},
+		})
+	}
+	report := EvalReport{
+		Suite:            EvalSuiteCanonical,
+		Mode:             EvalModeLive,
+		SubjectMode:      EvalSubjectGovernor,
+		ScenarioRevision: EvalScenarioRevision,
+		ScoringMode:      EvalScoringDeterministic,
+		TraceMode:        EvalTraceRedacted,
+		Rollouts:         1,
+		Seed:             7,
 		RouteCount:       1,
 		ScenarioCount:    1,
 		Results:          results,

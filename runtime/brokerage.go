@@ -4,6 +4,9 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -71,6 +74,84 @@ func parseBrokerageRatification(text string) (turnBrokerage, error) {
 		RatifiedExecutionContract: &contract,
 		RatifiedSteps:             append([]string(nil), parsed.RatifiedSteps...),
 	}, nil
+}
+
+func (r *Runtime) recordBrokerageControlFlowJudgment(key session.SessionKey, brokerage turnBrokerage, now time.Time) error {
+	if r == nil || r.store == nil || strings.TrimSpace(brokerage.IdolumNote) == "" {
+		return nil
+	}
+	payload := map[string]any{
+		"phase":                        brokerage.Phase,
+		"ratification":                 brokerage.Ratification,
+		"signal_judgment":              brokerage.SignalJudgment,
+		"suggested_execution_contract": brokerage.SuggestedExecutionContract,
+		"ratified_execution_contract":  brokerage.RatifiedExecutionContract,
+		"ratified_steps":               brokerage.RatifiedSteps,
+		"proposal_fingerprint":         brokerageProposalFingerprint(brokerage),
+		"contract_fingerprint":         brokerageContractFingerprint(brokerage),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode brokerage control-flow judgment: %w", err)
+	}
+	completeness := session.JudgmentCompletenessComplete
+	var unknowns []session.UnknownPredicate
+	if strings.TrimSpace(brokerage.Ratification) == "" || brokerage.RatifiedExecutionContract == nil {
+		completeness = session.JudgmentCompletenessPartial
+		unknowns = append(unknowns, session.UnknownPredicate{Kind: "incomplete_brokerage_contract", Reason: "brokerage did not produce a complete ratified execution contract"})
+	}
+	service := r.interpretationService()
+	deps := []session.JudgmentDependencyRef{
+		{Kind: "brokerage_proposal", Ref: session.JudgmentUseHashRef("text", brokerage.IdolumNote), Role: "support"},
+	}
+	judgmentInput := session.JudgmentInput{
+		Key:                key,
+		Kind:               session.JudgmentKindBrokerageControlFlow,
+		SchemaVersion:      "v1",
+		SubjectKey:         "brokerage:" + brokerageControlFlowHash(brokerage),
+		ClaimKey:           "turn_control_flow_contract",
+		InterpreterID:      "runtime.brokerage_convergence",
+		InterpreterVersion: "v1",
+		InputRefs:          []string{session.JudgmentUseHashRef("brokerage_note", brokerage.IdolumNote)},
+		InputHash:          brokerageControlFlowHash(brokerage),
+		ResultJSON:         string(raw),
+		Completeness:       completeness,
+		Unknowns:           unknowns,
+		DependencyRefs:     deps,
+		SourceFaultDomains: []string{"model_brokerage", "pipeline_brokerage_parser_v1"},
+		Sensitivity:        "brokerage_metadata",
+		AsOf:               now,
+		CreatedAt:          now,
+	}
+	useInput := session.JudgmentUseInput{
+		Key:                  key,
+		ConsumerID:           session.ConsumerRuntimeBrokerageControlFlow,
+		Consequence:          session.JudgmentUseConsequenceControlFlow,
+		DependencyRefs:       deps,
+		PolicyRef:            "brokerage_control_flow_v1",
+		ResultRef:            session.JudgmentUseHashRef("brokerage_control_flow", brokerageControlFlowHash(brokerage)),
+		Irreversible:         false,
+		QualificationStatus:  session.JudgmentUseQualificationQualified,
+		ReconciliationStatus: session.JudgmentUseReconciliationNotRequired,
+		Reason:               "brokerage control-flow contract selected",
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+	_, _, err = service.RecordJudgmentAndUse(judgmentInput, useInput)
+	return err
+}
+
+func brokerageControlFlowHash(brokerage turnBrokerage) string {
+	seed := strings.Join([]string{
+		brokerage.IdolumNote,
+		brokerage.Ratification,
+		brokerage.SignalJudgment,
+		brokerageProposalFingerprint(brokerage),
+		brokerageContractFingerprint(brokerage),
+		strings.Join(brokerage.RatifiedSteps, "\x00"),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(seed))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func (r *Runtime) ratifyTurnBrokerage(
@@ -302,6 +383,56 @@ func (r *Runtime) convergeTurnBrokerage(
 			}
 		},
 	})
+}
+
+func (r *Runtime) reviseBrokerageAfterRequestApprovalAuthorityFailure(
+	ctx context.Context,
+	exec pipeline.TurnExecutionContract,
+	baseAwareness prompt.RuntimeAwareness,
+	systemBlocks []agent.SystemBlock,
+	history []agent.Message,
+	userText string,
+	brokerage turnBrokerage,
+	requestFaceNote brokerageFaceRequester,
+	audit *turnAuditRecorder,
+	feedback string,
+	emitSurface func(ctx context.Context, text string),
+) (turnBrokerage, core.TokenUsage, bool) {
+	if requestFaceNote == nil || strings.TrimSpace(feedback) == "" {
+		return brokerage, core.TokenUsage{}, false
+	}
+	revisionAwareness := turn.ApplyBrokerageAwareness(baseAwareness, brokerage.toTurnAwareness())
+	revisionAwareness.ArtifactMode = "scene"
+	prior := firstNonEmptyContinuation(
+		strings.TrimSpace(brokerage.IdolumNote),
+		"The governor attempted request_approval, but typed authority preflight rejected the proposed approval contract.",
+	)
+	revisedNote, usage, err := requestFaceNote(ctx, "brokerage", revisionAwareness, prior, feedback)
+	totalUsage := usage
+	if err != nil || strings.TrimSpace(revisedNote) == "" {
+		return brokerage, totalUsage, false
+	}
+	revised := seedTurnBrokerageFromFaceNote(revisedNote)
+	if !revised.Active {
+		return brokerage, totalUsage, false
+	}
+	if revised.Phase != "brokerage" {
+		return revised, totalUsage, true
+	}
+	converged, convergenceUsage := r.convergeTurnBrokerage(
+		ctx,
+		exec,
+		baseAwareness,
+		systemBlocks,
+		history,
+		userText,
+		revised,
+		requestFaceNote,
+		audit,
+		emitSurface,
+	)
+	totalUsage = addTokenUsage(totalUsage, convergenceUsage)
+	return converged, totalUsage, true
 }
 
 func (r *Runtime) brokerageConvergencePolicy() turn.BrokerageConvergencePolicy {

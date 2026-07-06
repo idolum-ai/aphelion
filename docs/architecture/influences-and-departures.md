@@ -547,6 +547,59 @@ Current repo surface:
 - `docs/architecture/state-surfaces.md`
 - `commands_status.go`
 
+### Truth Maintenance, Argumentation, And Provenance
+
+Sources: Jon Doyle, "A Truth Maintenance System" (Artificial Intelligence,
+1979); Johan de Kleer, "An Assumption-Based TMS" (Artificial Intelligence,
+1986); Phan Minh Dung, "On the Acceptability of Arguments and its Fundamental
+Role in Nonmonotonic Reasoning, Logic Programming and n-Person Games"
+(Artificial Intelligence, 1995); and the W3C
+[PROV overview](https://www.w3.org/TR/prov-overview/).
+
+What Aphelion took:
+
+- From truth-maintenance systems: beliefs or judgments need justifications, and
+  later contradiction should be able to revise what remains eligible.
+- From assumption-based truth maintenance: dependency labels and environments
+  matter; two conclusions can share a hidden assumption even when they look
+  independently produced.
+- From argumentation frameworks: challenge/attack relations and adjudication are
+  first-class reasoning objects, not prose comments.
+- From PROV: the missing relation is often use. An activity uses an entity and
+  generates another entity; Aphelion's equivalent is that a consumer uses a
+  judgment under a policy to commit a consequence.
+
+Where Aphelion stops:
+
+- Aphelion does not become a universal belief engine.
+- It does not assign one global scalar truth ranking to all records.
+- It does not let model output adjudicate high-consequence model-shaped
+  judgments.
+- It does not rewrite historical judgments after demotion.
+- It does not make argumentation, provenance, or truth-maintenance machinery a
+  new source of authority.
+
+Why Aphelion diverges:
+
+- Domain interpretation remains local. Shell effects, recovery, memory,
+  brokerage, and Telegram routing keep their domain rules.
+- Authority remains separate from epistemic confidence. A well-supported
+  judgment still needs an allowed use under the current policy and envelope.
+- Demotion changes future eligibility and triggers reconciliation of prior uses;
+  it does not erase an effect attempt, callback, projection, or state transition
+  that already happened.
+- Runtime action needs short paths to truth. Judgment, ground, use, challenge,
+  and reconciliation records link the existing evidence ledger, effect-attempt
+  ledger, TES, and operational stores rather than replacing them with one
+  omnibus truth ledger.
+
+Current repo surface:
+
+- `docs/architecture/interpretation-surfaces.md`
+- `docs/architecture/universal-evidence-ledger.md`
+- `docs/architecture/effect-attempt-ledger.md`
+- `docs/architecture/transparent-execution-sequence.md`
+
 ## Non-Goals From The Lineage
 
 - No plugin marketplace.

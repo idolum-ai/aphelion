@@ -17,10 +17,13 @@ The canonical flow is:
   requester attribution, target principal, capability kind, target resource,
   purpose, risk class, proposed contract, and constraints.
   When immediate operator visibility is needed, the request may include a
-  `review_target_chat_id` and optional `review_summary`; this queues a pending
-  review event without changing approval or grant semantics. Requests may also
-  embed a `capability_update_plan` in the contract when approval should result
-  in a concrete downstream change such as a durable child policy patch.
+  `review_target_chat_id` and optional `review_summary`; Telegram-scoped turns
+  default the review target to the current chat when no explicit target is
+  supplied. This queues a pending review event without changing approval or
+  grant semantics. Headless or non-Telegram submissions remain ledger-only
+  unless they name a review target. Requests may also embed a
+  `capability_update_plan` in the contract when approval should result in a
+  concrete downstream change such as a durable child policy patch.
 - `classify`: the request is normalized into one capability kind:
   `tool`, `local_device`, `external_account`, `purchase`, `public_web`,
   `communication`, `file_access`, `network_access`, or `generic_delegation`.

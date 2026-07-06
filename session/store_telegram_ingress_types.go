@@ -35,6 +35,7 @@ const (
 	TelegramIngressDropReasonTelegramThreadClosed  = "telegram_thread_closed"
 	TelegramIngressDropReasonTelegramThreadMissing = "telegram_thread_missing"
 	TelegramIngressDropReasonMediaThreadPickerTTL  = "media_thread_picker_expired"
+	TelegramIngressDropReasonDecisionResume        = "decision_resume_transferred"
 	TelegramIngressParkReasonMediaThreadPicker     = "media_thread_picker_pending"
 )
 

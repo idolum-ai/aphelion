@@ -27,6 +27,9 @@ func (r *Registry) nativeDefinitionsForPrincipal(p principal.Principal) []agent.
 	filtered := make([]agent.ToolDef, 0, len(defs))
 	for _, def := range defs {
 		name := strings.TrimSpace(def.Name)
+		if nativeToolHiddenForPrincipal(name, p) {
+			continue
+		}
 		if name == codexImageGenerationToolName {
 			allowed, err := r.codexImageGenerationAccessAllowed(p)
 			if err == nil && allowed {
@@ -59,6 +62,15 @@ func (r *Registry) nativeDefinitionsForPrincipal(p principal.Principal) []agent.
 		filtered = append(filtered, def)
 	}
 	return filtered
+}
+
+func nativeToolHiddenForPrincipal(name string, p principal.Principal) bool {
+	switch strings.TrimSpace(name) {
+	case "durable_agent":
+		return p.Role == principal.RoleDurableAgent
+	default:
+		return false
+	}
 }
 
 func (r *Registry) externalManifestsForPrincipal(p principal.Principal) []ExternalToolManifest {
@@ -132,19 +144,29 @@ func (r *Registry) externalToolDefinitions(manifests []ExternalToolManifest) []a
 		manifest = NormalizeExternalToolManifest(manifest)
 		defs = append(defs, agent.ToolDef{
 			Name:        manifest.Name,
-			Description: fmt.Sprintf("External tool owned by %s.", firstNonEmpty(manifest.Owner, "unknown owner")),
+			Description: externalToolDefinitionDescription(manifest),
 			Parameters:  manifest.IO.InputSchema,
 		})
 	}
 	return defs
 }
 
+func externalToolDefinitionDescription(manifest ExternalToolManifest) string {
+	manifest = NormalizeExternalToolManifest(manifest)
+	description := strings.TrimSpace(manifest.Description)
+	owner := firstNonEmpty(manifest.Owner, "unknown owner")
+	if description == "" {
+		return fmt.Sprintf("External tool owned by %s.", owner)
+	}
+	return fmt.Sprintf("%s. External tool owned by %s.", strings.TrimRight(description, "."), owner)
+}
+
 func (r *Registry) Definitions() []agent.ToolDef {
-	defs := []agent.ToolDef{
-		{
-			Name:        "exec",
-			Description: "Run a shell command in the configured workspace. Use this for git, file inspection, builds, tests, and repository edits. Repository-history changes such as git commit require explicit proposal approval.",
-			Parameters: json.RawMessage(`{
+	defs := nativeFileToolDefinitions()
+	defs = append(defs, agent.ToolDef{
+		Name:        "exec",
+		Description: "Run a shell command in the configured workspace. Prefer read_file, list_dir, and search for ordinary file inspection; use exec for git operations, validation, builds, tests, repository edits, or shell logic native tools cannot express. Repository-history changes such as git commit require explicit proposal approval.",
+		Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"command": {"type": "string", "description": "Shell command to run with bash -lc"},
@@ -153,9 +175,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 				},
 				"required": ["command"]
 			}`),
-		},
-	}
-	defs = append(defs, nativeFileToolDefinitions()...)
+	})
 	defs = append(defs, []agent.ToolDef{
 		{
 			Name:        "memory",
@@ -264,6 +284,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 		})
 	}
 	if r.store != nil {
+		defs = append(defs, authorityBundleToolDefinition())
 		defs = append(defs, requestApprovalToolDefinition())
 		defs = append(defs, agent.ToolDef{
 			Name:        "update_operation",
@@ -412,7 +433,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 						"contract": {"type": "object", "description": "Proposed behavior contract, escalation rules, attribution, or success criteria"},
 						"constraints": {"type": "object", "description": "Proposed boundaries such as max spend, paths, domains, accounts, retention, model/message limits, or review cadence"},
 						"capability_update_plan": {"type": "object", "description": "Optional concrete update plan to embed in the reviewable contract. For durable children this can include agent_id, policy_patch, policy_overrides, provisioning, attestation, grant_actions, reason, and notes."},
-						"review_target_chat_id": {"type": "integer", "description": "Optional Telegram chat id to queue a pending review event for this request"},
+						"review_target_chat_id": {"type": "integer", "description": "Optional Telegram chat id to queue a pending review event for this request; defaults to the current Telegram chat/scope when submitted from a Telegram-scoped turn"},
 						"review_summary": {"type": "string", "description": "Optional concise summary for the queued review event"},
 						"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Optional list limit"}
 				},
@@ -466,11 +487,11 @@ func (r *Registry) Definitions() []agent.ToolDef {
 		})
 		defs = append(defs, agent.ToolDef{
 			Name:        "durable_agent",
-			Description: "Inspect and ratify durable-agent governance from conversation. Admin only. For policy_apply, prefer policy_patch (conversational policy intent) and use policy_overrides only when a low-level override is explicitly needed. For ordinary behavior/privacy/shared-context changes, use policy_apply directly; enrollment actions are only for remote control-plane lifecycle.",
+			Description: "Inspect and ratify durable-agent governance from conversation. Admin only. conversation_send appends parent guidance without waking a child; wake_once consumes pending parent guidance exactly once under an approved child-wake lease, or may carry one bounded inline guidance payload in message/reason for that same leased wake. For policy_apply, prefer policy_patch (conversational policy intent) and use policy_overrides only when a low-level override is explicitly needed. For ordinary behavior/privacy/shared-context changes, use policy_apply directly; enrollment actions are only for remote control-plane lifecycle.",
 			Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-					"action": {"type": "string", "enum": ["list", "create", "create_from_archetype", "activate", "park", "resume", "retire", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "archetype_list", "archetype_show", "access_show", "access_grant", "access_revoke", "conversation_show", "conversation_send", "delegation_request", "delegation_report", "memory_review", "memory_delegate", "profile_show", "profile_apply", "artifact_put", "artifact_list", "artifact_show", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
+					"action": {"type": "string", "enum": ["list", "create", "create_from_archetype", "activate", "park", "resume", "retire", "connection_test", "policy_show", "bootstrap_show", "policy_apply", "bootstrap_update", "enrollment_show", "enrollment_update", "wizard_start", "wizard_answer", "wizard_show", "wizard_finalize", "wizard_cancel", "archetype_list", "archetype_show", "access_show", "access_grant", "access_revoke", "conversation_show", "conversation_send", "wake_once", "delegation_request", "delegation_report", "memory_review", "memory_delegate", "profile_show", "profile_apply", "artifact_put", "artifact_list", "artifact_show", "snapshot_create", "snapshot_list", "snapshot_restore"], "description": "Durable-agent governance operation"},
 					"agent_id": {"type": "string", "description": "Durable agent id for show/update actions"},
 						"archetype": {"type": "string", "description": "Repo archetype name for archetype_show or create_from_archetype"},
 						"channel_kind": {"type": "string", "description": "Required for create. Example: external_channel or telegram_group"},
@@ -634,7 +655,7 @@ func (r *Registry) Definitions() []agent.ToolDef {
 						},
 					"operation": {"type": "string", "enum": ["revoke", "reactivate", "decommission", "rotate_secret"], "description": "Enrollment lifecycle operation for enrollment_update"},
 					"secret": {"type": "string", "description": "Replacement control-plane secret for enrollment_update when operation=rotate_secret"},
-					"message": {"type": "string", "description": "Parent message text for conversation_send"},
+					"message": {"type": "string", "description": "Parent message text for conversation_send, or one bounded inline guidance payload for wake_once when no parent message is pending"},
 					"history": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Recent update entries to show for policy_show or bootstrap_show"},
 					"telegram_user_id": {"type": "integer", "minimum": 1, "description": "Single Telegram user id for access_grant or access_revoke"},
 					"telegram_user_ids": {"type": "array", "items": {"type": "integer", "minimum": 1}, "description": "Telegram user ids for access_grant or access_revoke"}

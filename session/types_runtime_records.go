@@ -116,6 +116,7 @@ type ReviewEvent struct {
 	TurnTo            int
 	Summary           string
 	MetadataJSON      string
+	IdempotencyKey    string
 	Status            string // "pending" | "delivered" | "dismissed"
 	CreatedAt         time.Time
 	DeliveredAt       time.Time
@@ -253,6 +254,7 @@ type PendingDecisionRecord struct {
 	MessageID         int64
 	Prompt            string
 	Details           string
+	MetadataJSON      string
 	Rationale         string
 	ArtifactRefs      []RecordReference
 	ChoicesJSON       string

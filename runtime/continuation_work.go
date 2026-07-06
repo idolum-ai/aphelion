@@ -4,6 +4,8 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/principal"
 	"github.com/idolum-ai/aphelion/session"
+	toolpkg "github.com/idolum-ai/aphelion/tool"
 )
 
 func (r *Runtime) ContinuationState(chatID int64) (session.ContinuationState, error) {
@@ -68,6 +71,21 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 		return session.ContinuationState{}, err
 	}
 	state = session.NormalizeContinuationState(state)
+	now := time.Now().UTC()
+	if opState, opErr := r.store.OperationState(key); opErr == nil {
+		if repaired, ok, repairErr := r.repairTerminalContinuationProjection(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, opState, state, true, now, "approval", false); repairErr != nil {
+			return session.ContinuationState{}, repairErr
+		} else if ok {
+			return repaired, fmt.Errorf("continuation approval stale: %w", core.ErrContinuationStale)
+		}
+		if repaired, ok, repairErr := r.repairSupersededContinuationProjection(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, opState, state, true, now, "approval"); repairErr != nil {
+			return session.ContinuationState{}, repairErr
+		} else if ok {
+			return repaired, fmt.Errorf("continuation approval superseded: %w", core.ErrContinuationStale)
+		}
+	} else {
+		return session.ContinuationState{}, opErr
+	}
 	if state.Status != session.ContinuationStatusPending {
 		return state, core.ErrContinuationNotPending
 	}
@@ -77,7 +95,6 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 	if err := r.validateContinuationApprovalBundleFingerprints(key, state); err != nil {
 		return state, err
 	}
-	now := time.Now().UTC()
 	state, err = continuationStateWithLeaseApprovedForBundlePhases(state, approverID, phaseIDs, now)
 	if err != nil {
 		if updateErr := r.store.UpdateContinuationState(key, state); updateErr != nil {
@@ -112,13 +129,83 @@ func (r *Runtime) approveContinuationBundleForKeyLocked(key session.SessionKey, 
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return session.ContinuationState{}, err
 	}
+	if err := r.markAuthorityDiscoveryContinuationRecoveryContractStatus(key, state, session.IdentificationLedgerStatusApproved, now); err != nil {
+		return session.ContinuationState{}, err
+	}
+	if err := r.recordAuthorityDiscoveryOperatorObservationForLabel(key, state.ContinuationLease.RecoveryContractID, fmt.Sprintf("telegram:%d", approverID), "approve_continuation", now); err != nil {
+		return session.ContinuationState{}, err
+	}
 	if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusApproved); err != nil {
 		return session.ContinuationState{}, fmt.Errorf("sync approved operation proposal status: %w", err)
 	}
 	payload := continuationExecutionPayload(state)
 	payload["approved_by_user"] = approverID
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationApproved, "continuation", "approved", payload, now)
+	if continuationStateReadyForNextAction(state) {
+		if err := r.recordContinuationReadyNextAction(key, state, now); err != nil {
+			return session.ContinuationState{}, err
+		}
+	}
 	return state, nil
+}
+
+func continuationReadyNextActionSubject(state session.ContinuationState) string {
+	state = session.NormalizeContinuationState(state)
+	return firstNonEmptyContinuation(state.ContinuationLease.ID, state.ApprovalBundle.ID, state.ActionProposal.ID)
+}
+
+func continuationStateReadyForNextAction(state session.ContinuationState) bool {
+	state = session.NormalizeContinuationState(state)
+	return state.Status == session.ContinuationStatusApproved &&
+		(state.ContinuationLease.Active() || state.ApprovalBundle.Active()) &&
+		continuationReadyNextActionSubject(state) != ""
+}
+
+func (r *Runtime) recordContinuationReadyNextAction(key session.SessionKey, state session.ContinuationState, now time.Time) error {
+	if r == nil || r.store == nil {
+		return fmt.Errorf("runtime store unavailable")
+	}
+	subject := continuationReadyNextActionSubject(state)
+	if subject == "" {
+		return nil
+	}
+	_, err := r.store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "continuation",
+		State:              session.NextActionReadyToExecute,
+		SubjectKind:        "continuation_lease",
+		SubjectRef:         subject,
+		CausalRefs:         []string{"continuation:" + firstNonEmptyContinuation(state.ContinuationLease.ID, state.ApprovalBundle.ID), "proposal:" + state.ActionProposal.ID},
+		NextAction:         "execute the approved continuation turn",
+		RequiredAuthority:  firstNonEmptyContinuation(string(state.ContinuationLease.LeaseClass), state.ActionProposal.RiskClass),
+		OperatorProjection: "The continuation is approved and ready for one bounded execution turn.",
+		CreatedAt:          now,
+	})
+	if err != nil {
+		return fmt.Errorf("record continuation ready next action: %w", err)
+	}
+	return nil
+}
+
+func (r *Runtime) resolveContinuationReadyNextAction(key session.SessionKey, state session.ContinuationState, reason string, at time.Time) error {
+	if r == nil || r.store == nil {
+		return fmt.Errorf("runtime store unavailable")
+	}
+	subject := continuationReadyNextActionSubject(state)
+	if subject == "" {
+		return nil
+	}
+	if err := r.store.ResolveNextAction(session.NextActionResolutionInput{
+		Key:         key,
+		Owner:       "continuation",
+		SubjectKind: "continuation_lease",
+		SubjectRef:  subject,
+		Reason:      reason,
+		ResolvedAt:  at,
+	}); err != nil {
+		return fmt.Errorf("resolve continuation ready next action: %w", err)
+	}
+	return nil
 }
 
 func (r *Runtime) approveRequiredCapabilityGrantsForContinuation(key session.SessionKey, state session.ContinuationState, approverID int64, now time.Time) (session.ContinuationState, error) {
@@ -311,6 +398,9 @@ func (r *Runtime) revokeContinuationForKeyLocked(key session.SessionKey) (Contin
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
 			return ContinuationRevokeResult{}, err
 		}
+		if err := r.markAuthorityDiscoveryContinuationRecoveryContractStatus(key, state, session.IdentificationLedgerStatusInvalidated, now); err != nil {
+			return ContinuationRevokeResult{}, err
+		}
 		if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusDenied); err != nil {
 			return ContinuationRevokeResult{}, fmt.Errorf("sync revoked operation proposal status: %w", err)
 		}
@@ -370,14 +460,17 @@ func (r *Runtime) TriggerContinuationForKey(ctx context.Context, key session.Ses
 }
 
 type approvedContinuationReservation struct {
-	State           session.ContinuationState
-	Actor           principal.Principal
-	ExecutionActor  principal.Principal
-	ApprovedBy      int64
-	EventText       string
-	SandboxRequired bool
-	WorkRequest     *WorkRequest
-	WorkMode        WorkMode
+	State                 session.ContinuationState
+	ApprovedState         session.ContinuationState
+	Actor                 principal.Principal
+	ExecutionActor        principal.Principal
+	ApprovedBy            int64
+	EventText             string
+	SandboxRequired       bool
+	AuthorityAdmission    session.ExecutionRunAuthority
+	HasAuthorityAdmission bool
+	WorkRequest           *WorkRequest
+	WorkMode              WorkMode
 }
 
 type leaseAccessDeniedRepair struct {
@@ -423,9 +516,29 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 	if err != nil {
 		return session.ContinuationState{}, nil, 0, nil, err
 	}
+	state = session.NormalizeContinuationState(state)
+	if opState, opErr := r.store.OperationState(key); opErr == nil {
+		if repaired, ok, repairErr := r.repairTerminalContinuationProjection(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, opState, state, true, now, "continuation_reservation", false); repairErr != nil {
+			return session.ContinuationState{}, nil, 0, nil, repairErr
+		} else if ok {
+			r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "terminal_operation", continuationExecutionPayload(repaired), now)
+			return repaired, nil, 0, nil, nil
+		}
+		if repaired, ok, repairErr := r.repairSupersededContinuationProjection(context.Background(), key, core.InboundMessage{ChatID: key.ChatID}, opState, state, true, now, "continuation_reservation"); repairErr != nil {
+			return session.ContinuationState{}, nil, 0, nil, repairErr
+		} else if ok {
+			r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "superseded", continuationExecutionPayload(repaired), now)
+			return repaired, nil, 0, nil, nil
+		}
+	} else {
+		return session.ContinuationState{}, nil, 0, nil, opErr
+	}
 	if continuationLeaseExpired(state, now) {
 		state = continuationStateWithLeaseExpired(state, now)
 		if err := r.store.UpdateContinuationState(key, state); err != nil {
+			return session.ContinuationState{}, nil, 0, nil, err
+		}
+		if err := r.markAuthorityDiscoveryContinuationRecoveryContractStatus(key, state, session.IdentificationLedgerStatusExpired, now); err != nil {
 			return session.ContinuationState{}, nil, 0, nil, err
 		}
 		if err := r.syncOperationProposalStatusFromContinuation(key, state, session.ProposalStatusExpired); err != nil {
@@ -473,8 +586,13 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 		approvedBy = actor.TelegramUserID
 	}
 	continuationEventText := approvedContinuationEventTextForState(state)
+	approvedState := state
+	authorityAdmission, hasAuthorityAdmission := directContinuationAuthorityAdmission(key, executionActor, approvedState, now)
 	state = continuationStateAfterLeaseTurnConsumed(state, now)
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
+		return state, nil, loopBudget, nil, err
+	}
+	if err := r.markAuthorityDiscoveryContinuationRecoveryContractStatus(key, state, session.IdentificationLedgerStatusConsumed, now); err != nil {
 		return state, nil, loopBudget, nil, err
 	}
 	payload := continuationExecutionPayload(state)
@@ -487,18 +605,56 @@ func (r *Runtime) reserveApprovedContinuationTurnLocked(key session.SessionKey) 
 		payload["sandboxed_from_role"] = string(actor.Role)
 	}
 	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, now)
+	if err := r.resolveContinuationReadyNextAction(key, approvedState, "continuation_lease_consumed", now); err != nil {
+		return state, nil, loopBudget, nil, err
+	}
 	return state, &approvedContinuationReservation{
-		State:           state,
-		Actor:           actor,
-		ExecutionActor:  executionActor,
-		ApprovedBy:      approvedBy,
-		EventText:       continuationEventText,
-		SandboxRequired: sandboxRequired,
+		State:                 state,
+		ApprovedState:         approvedState,
+		Actor:                 actor,
+		ExecutionActor:        executionActor,
+		ApprovedBy:            approvedBy,
+		EventText:             continuationEventText,
+		SandboxRequired:       sandboxRequired,
+		AuthorityAdmission:    authorityAdmission,
+		HasAuthorityAdmission: hasAuthorityAdmission,
 	}, loopBudget, nil, nil
+}
+
+func directContinuationAuthorityAdmission(key session.SessionKey, actor principal.Principal, state session.ContinuationState, now time.Time) (session.ExecutionRunAuthority, bool) {
+	if key.ChatID == 0 && key.UserID == 0 && key.Scope.IsZero() {
+		return session.ExecutionRunAuthority{}, false
+	}
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	if strings.TrimSpace(lease.ID) == "" || !lease.ActiveAt(now) {
+		return session.ExecutionRunAuthority{}, false
+	}
+	return session.NormalizeExecutionRunAuthority(session.ExecutionRunAuthority{
+		SessionID:           session.SessionIDForKey(key),
+		ChatID:              key.ChatID,
+		UserID:              key.UserID,
+		Scope:               key.Scope,
+		Principal:           runtimeExecutionPrincipalID(actor),
+		PrincipalRole:       string(actor.Role),
+		ExecutionSpecies:    "direct_continuation",
+		LeaseKind:           session.ExecutionAuthorityLeaseKindContinuation,
+		ContinuationLeaseID: lease.ID,
+		LeaseStatus:         string(lease.Status),
+		LeaseClass:          lease.LeaseClass,
+		LeaseAllowedActions: append([]string(nil), lease.AllowedActions...),
+		LeaseConstraints:    cloneStringMap(lease.Constraints),
+		LeaseRemainingTurns: lease.RemainingTurns,
+		LeaseExpiresAt:      lease.ExpiresAt,
+		AdmittedAt:          now.UTC(),
+	}), true
 }
 
 func (r *Runtime) shouldRouteContinuationThroughWorkExecutor(state session.ContinuationState) bool {
 	if r == nil || r.workExecutor == nil {
+		return false
+	}
+	state = session.NormalizeContinuationState(state)
+	if session.NormalizeContinuationRetryOperation(state.ContinuationLease.RetryOperation).Active() {
 		return false
 	}
 	if continuationRequiresApprovedUserSandbox(state) {
@@ -525,7 +681,9 @@ func (r *Runtime) reserveApprovedWorkContinuationTurnLocked(key session.SessionK
 	}
 	opState = session.NormalizeOperationState(opState)
 	req := r.workRequestForContinuation(key, key.ChatID, executionActor, state, opState)
-	state = continuationStateAfterLeaseTurnConsumed(state, time.Now().UTC())
+	consumeAt := time.Now().UTC()
+	approvedState := state
+	state = continuationStateAfterLeaseTurnConsumed(state, consumeAt)
 	if err := r.store.UpdateContinuationState(key, state); err != nil {
 		return state, nil, loopBudget, nil, err
 	}
@@ -534,7 +692,10 @@ func (r *Runtime) reserveApprovedWorkContinuationTurnLocked(key session.SessionK
 	payload["execution_principal_role"] = string(executionActor.Role)
 	payload["work_executor_requested"] = true
 	payload["work_mode"] = string(req.Mode)
-	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, time.Now().UTC())
+	r.recordExecutionEvent(key, core.ExecutionEventContinuationConsumed, "continuation", "consumed", payload, consumeAt)
+	if err := r.resolveContinuationReadyNextAction(key, approvedState, "continuation_lease_consumed", consumeAt); err != nil {
+		return state, nil, loopBudget, nil, err
+	}
 	r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorStarted, "work", "started", map[string]any{
 		"operation_id": strings.TrimSpace(req.OperationID),
 		"lease_id":     strings.TrimSpace(req.LeaseID),
@@ -542,6 +703,7 @@ func (r *Runtime) reserveApprovedWorkContinuationTurnLocked(key session.SessionK
 	}, time.Now().UTC())
 	return state, &approvedContinuationReservation{
 		State:          state,
+		ApprovedState:  approvedState,
 		Actor:          actor,
 		ExecutionActor: executionActor,
 		ApprovedBy:     approvedBy,
@@ -554,18 +716,417 @@ func (r *Runtime) runReservedApprovedContinuation(ctx context.Context, key sessi
 	if reservation.WorkRequest != nil {
 		return r.runReservedApprovedWorkContinuation(ctx, key, reservation)
 	}
+	if retry, ok, err := approvedContinuationRetryOperation(reservation.ApprovedState); err != nil {
+		return err
+	} else if ok {
+		return r.runReservedApprovedRetryOperation(ctx, key, reservation, retry)
+	}
+	if reservation.HasAuthorityAdmission {
+		ctx = toolpkg.WithExecutionAuthorityAdmission(ctx, reservation.AuthorityAdmission)
+	}
 	msg := continuationInboundForKey(key, reservation.ExecutionActor, reservation.EventText, core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
 	_, err := r.handleInternalContinuation(ctx, reservation.ExecutionActor, msg)
 	return err
 }
 
+func approvedContinuationRetryOperation(state session.ContinuationState) (session.ContinuationRetryOperation, bool, error) {
+	state = session.NormalizeContinuationState(state)
+	lease := session.NormalizeContinuationLease(state.ContinuationLease)
+	retry := session.NormalizeContinuationRetryOperation(lease.RetryOperation)
+	if !retry.Active() {
+		return session.ContinuationRetryOperation{}, false, nil
+	}
+	if strings.TrimSpace(lease.RecoveryContractID) == "" {
+		return session.ContinuationRetryOperation{}, false, fmt.Errorf("approved continuation retry requires recovery contract")
+	}
+	if retry.Contract != "aphelion.recovery_retry.v1" {
+		return session.ContinuationRetryOperation{}, false, fmt.Errorf("approved continuation retry operation has unsupported contract %q", retry.Contract)
+	}
+	switch lease.LeaseClass {
+	case session.ContinuationLeaseClassChildWake:
+		if retry.Tool != "durable_agent" || retry.OperationKind != "durable_agent_wake_once" {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("child_wake continuation retry must invoke durable_agent wake_once")
+		}
+		var input struct {
+			Action  string `json:"action"`
+			AgentID string `json:"agent_id"`
+		}
+		if err := json.Unmarshal([]byte(retry.InputJSON), &input); err != nil {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("decode child_wake retry input: %w", err)
+		}
+		agentID := strings.TrimSpace(lease.Constraints["agent_id"])
+		if strings.TrimSpace(input.Action) != "wake_once" || strings.TrimSpace(input.AgentID) == "" || strings.TrimSpace(input.AgentID) != agentID {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("child_wake continuation retry must target exact approved child")
+		}
+	case session.ContinuationLeaseClassDataAccess:
+		if !session.ContinuationConstraintsAreDiscoveredEffect(lease.Constraints) {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("approved continuation retry is not supported for lease class %q", lease.LeaseClass)
+		}
+		if retry.Tool != "exec" || retry.OperationKind != session.ContinuationRecoveryRetryExecExactCommand {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("discovered_effect continuation retry must invoke exec exact command")
+		}
+		var input struct {
+			Command string `json:"command"`
+			Workdir string `json:"workdir"`
+		}
+		if err := json.Unmarshal([]byte(retry.InputJSON), &input); err != nil {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("decode discovered_effect retry input: %w", err)
+		}
+		if strings.TrimSpace(input.Command) == "" || strings.TrimSpace(input.Command) != strings.TrimSpace(lease.Constraints["command"]) {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("discovered_effect continuation retry must target exact approved command")
+		}
+		if want := strings.TrimSpace(lease.Constraints["workdir"]); want != "" && strings.TrimSpace(input.Workdir) != want {
+			return session.ContinuationRetryOperation{}, false, fmt.Errorf("discovered_effect continuation retry workdir mismatch")
+		}
+	default:
+		return session.ContinuationRetryOperation{}, false, fmt.Errorf("approved continuation retry is not supported for lease class %q", lease.LeaseClass)
+	}
+	return retry, true, nil
+}
+
+func (r *Runtime) runReservedApprovedRetryOperation(ctx context.Context, key session.SessionKey, reservation approvedContinuationReservation, retry session.ContinuationRetryOperation) (err error) {
+	if r == nil {
+		return nil
+	}
+	if !reservation.HasAuthorityAdmission {
+		return fmt.Errorf("approved retry operation requires execution authority admission")
+	}
+	tools := r.toolsForPrincipal(reservation.ExecutionActor, key)
+	if tools == nil {
+		return fmt.Errorf("approved retry operation requires tool registry")
+	}
+	ctx = toolpkg.WithExecutionAuthorityAdmission(ctx, reservation.AuthorityAdmission)
+	msg := continuationInboundForKey(key, reservation.ExecutionActor, reservation.EventText, core.InboundOriginTurnAuthorization, string(session.TurnAuthorizationKindContinuation))
+	monitor, err := r.startTurnMonitor(ctx, key, session.TurnRunKindInteractive, reservation.EventText, nil, nil, msg)
+	if err != nil {
+		return err
+	}
+	defer func() { monitor.Finish(ctx, err) }()
+
+	toolCtx := monitor.Context()
+	input := json.RawMessage(retry.InputJSON)
+	if retry.Tool == "exec" && session.ContinuationConstraintsAreDiscoveredEffect(reservation.ApprovedState.ContinuationLease.Constraints) {
+		toolCtx = toolpkg.WithContinuationExecAuthority(toolCtx, reservation.ApprovedState)
+	}
+	toolCtx = monitor.ToolInvocationContext(toolCtx, retry.Tool, input)
+	monitor.ToolStarted(toolCtx, retry.Tool, input)
+	out, execErr := tools.Execute(toolCtx, retry.Tool, input)
+	projection := monitor.ProjectToolOutput(toolCtx, retry.Tool, input, out, execErr)
+	monitor.ToolFinishedWithProjection(toolCtx, retry.Tool, input, out, projection.Output, execErr, projection.Recorded)
+	if execErr != nil {
+		err = execErr
+		return err
+	}
+	if handled, handleErr := r.handleApprovedRetryDurableAgentWakeResult(key, reservation, retry, out, monitor); handleErr != nil {
+		err = handleErr
+		return err
+	} else if handled {
+		return nil
+	}
+	if opState, loadErr := r.store.OperationState(key); loadErr == nil {
+		opState = session.NormalizeOperationState(opState)
+		opState.Status = session.OperationStatusCompleted
+		opState.Stage = "approved_retry_completed"
+		opState.Summary = "Approved retry operation completed: " + strings.TrimSpace(retry.Tool)
+		opState.Proposal.Status = session.ProposalStatusApproved
+		opState.Proposal.UpdatedAt = time.Now().UTC()
+		opState.UpdatedAt = time.Now().UTC()
+		if updateErr := r.store.UpdateOperationState(key, opState); updateErr != nil {
+			err = updateErr
+			return err
+		}
+	}
+	r.recordExecutionEvent(key, core.ExecutionEventWorkflowNextState, "workflow", string(session.NextActionTerminal), map[string]any{
+		"subject_kind":        strings.TrimSpace(retry.SubjectKind),
+		"subject_ref":         strings.TrimSpace(retry.SubjectRef),
+		"operation_kind":      strings.TrimSpace(retry.OperationKind),
+		"tool":                strings.TrimSpace(retry.Tool),
+		"request_instance_id": strings.TrimSpace(retry.RequestInstanceID),
+	}, time.Now().UTC())
+	return nil
+}
+
+func (r *Runtime) handleApprovedRetryDurableAgentWakeResult(key session.SessionKey, reservation approvedContinuationReservation, retry session.ContinuationRetryOperation, out string, monitor *turnMonitor) (bool, error) {
+	if r == nil || r.store == nil || retry.Tool != "durable_agent" || retry.OperationKind != "durable_agent_wake_once" {
+		return false, nil
+	}
+	leaseID := strings.TrimSpace(reservation.State.ContinuationLease.ID)
+	packetID, childResult, hasTerminalChildResult, err := r.approvedRetryWakeTerminalChildResultForLease(leaseID)
+	if err != nil {
+		return true, err
+	}
+	result, ok := toolpkg.ParseDurableAgentWakeOnceRenderedResult(out)
+	if !ok {
+		if hasTerminalChildResult {
+			result = approvedRetryWakeResultFromChildTaskResult(retry, childResult)
+			return true, r.recordApprovedRetryWakeTerminalChildResult(key, reservation, retry, result, packetID, childResult, monitor)
+		}
+		return true, fmt.Errorf("approved durable_agent wake_once retry returned an unrecognized projection and no typed child task result for lease %q", leaseID)
+	}
+	switch strings.TrimSpace(result.WakeStatus) {
+	case "completed":
+		if hasTerminalChildResult {
+			return true, r.recordApprovedRetryWakeTerminalChildResult(key, reservation, retry, result, packetID, childResult, monitor)
+		}
+		return false, nil
+	case "skipped_no_pending_parent_message":
+		result.FailureClass = "no_pending_parent_guidance"
+		result.FailureSummary = "Approved child wake retry had no pending or contract-bound parent guidance to consume."
+		result.RetryPolicy = "retry_after_recovery_contract_repair"
+		result.NextRepair = "repair the child_wake recovery contract so the approved retry carries a bounded child-local guidance payload before requesting another continuation."
+		return true, r.recordApprovedRetryWakeBlocked(key, reservation, retry, result, monitor)
+	case "awaiting_child_pickup":
+		return true, r.recordApprovedRetryWakeWaiting(key, reservation, retry, result, monitor)
+	default:
+		if result.FailureClass == "" {
+			result.FailureClass = "wake_failed"
+		}
+		if result.FailureSummary == "" {
+			result.FailureSummary = "durable_agent wake_once failed before the child produced a completion"
+		}
+		if result.RetryPolicy == "" {
+			result.RetryPolicy = "retry_after_wake_runtime_repair"
+		}
+		if result.NextRepair == "" {
+			result.NextRepair = "inspect the durable-agent wake runtime, then retry one bounded wake"
+		}
+		return true, r.recordApprovedRetryWakeBlocked(key, reservation, retry, result, monitor)
+	}
+}
+
+func approvedRetryWakeResultFromChildTaskResult(retry session.ContinuationRetryOperation, result session.ChildTaskResult) toolpkg.DurableAgentWakeOnceRenderedResult {
+	agentID := strings.TrimSpace(result.AgentID)
+	if agentID == "" {
+		agentID = approvedRetryAgentID(retry)
+	}
+	wakeStatus := "failed"
+	switch result.Status {
+	case session.ChildTaskResultCompleted:
+		wakeStatus = "completed"
+	case session.ChildTaskResultBlocked:
+		wakeStatus = "failed"
+	case session.ChildTaskResultFailed:
+		wakeStatus = "failed"
+	case session.ChildTaskResultUpdate:
+		wakeStatus = "awaiting_child_pickup"
+	}
+	failureClass := strings.TrimSpace(result.BlockerKind)
+	if failureClass == "" && result.Status == session.ChildTaskResultFailed {
+		failureClass = "child_task_failed"
+	}
+	return toolpkg.DurableAgentWakeOnceRenderedResult{
+		AgentID:        agentID,
+		WakeStatus:     wakeStatus,
+		FailureClass:   failureClass,
+		FailureSummary: strings.TrimSpace(result.Summary),
+		RetryPolicy:    "retry_after_blocker_resolution",
+	}
+}
+
+func approvedRetryAgentID(retry session.ContinuationRetryOperation) string {
+	var input struct {
+		AgentID string `json:"agent_id"`
+	}
+	_ = json.Unmarshal([]byte(retry.InputJSON), &input)
+	return strings.TrimSpace(input.AgentID)
+}
+
+func approvedRetrySubject(retry session.ContinuationRetryOperation, result toolpkg.DurableAgentWakeOnceRenderedResult) (string, string) {
+	subjectKind := strings.TrimSpace(retry.SubjectKind)
+	if subjectKind == "" {
+		subjectKind = "durable_agent_wake_once"
+	}
+	subjectRef := strings.TrimSpace(retry.SubjectRef)
+	if subjectRef == "" {
+		subjectRef = strings.TrimSpace(result.AgentID)
+	}
+	if subjectRef == "" {
+		subjectRef = "durable_agent_wake_once"
+	}
+	return subjectKind, subjectRef
+}
+
+func approvedRetryCausalRefs(reservation approvedContinuationReservation, retry session.ContinuationRetryOperation, result toolpkg.DurableAgentWakeOnceRenderedResult) []string {
+	refs := []string{}
+	if id := strings.TrimSpace(reservation.State.ContinuationLease.ID); id != "" {
+		refs = append(refs, "continuation:"+id)
+	}
+	if id := strings.TrimSpace(result.ContinuationLeaseID); id != "" && !stringSliceContains(refs, "continuation:"+id) {
+		refs = append(refs, "continuation:"+id)
+	}
+	if id := strings.TrimSpace(retry.RequestInstanceID); id != "" {
+		refs = append(refs, "request_instance:"+id)
+	}
+	if ref := strings.TrimSpace(retry.SubjectRef); ref != "" {
+		refs = append(refs, "subject:"+ref)
+	}
+	if agentID := strings.TrimSpace(result.AgentID); agentID != "" {
+		refs = append(refs, "durable_agent:"+agentID)
+	}
+	return refs
+}
+
+func (r *Runtime) recordApprovedRetryWakeBlocked(key session.SessionKey, reservation approvedContinuationReservation, retry session.ContinuationRetryOperation, result toolpkg.DurableAgentWakeOnceRenderedResult, monitor *turnMonitor) error {
+	now := time.Now().UTC()
+	agentID := strings.TrimSpace(result.AgentID)
+	if agentID == "" {
+		agentID = approvedRetryAgentID(retry)
+	}
+	failureClass := strings.TrimSpace(result.FailureClass)
+	if failureClass == "" {
+		failureClass = "wake_failed"
+	}
+	summary := strings.TrimSpace(result.FailureSummary)
+	if summary == "" {
+		summary = "durable_agent wake_once failed before the child produced a completion"
+	}
+	if opState, loadErr := r.store.OperationState(key); loadErr == nil {
+		opState = session.NormalizeOperationState(opState)
+		opState.Status = session.OperationStatusBlocked
+		opState.Stage = "approved_retry_failed"
+		opState.Summary = "Approved child wake retry failed: " + failureClass
+		if summary != "" {
+			opState.Summary += " - " + summary
+		}
+		opState.Proposal.Status = session.ProposalStatusApproved
+		opState.Proposal.UpdatedAt = now
+		opState.UpdatedAt = now
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return fmt.Errorf("update approved retry failed operation state: %w", err)
+		}
+	}
+	subjectKind, subjectRef := approvedRetrySubject(retry, result)
+	nextRepair := strings.TrimSpace(result.NextRepair)
+	if nextRepair == "" {
+		nextRepair = "repair the durable-agent wake runtime before retrying"
+	}
+	retryPolicy := strings.TrimSpace(result.RetryPolicy)
+	if retryPolicy == "" {
+		retryPolicy = "retry_after_wake_runtime_repair"
+	}
+	operationPayload, _ := json.Marshal(map[string]any{
+		"action":                  "repair_child_wake_failure",
+		"agent_id":                agentID,
+		"durable_agent_id":        agentID,
+		"failure_class":           failureClass,
+		"blocker_kind":            failureClass,
+		"child_blocker_kind":      failureClass,
+		"recovery_action":         "repair_child_wake_failure",
+		"recovery_family":         session.NextActionOperationKindDurableChildRecovery,
+		"recovery_contract":       "aphelion.recovery_handoff.v1",
+		"recovery_operation_kind": session.NextActionOperationKindDurableChildRecovery,
+		"retry_policy":            retryPolicy,
+		"request_instance_id":     strings.TrimSpace(retry.RequestInstanceID),
+	})
+	turnRunID := int64(0)
+	if monitor != nil {
+		turnRunID = monitor.runID
+	}
+	_, err := r.store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		TurnRunID:          turnRunID,
+		Owner:              "approved_retry",
+		State:              session.NextActionBlockedNeedsResourceRepair,
+		SubjectKind:        subjectKind,
+		SubjectRef:         subjectRef,
+		CausalRefs:         approvedRetryCausalRefs(reservation, retry, result),
+		NextAction:         nextRepair,
+		RequiredAuthority:  session.NextActionOperationKindDurableChildRecovery,
+		ResourceBlocker:    failureClass,
+		RetryPolicy:        retryPolicy,
+		OperationKind:      session.NextActionOperationKindDurableChildRecovery,
+		OperationTool:      "update_operation",
+		OperationInputJSON: string(operationPayload),
+		OperatorProjection: approvedRetryWakeBlockedProjection(agentID, failureClass, summary),
+		CreatedAt:          now,
+	})
+	if err != nil {
+		return fmt.Errorf("record approved retry wake blocker: %w", err)
+	}
+	return nil
+}
+
+func approvedRetryWakeBlockedProjection(agentID, failureClass, summary string) string {
+	parts := []string{"The approved child wake retry ran with authority but did not produce a child completion."}
+	if strings.TrimSpace(agentID) != "" {
+		parts = append(parts, "agent="+strings.TrimSpace(agentID)+".")
+	}
+	if strings.TrimSpace(failureClass) != "" {
+		parts = append(parts, "failure_class="+strings.TrimSpace(failureClass)+".")
+	}
+	if strings.TrimSpace(summary) != "" {
+		parts = append(parts, strings.TrimSpace(summary))
+	}
+	parts = append(parts, "Repair the wake runtime before requesting another bounded child_wake retry.")
+	return strings.Join(parts, " ")
+}
+
+func (r *Runtime) recordApprovedRetryWakeWaiting(key session.SessionKey, reservation approvedContinuationReservation, retry session.ContinuationRetryOperation, result toolpkg.DurableAgentWakeOnceRenderedResult, monitor *turnMonitor) error {
+	now := time.Now().UTC()
+	leaseID := firstNonEmpty(strings.TrimSpace(result.ContinuationLeaseID), strings.TrimSpace(reservation.State.ContinuationLease.ID))
+	if packetID, childResult, ok, err := r.approvedRetryWakeObservedChildResultForLease(leaseID); err != nil {
+		return fmt.Errorf("load approved retry child wake result: %w", err)
+	} else if ok {
+		return r.recordApprovedRetryWakeTerminalChildResult(key, reservation, retry, result, packetID, childResult, monitor)
+	}
+	if opState, loadErr := r.store.OperationState(key); loadErr == nil {
+		opState = session.NormalizeOperationState(opState)
+		opState.Status = session.OperationStatusActive
+		opState.Stage = "approved_retry_waiting_for_child"
+		opState.Summary = "Approved child wake retry is waiting for the child result."
+		opState.Proposal.Status = session.ProposalStatusApproved
+		opState.Proposal.UpdatedAt = now
+		opState.UpdatedAt = now
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return fmt.Errorf("update approved retry waiting operation state: %w", err)
+		}
+	}
+	subjectKind, subjectRef := approvedRetrySubject(retry, result)
+	turnRunID := int64(0)
+	if monitor != nil {
+		turnRunID = monitor.runID
+	}
+	_, err := r.store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		TurnRunID:          turnRunID,
+		Owner:              "approved_retry",
+		State:              session.NextActionWaitingForChild,
+		SubjectKind:        subjectKind,
+		SubjectRef:         subjectRef,
+		CausalRefs:         approvedRetryCausalRefs(reservation, retry, result),
+		NextAction:         "wait for the child wake result before retrying",
+		OperationKind:      "durable_agent_wake_once",
+		OperationTool:      strings.TrimSpace(retry.Tool),
+		OperationInputJSON: retry.InputJSON,
+		OperatorProjection: "The approved child wake retry started and is waiting for a child result.",
+		CreatedAt:          now,
+	})
+	if err != nil {
+		return fmt.Errorf("record approved retry wake waiting action: %w", err)
+	}
+	return nil
+}
+
 func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key session.SessionKey, reservation approvedContinuationReservation) error {
-	if r == nil || r.store == nil || r.workExecutor == nil || reservation.WorkRequest == nil {
+	if r == nil || r.store == nil || reservation.WorkRequest == nil {
+		return nil
+	}
+	if reservation.State.VerificationTarget != nil {
+		return r.runReservedWorkOutcomeVerification(ctx, key, reservation)
+	}
+	if r.workExecutor == nil {
 		return nil
 	}
 	req := *reservation.WorkRequest
+	workStartedAt := time.Now().UTC()
 	result, err := r.workExecutor.Run(ctx, req)
+	workFinishedAt := time.Now().UTC()
 	status := r.workExecutor.Status()
+	_, effectRecordErr := r.recordWorkResultEffectAttempts(key, req, result, err, workStartedAt, workFinishedAt)
+	if effectRecordErr != nil && err == nil {
+		err = effectRecordErr
+	}
+	r.attachEffectAttemptsToWorkResult(key, req, &result)
 	if err == nil && workResultBudgetRecoveryScheduled(result) {
 		artifact := r.persistWorkResultForContinuation(key, req, result, status, nil)
 		payload := workResultPayload(req, result, status, nil)
@@ -586,16 +1147,61 @@ func (r *Runtime) runReservedApprovedWorkContinuation(ctx context.Context, key s
 		return nil
 	}
 	if err == nil && result.Recovery == nil && !workResultHasSubstantiveCompletionEvidenceForRequest(req, result) {
-		err = errWorkExecutorNoCompletionEvidence
+		resolved, resolution := r.resolveWorkOutcomeAfterMissingEvidence(ctx, key, req, result, workStartedAt, workFinishedAt)
+		result = resolved
+		switch resolution.Kind {
+		case workOutcomeResolutionAutoVerified:
+			// The resolved result carries typed evidence; let the normal success path persist and record it once.
+			r.markEffectAttemptsForRequest(key, req, session.EffectAttemptStatusVerified, "", workFinishedAt)
+		case workOutcomeResolutionVerificationOfferable, workOutcomeResolutionBlockedUnverified:
+			r.markEffectAttemptsForRequest(key, req, session.EffectAttemptStatusUncertain, errWorkExecutorOutcomeUnverified.Error(), workFinishedAt)
+			cause := resolution.Err
+			if cause == nil {
+				cause = errWorkExecutorOutcomeUnverified
+			}
+			artifact := r.persistWorkResultForContinuation(key, req, result, status, cause)
+			payload := workResultPayload(req, result, status, cause)
+			for k, v := range resolution.Payload {
+				payload[k] = v
+			}
+			if artifact.Ref != "" {
+				payload["artifact_ref"] = artifact.Ref
+			}
+			r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFailed, "work", "outcome_unverified", payload, time.Now().UTC())
+			r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "outcome_unverified", payload, time.Now().UTC())
+			if resolution.VerificationOfferable() {
+				return r.offerWorkOutcomeVerificationApproval(ctx, key, req, result, status, cause, artifact, resolution)
+			}
+			return cause
+		default:
+			err = errWorkExecutorNoCompletionEvidence
+		}
 	}
 	if err != nil {
+		r.markEffectAttemptsForRequest(key, req, session.EffectAttemptStatusUncertain, err.Error(), workFinishedAt)
 		artifact := r.persistWorkResultForContinuation(key, req, result, status, err)
 		payload := workResultPayload(req, result, status, err)
+		_, retryFingerprint := addWorkFailureRetryFingerprintPayload(payload, req, result, status, err)
+		repeatFailure := r.workFailureRetryFingerprintSeen(key, retryFingerprint)
 		if artifact.Ref != "" {
 			payload["artifact_ref"] = artifact.Ref
 		}
 		r.recordExecutionEvent(key, core.ExecutionEventWorkExecutorFailed, "work", "failed", payload, time.Now().UTC())
-		r.offerWorkFailureRetry(ctx, key, key.ChatID, err)
+		var effectWriteErr effectAttemptRecordError
+		if errors.As(err, &effectWriteErr) {
+			r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "effect_attempt_record_failed", payload, time.Now().UTC())
+			return err
+		}
+		if unresolved := r.unresolvedEffectAttemptsForRequest(key, req); len(unresolved) > 0 {
+			payload["effect_attempts_unresolved"] = len(unresolved)
+			r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "effect_attempt_unresolved", payload, time.Now().UTC())
+		} else if repeatFailure {
+			if blockErr := r.blockRepeatedWorkFailureRetry(ctx, key, req, result, status, err, payload); blockErr != nil {
+				return blockErr
+			}
+		} else {
+			r.offerWorkFailureRetry(ctx, key, key.ChatID, err)
+		}
 		return err
 	}
 	if strings.TrimSpace(status.FallbackReason) != "" {

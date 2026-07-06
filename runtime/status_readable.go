@@ -12,13 +12,14 @@ import (
 
 	"github.com/idolum-ai/aphelion/agent"
 	"github.com/idolum-ai/aphelion/config"
+	"github.com/idolum-ai/aphelion/core"
 	providerpkg "github.com/idolum-ai/aphelion/provider"
 )
 
 const (
-	statusReadableModelAnthropic  = "claude-haiku-4-5"
-	statusReadableModelOpenAI     = "gpt-5.4"
-	statusReadableModelOpenRouter = "anthropic/claude-haiku-4-5"
+	statusReadableModelAnthropic  = "claude-haiku-4-5-20251001"
+	statusReadableModelOpenAI     = "gpt-5.4-mini"
+	statusReadableModelOpenRouter = "anthropic/claude-haiku-4-5-20251001"
 	statusReadableModelGemini     = "gemini-3.1-flash"
 	statusReadableInputMaxChars   = 2600
 	statusReadableOutputMaxChars  = 320
@@ -66,13 +67,7 @@ func (r *Runtime) StatusReadableSummary(ctx context.Context, view string, status
 	defer cancel()
 
 	messages := statusReadableSummaryMessages(view, statusText)
-	resp, err := completeProvider(summaryCtx, provider, messages, nil, &agent.CompleteOptions{
-		Reasoning: agent.ReasoningConfig{
-			Effort:  agent.ReasoningEffortLow,
-			Summary: agent.ReasoningSummaryCompact,
-		},
-		Verbosity: agent.VerbosityLow,
-	})
+	resp, err := completeProvider(summaryCtx, provider, messages, nil, r.statusReadableCompleteOptions())
 	if err != nil {
 		log.Printf("WARN status readable summary failed view=%s err=%v", strings.TrimSpace(view), err)
 		return ""
@@ -89,13 +84,36 @@ func (r *Runtime) statusReadableSummaryProvider() agent.Provider {
 	if r.statusReadableReady {
 		return r.statusReadableProvider
 	}
-	provider, err := buildStatusReadableProviderChain(r.cfg)
-	if err != nil {
-		log.Printf("WARN status readable summary provider disabled err=%v", err)
+	provider, _, ok := r.modelSlotProviderIncludingDefault(core.ModelSlotStatusReadable)
+	if !ok {
+		var err error
+		provider, err = buildStatusReadableProviderChain(r.cfg)
+		if err != nil {
+			log.Printf("WARN status readable summary provider disabled err=%v", err)
+		}
 	}
 	r.statusReadableProvider = provider
 	r.statusReadableReady = true
 	return r.statusReadableProvider
+}
+
+func (r *Runtime) statusReadableCompleteOptions() *agent.CompleteOptions {
+	opts := &agent.CompleteOptions{
+		Reasoning: agent.ReasoningConfig{
+			Effort:  agent.ReasoningEffortLow,
+			Summary: agent.ReasoningSummaryCompact,
+		},
+		Verbosity: agent.VerbosityLow,
+	}
+	if r == nil {
+		return opts
+	}
+	if status, err := r.EffectiveModelSlot(core.ModelSlotStatusReadable); err == nil && status.Validation.Valid {
+		if effort := core.NormalizeModelEffort(status.Effective.Effort); effort != "" {
+			opts.Reasoning.Effort = agent.ReasoningEffort(effort)
+		}
+	}
+	return opts
 }
 
 func buildStatusReadableProviderChain(cfg *config.Config) (agent.Provider, error) {

@@ -16,17 +16,19 @@ type recordingInteractiveDMTurnAssembler struct {
 	mu        sync.Mutex
 	called    bool
 	callCount int
+	ctx       context.Context
 	input     interactiveDMTurnAssemblyInput
 	inputs    []interactiveDMTurnAssemblyInput
 	result    *core.TurnResult
 	err       error
 }
 
-func (r *recordingInteractiveDMTurnAssembler) Run(_ context.Context, input interactiveDMTurnAssemblyInput) (*core.TurnResult, error) {
+func (r *recordingInteractiveDMTurnAssembler) Run(ctx context.Context, input interactiveDMTurnAssemblyInput) (*core.TurnResult, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.called = true
 	r.callCount++
+	r.ctx = ctx
 	r.input = input
 	r.inputs = append(r.inputs, input)
 	return r.result, r.err

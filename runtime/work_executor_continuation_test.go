@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/config"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/decision"
@@ -12,6 +13,8 @@ import (
 	"github.com/idolum-ai/aphelion/session"
 	"github.com/idolum-ai/aphelion/turn"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -26,7 +29,7 @@ func TestLeaseAccessDeniedResetsOperationPhaseForFreshApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true}
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
@@ -115,7 +118,7 @@ func TestMetadataPreflightContinuationRunsReadOnlyDespiteWorkspaceWriteDiagnosti
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true}
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
@@ -181,7 +184,7 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, result: WorkResult{
 		Summary:      "patched tests",
 		ChangedFiles: []string{"runtime/work_executor.go"},
 		Commands:     []string{"go test ./runtime"},
@@ -283,6 +286,115 @@ func TestTriggerCodingContinuationRunsWorkExecutor(t *testing.T) {
 	}
 }
 
+func TestNativeWorkContinuationDoesNotBlockOnDuplicateEffectEvidence(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	command := "mkdir -p generated/reports"
+	commandVariant := "mkdir   -p   generated/reports"
+	if session.EffectAttemptCommandHash(command) != session.EffectAttemptCommandHash(commandVariant) {
+		t.Fatalf("test fixture hashes differ: %s vs %s", session.EffectAttemptCommandHash(command), session.EffectAttemptCommandHash(commandVariant))
+	}
+	work := &fakeWorkExecutor{
+		name:  "native",
+		ready: true,
+		resultHook: func(req WorkRequest) WorkResult {
+			key := workRequestEffectAttemptKey(req)
+			now := time.Now().UTC()
+			effect := commandeffect.Classify(command)
+			if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+				AttemptID:    "eff-continuation-duplicate-evidence-predispatch",
+				Key:          key,
+				OperationID:  firstNonEmptyContinuation(req.OperationID, req.Operation.ID),
+				PhaseID:      effectAttemptPhaseID(req),
+				LeaseID:      req.LeaseID,
+				ProposalID:   req.State.ActionProposal.ID,
+				WorkMode:     string(req.Mode),
+				Executor:     "native",
+				Tool:         "work_executor",
+				Command:      command,
+				EffectKind:   string(effect.Kind),
+				EffectReason: effect.Reason,
+				Status:       session.EffectAttemptStatusAttempted,
+				StartedAt:    now,
+				UpdatedAt:    now,
+			}); err != nil {
+				t.Fatalf("UpsertEffectAttempt() err = %v", err)
+			}
+			return WorkResult{
+				Summary:       "Generated reports directory.",
+				Commands:      []string{command, commandVariant},
+				SideEffects:   true,
+				ToolSuccesses: 1,
+			}
+		},
+	}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "native"}, []WorkExecutor{work})
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	key := session.SessionKey{ChatID: 8198, UserID: 0, Scope: telegramDMScopeRef(8198)}
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     "duplicate-effect-evidence",
+		Objective:      "Generate reports directory.",
+		StageSummary:   "Run one approved workspace command.",
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-duplicate-effect-evidence",
+			Summary:        "Generate reports directory",
+			BoundedEffect:  "Run one approved workspace command and report evidence.",
+			RiskClass:      "workspace_write",
+			AllowedActions: []string{"execute_bounded_proposal_once", "workspace_write"},
+			Status:         session.ProposalStatusApproved,
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:duplicate-effect-evidence",
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-duplicate-effect-evidence",
+			ProposalID:     "aprop-duplicate-effect-evidence",
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: []string{"execute_bounded_proposal_once", "workspace_write"},
+			ExpiresAt:      expiresAt,
+			PlanHash:       "sha256:duplicate-effect-evidence",
+		},
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-duplicate-effect-evidence",
+		Objective: "Generate reports directory.",
+		Status:    session.OperationStatusActive,
+		PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+			ID:      "phase-duplicate-effect-evidence",
+			LeaseID: "lease-duplicate-effect-evidence",
+		}}},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v, want duplicate same-hash evidence not to block continuation", err)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 80)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if hasExecutionEventPayload(events, core.ExecutionEventContinuationBlocked, "effect_attempt_record_failed") {
+		t.Fatalf("events = %#v, want no effect-attempt recording block for duplicate same-hash evidence", events)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
+		t.Fatalf("events = %#v, want work executor success", events)
+	}
+}
+
 func TestConcurrentWorkContinuationTriggerExecutesSingleLeaseTurn(t *testing.T) {
 	t.Parallel()
 
@@ -291,7 +403,7 @@ func TestConcurrentWorkContinuationTriggerExecutesSingleLeaseTurn(t *testing.T) 
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, result: WorkResult{
 		Summary:      "patched once",
 		ChangedFiles: []string{"runtime/continuation_work.go"},
 	}}
@@ -382,7 +494,7 @@ func TestConsumedWorkPhaseOffersNextPhaseApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, result: WorkResult{
 		Summary:  "committed and pushed",
 		Commands: []string{"git commit -m planning-improvements", "git push origin planning-improvements"},
 	}}
@@ -541,10 +653,10 @@ func TestStartupRepairRevokesStaleDuplicateCompletedPhaseApproval(t *testing.T) 
 
 	now := time.Now().UTC()
 	key := session.SessionKey{ChatID: 8193, UserID: 0, Scope: telegramDMScopeRef(8193)}
-	duplicateID := "phase-stale-duplicate-op-commit-push"
+	duplicateID := "phase-stale-duplicate-op-commit"
 	opState := session.OperationState{
 		ID:        "stale-duplicate-op",
-		Objective: "Commit and push the branch, then review the result.",
+		Objective: "Commit the branch, then review the result.",
 		Status:    session.OperationStatusBlocked,
 		Stage:     "plan_lease_approval",
 		PhasePlan: session.OperationPhasePlan{
@@ -553,19 +665,19 @@ func TestStartupRepairRevokesStaleDuplicateCompletedPhaseApproval(t *testing.T) 
 			CurrentPhaseID: duplicateID,
 			Phases: []session.OperationPhase{
 				{
-					ID:             "commit-push",
-					Summary:        "Commit and push inspected planning changes",
+					ID:             "commit",
+					Summary:        "Commit inspected planning changes",
 					Status:         session.PlanStatusCompleted,
 					AuthorityClass: "commit",
 					CompletedAt:    now.Add(-10 * time.Minute),
 				},
 				{
 					ID:               duplicateID,
-					Summary:          "Commit and push inspected planning changes",
+					Summary:          "Commit inspected planning changes",
 					Status:           session.PlanStatusPending,
 					AuthorityClass:   "commit",
-					BoundedEffect:    "Re-offered duplicate of already completed commit/push work.",
-					AllowedActions:   []string{"git_commit", "git_push", "report_commit_evidence"},
+					BoundedEffect:    "Re-offered duplicate of already completed commit work.",
+					AllowedActions:   []string{"git_commit", "report_commit_evidence"},
 					ForbiddenActions: []string{"deploy_or_restart"},
 					RequiresApproval: true,
 				},
@@ -873,7 +985,7 @@ func TestTriggerCodingContinuationFailureOffersFreshRetry(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	workErr := errors.New("codex stream failed after partial response")
-	work := &fakeWorkExecutor{name: "codex", ready: true, err: workErr}
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, err: workErr}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
@@ -1031,7 +1143,7 @@ func TestTriggerCodingContinuationEmptySuccessOffersFreshRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{}, allowEmptyResult: true}
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, result: WorkResult{}, allowEmptyResult: true}
 	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "auto", AutoOrder: []string{"codex"}}, []WorkExecutor{work})
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
@@ -1113,6 +1225,889 @@ func TestTriggerCodingContinuationEmptySuccessOffersFreshRetry(t *testing.T) {
 	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
 		t.Fatalf("events = %#v, want no work executor success event", events)
 	}
+
+	if _, err := rt.ApproveContinuation(8194, 1001); err != nil {
+		t.Fatalf("ApproveContinuation(second retry) err = %v", err)
+	}
+	err = rt.TriggerContinuation(context.Background(), 8194)
+	if err == nil || !strings.Contains(err.Error(), errWorkExecutorNoCompletionEvidence.Error()) {
+		t.Fatalf("TriggerContinuation(second) err = %v, want repeated no-completion-evidence failure", err)
+	}
+	if work.calls != 2 {
+		t.Fatalf("work calls after second trigger = %d, want two executor attempts", work.calls)
+	}
+	blocked, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(second) err = %v", err)
+	}
+	if blocked.Status == session.ContinuationStatusPending || blocked.ActionProposal.Status == session.ProposalStatusPending || blocked.ContinuationLease.Status == session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation after repeated failure = %#v, want non-pending parked state", blocked)
+	}
+	op, err = store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState(second) err = %v", err)
+	}
+	if op.Status != session.OperationStatusBlocked || op.Stage != "work_executor_repeat_failure" || !strings.Contains(op.Summary, "same retry fingerprint") {
+		t.Fatalf("operation after repeated failure = %#v, want repeat-failure blocker", op)
+	}
+	sender.mu.Lock()
+	inlineCount = len(sender.inline)
+	sentCount := len(sender.sent)
+	sentText := ""
+	if sentCount > 0 {
+		sentText = sender.sent[sentCount-1].Text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count after repeated failure = %d, want no second retry prompt", inlineCount)
+	}
+	if !strings.Contains(sentText, "failed the same way twice") {
+		t.Fatalf("sent text = %q, want repeated-failure notice", sentText)
+	}
+	events, err = store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession(second) err = %v", err)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationBlocked, "repeat_work_failure") {
+		t.Fatalf("events = %#v, want repeat work failure block", events)
+	}
+}
+
+func TestTriggerCommitContinuationReconcilesLocalCommitBeforeRetry(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	repo := initWorkOutcomeGitRepo(t)
+	work := &fakeWorkExecutor{
+		name:         "native",
+		ready:        true,
+		attemptStore: store,
+		resultHook: func(req WorkRequest) WorkResult {
+			short := commitWorkOutcomeFile(t, req.Workdir, "packet.md", "packet\n", "Add XPVENTA reconstruction packet artifacts")
+			return WorkResult{
+				Summary:       "Wrapper completed commit " + short + ".",
+				Commands:      []string{"./commit-wrapper"},
+				SideEffects:   true,
+				ToolSuccesses: 1,
+			}
+		},
+	}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "native"}, []WorkExecutor{work})
+
+	key := session.SessionKey{ChatID: 8294, UserID: 0, Scope: telegramDMScopeRef(8294)}
+	state := approvedCommitContinuationState("reconcile-commit", time.Now().UTC().Add(time.Hour))
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-reconcile-commit",
+		Objective: "Commit the XPVENTA reconstruction packet artifacts.",
+		Status:    session.OperationStatusActive,
+		Work: session.WorkOperationMetadata{
+			RepoRoot: repo,
+			Workdir:  repo,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	}
+	op, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if op.Work.LastCompletedAt.IsZero() || op.Work.LastError != "" {
+		t.Fatalf("operation work = %#v, want reconciled completion without error", op.Work)
+	}
+	if !strings.Contains(op.Work.CommitLaneStatus, "reconciled_local_git_commit") || !stringSliceContains(op.Work.ChangedFiles, "packet.md") {
+		t.Fatalf("operation work evidence = %#v, want reconciled commit evidence", op.Work)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusIdle || cont.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed {
+		t.Fatalf("continuation = %#v, want consumed idle without retry proposal", cont)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no retry approval prompt", inlineCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventRecoveryIssued) || hasExecutionEvent(events, core.ExecutionEventContinuationOffered) {
+		t.Fatalf("events = %#v, want no retry/recovery offer after reconciliation", events)
+	}
+	if !hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
+		t.Fatalf("events = %#v, want work executor success after reconciliation", events)
+	}
+	attempts, err := store.EffectAttemptsForWork(key, "op-reconcile-commit", "", "lease-reconcile-commit", state.ActionProposal.ID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsForWork() err = %v", err)
+	}
+	if len(attempts) == 0 || attempts[0].Status != session.EffectAttemptStatusVerified {
+		t.Fatalf("effect attempts = %#v, want verified commit attempt", attempts)
+	}
+}
+
+func TestTriggerCommitContinuationBlocksUnverifiedSideEffectsWithoutRetry(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	repo := initWorkOutcomeGitRepo(t)
+	work := &fakeWorkExecutor{name: "native", ready: true, attemptStore: store, result: WorkResult{
+		Summary:       "Commit wrapper ran, but no commit identity was reported.",
+		Commands:      []string{"./commit-wrapper"},
+		SideEffects:   true,
+		ToolSuccesses: 1,
+	}}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "native"}, []WorkExecutor{work})
+
+	key := session.SessionKey{ChatID: 8295, UserID: 0, Scope: telegramDMScopeRef(8295)}
+	state := approvedCommitContinuationState("unverified-commit", time.Now().UTC().Add(time.Hour))
+	if err := store.UpdateContinuationState(key, state); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-unverified-commit",
+		Objective: "Commit the XPVENTA reconstruction packet artifacts.",
+		Status:    session.OperationStatusActive,
+		Work: session.WorkOperationMetadata{
+			RepoRoot: repo,
+			Workdir:  repo,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	err = rt.TriggerContinuationForKey(context.Background(), key)
+	if err == nil || !strings.Contains(err.Error(), errWorkExecutorOutcomeUnverified.Error()) {
+		t.Fatalf("TriggerContinuationForKey() err = %v, want unverified side-effect error", err)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status == session.ContinuationStatusPending || cont.ActionProposal.Status == session.ProposalStatusPending || cont.VerificationTarget != nil {
+		t.Fatalf("continuation = %#v, want no verification proposal after unverifiable commit side effects", cont)
+	}
+	op, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if !strings.Contains(op.Work.LastError, errWorkExecutorOutcomeUnverified.Error()) || !op.Work.LastCompletedAt.IsZero() {
+		t.Fatalf("operation work = %#v, want unverified side-effect failure without completion", op.Work)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no verification prompt", inlineCount)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventRecoveryIssued) {
+		t.Fatalf("events = %#v, want no retry recovery offer after unverified side effects", events)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventWorkOutcomeVerificationOffered) {
+		t.Fatalf("events = %#v, want no work outcome verification offer for unverifiable commit", events)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationBlocked, "side_effects_outcome_unverified") {
+		t.Fatalf("events = %#v, want blocked event with unverified outcome reason", events)
+	}
+	if hasExecutionEvent(events, core.ExecutionEventWorkExecutorSucceeded) {
+		t.Fatalf("events = %#v, want no work executor success event", events)
+	}
+	attempts, err := store.EffectAttemptsForWork(key, "op-unverified-commit", "", "lease-unverified-commit", state.ActionProposal.ID)
+	if err != nil {
+		t.Fatalf("EffectAttemptsForWork() err = %v", err)
+	}
+	if len(attempts) == 0 || attempts[0].Status != session.EffectAttemptStatusUncertain {
+		t.Fatalf("effect attempts = %#v, want uncertain unresolved commit attempt", attempts)
+	}
+}
+
+func TestUnverifiedWorkspaceWriteOffersVerificationThenCanResumeNextPhase(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	workdir := t.TempDir()
+	work := &fakeWorkExecutor{
+		name:         "native",
+		ready:        true,
+		attemptStore: store,
+		resultHook: func(req WorkRequest) WorkResult {
+			outPath := filepath.Join(req.Workdir, "reports", "phase-f-roadmap.md")
+			if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
+				t.Fatalf("MkdirAll(report dir) err = %v", err)
+			}
+			if err := os.WriteFile(outPath, []byte("# Phase F\n\nroadmap\n"), 0o600); err != nil {
+				t.Fatalf("WriteFile(report) err = %v", err)
+			}
+			return WorkResult{
+				Summary: "Phase F is complete. Generated reports/phase-f-roadmap.md.",
+				Commands: []string{`python3 - <<'PY'
+from pathlib import Path
+Path("reports/phase-f-roadmap.md").write_text("# Phase F\n\nroadmap\n")
+PY`},
+				SideEffects:   true,
+				ToolSuccesses: 1,
+			}
+		},
+	}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "native"}, []WorkExecutor{work})
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Hour)
+	key := session.SessionKey{ChatID: 8297, UserID: 0, Scope: telegramDMScopeRef(8297)}
+	opState := session.OperationState{
+		ID:        "verification-resume-op",
+		Objective: "Generate Phase F artifacts, verify them if needed, then continue to Phase G.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		Work: session.WorkOperationMetadata{
+			RepoRoot: workdir,
+			Workdir:  workdir,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "verification-resume-plan",
+			Goal:           "Exercise verification-resume flow.",
+			CurrentPhaseID: "phase-f",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-f",
+					Summary:        "Phase F: generate roadmap artifact",
+					Status:         session.PlanStatusInProgress,
+					AuthorityClass: "workspace_write",
+					BoundedEffect:  "Write roadmap artifact under reports and report local evidence.",
+					AllowedActions: []string{"write_local_markdown_reports", "validate_artifact_paths_and_sizes", "workspace_write"},
+					LeaseID:        "lease-phase-f",
+				},
+				{
+					ID:               "phase-g",
+					Summary:          "Phase G: prepare implementation slice",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "read_only_review",
+					BoundedEffect:    "Read the verified roadmap and propose the first implementation slice.",
+					AllowedActions:   []string{"read_verified_phase_f_artifacts", "draft_first_slice_plan"},
+					RequiresApproval: true,
+					GateLevel:        operationGateLevelNormalApproval,
+					GateReasonCode:   "read_only_review",
+					ApprovalSubject:  "operator",
+				},
+			},
+		},
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	proposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
+	action := session.ActionProposal{
+		ID:             "aprop-" + proposalID,
+		OperationID:    proposalID,
+		Summary:        opState.PhasePlan.Phases[0].Summary,
+		BoundedEffect:  opState.PhasePlan.Phases[0].BoundedEffect,
+		RiskClass:      "workspace_write",
+		AllowedActions: opState.PhasePlan.Phases[0].AllowedActions,
+		Status:         session.ProposalStatusApproved,
+		ExpiresAt:      expiresAt,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	lease := buildContinuationLease(action, 1, now)
+	lease.ID = "lease-phase-f"
+	lease.Status = session.ContinuationLeaseStatusActive
+	lease.RemainingTurns = 1
+	lease.ApprovedBy = 1001
+	lease.ApprovedAt = now
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        proposalID,
+		Objective:         opState.Objective,
+		StageSummary:      action.Summary,
+		RemainingTurns:    1,
+		ApprovedBy:        1001,
+		ActionProposal:    action,
+		ContinuationLease: lease,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v, want bounded verification approval instead of terminal callback failure", err)
+	}
+	gotOp, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if gotOp.PhasePlan.Phases[0].Status != session.PlanStatusInProgress {
+		t.Fatalf("phase F status = %q, want in_progress until verification evidence closes it", gotOp.PhasePlan.Phases[0].Status)
+	}
+	gotCont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if gotCont.Status != session.ContinuationStatusPending ||
+		gotCont.ActionProposal.Status != session.ProposalStatusPending ||
+		gotCont.VerificationTarget == nil ||
+		!strings.Contains(strings.ToLower(gotCont.ActionProposal.Summary), "verify") ||
+		!strings.Contains(gotCont.ActionProposal.BoundedEffect, "reports/phase-f-roadmap.md") {
+		t.Fatalf("continuation = %#v, want pending bounded verification approval for Phase F artifact", gotCont)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || !strings.Contains(strings.ToLower(inlineText), "verify") {
+		t.Fatalf("inline count/text = %d/%q, want verification approval card", inlineCount, inlineText)
+	}
+
+	approved, err := continuationStateWithLeaseApproved(gotCont, 1001, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("continuationStateWithLeaseApproved() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, approved); err != nil {
+		t.Fatalf("UpdateContinuationState(approved verification) err = %v", err)
+	}
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey(verification) err = %v", err)
+	}
+	gotOp, err = store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState(after verification) err = %v", err)
+	}
+	if gotOp.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("phase F status after verification = %q, want completed", gotOp.PhasePlan.Phases[0].Status)
+	}
+	if gotOp.PhasePlan.CurrentPhaseID != "phase-g" || gotOp.PhasePlan.Phases[1].LeaseID == "" {
+		t.Fatalf("phase plan after verification = %#v, want Phase G current with pending approval lease", gotOp.PhasePlan)
+	}
+	nextCont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(after verification) err = %v", err)
+	}
+	if nextCont.Status != session.ContinuationStatusPending ||
+		len(nextCont.ApprovalBundle.Phases) != 1 ||
+		nextCont.ApprovalBundle.Phases[0].OperationPhaseID != "phase-g" {
+		t.Fatalf("continuation after verification = %#v, want pending Phase G approval", nextCont)
+	}
+}
+
+func TestInconclusiveWorkspaceWriteVerificationSurfacesReconciliationApproval(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	workdir := t.TempDir()
+	work := &fakeWorkExecutor{
+		name:         "native",
+		ready:        true,
+		attemptStore: store,
+		resultHook: func(req WorkRequest) WorkResult {
+			outPath := filepath.Join(req.Workdir, "reports", "phase-f-roadmap.md")
+			if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
+				t.Fatalf("MkdirAll(report dir) err = %v", err)
+			}
+			if err := os.WriteFile(outPath, []byte("# Phase F\n\nroadmap\n"), 0o600); err != nil {
+				t.Fatalf("WriteFile(report) err = %v", err)
+			}
+			return WorkResult{
+				Summary: "Phase F is complete. Generated reports/phase-f-roadmap.md.",
+				Commands: []string{`python3 - <<'PY'
+from pathlib import Path
+Path("reports/phase-f-roadmap.md").write_text("# Phase F\n\nroadmap\n")
+PY`},
+				SideEffects:   true,
+				ToolSuccesses: 1,
+			}
+		},
+	}
+	rt.workExecutor = newWorkExecutorSelector(config.WorkConfig{Executor: "native"}, []WorkExecutor{work})
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Hour)
+	key := session.SessionKey{ChatID: 8297, UserID: 0, Scope: telegramDMScopeRef(8297)}
+	opState := session.OperationState{
+		ID:        "verification-inconclusive-op",
+		Objective: "Generate Phase F artifacts, verify them if needed, then continue to Phase G.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		Work: session.WorkOperationMetadata{
+			RepoRoot: workdir,
+			Workdir:  workdir,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "verification-inconclusive-plan",
+			Goal:           "Exercise inconclusive verification flow.",
+			CurrentPhaseID: "phase-f",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-f",
+					Summary:        "Phase F: generate roadmap artifact",
+					Status:         session.PlanStatusInProgress,
+					AuthorityClass: "workspace_write",
+					BoundedEffect:  "Write roadmap artifact under reports and report local evidence.",
+					AllowedActions: []string{"write_local_markdown_reports", "validate_artifact_paths_and_sizes", "workspace_write"},
+					LeaseID:        "lease-phase-f",
+				},
+				{
+					ID:               "phase-g",
+					Summary:          "Phase G: prepare implementation slice",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "read_only_review",
+					BoundedEffect:    "Read the verified roadmap and propose the first implementation slice.",
+					AllowedActions:   []string{"read_verified_phase_f_artifacts", "draft_first_slice_plan"},
+					RequiresApproval: true,
+					GateLevel:        operationGateLevelNormalApproval,
+					GateReasonCode:   "read_only_review",
+					ApprovalSubject:  "operator",
+				},
+			},
+		},
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	proposalID := operationPhaseProposalID(opState, opState.PhasePlan.Phases[0])
+	action := session.ActionProposal{
+		ID:             "aprop-" + proposalID,
+		OperationID:    proposalID,
+		Summary:        opState.PhasePlan.Phases[0].Summary,
+		BoundedEffect:  opState.PhasePlan.Phases[0].BoundedEffect,
+		RiskClass:      "workspace_write",
+		AllowedActions: opState.PhasePlan.Phases[0].AllowedActions,
+		Status:         session.ProposalStatusApproved,
+		ExpiresAt:      expiresAt,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	lease := buildContinuationLease(action, 1, now)
+	lease.ID = "lease-phase-f"
+	lease.Status = session.ContinuationLeaseStatusActive
+	lease.RemainingTurns = 1
+	lease.ApprovedBy = 1001
+	lease.ApprovedAt = now
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:              session.TurnAuthorizationKindContinuation,
+		Status:            session.ContinuationStatusApproved,
+		DecisionID:        proposalID,
+		Objective:         opState.Objective,
+		StageSummary:      action.Summary,
+		RemainingTurns:    1,
+		ApprovedBy:        1001,
+		ActionProposal:    action,
+		ContinuationLease: lease,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey() err = %v", err)
+	}
+	gotCont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if gotCont.Status != session.ContinuationStatusPending || gotCont.VerificationTarget == nil {
+		t.Fatalf("continuation = %#v, want pending verification target", gotCont)
+	}
+	candidate := filepath.Join(workdir, "reports", "phase-f-roadmap.md")
+	if err := os.Remove(candidate); err != nil {
+		t.Fatalf("Remove(candidate) err = %v", err)
+	}
+
+	approved, err := continuationStateWithLeaseApproved(gotCont, 1001, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("continuationStateWithLeaseApproved() err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, approved); err != nil {
+		t.Fatalf("UpdateContinuationState(approved verification) err = %v", err)
+	}
+	if err := rt.TriggerContinuationForKey(context.Background(), key); err != nil {
+		t.Fatalf("TriggerContinuationForKey(inconclusive verification) err = %v", err)
+	}
+
+	gotOp, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState(after verification) err = %v", err)
+	}
+	if gotOp.PhasePlan.Phases[0].Status != session.PlanStatusInProgress {
+		t.Fatalf("phase F status after inconclusive verification = %q, want in_progress", gotOp.PhasePlan.Phases[0].Status)
+	}
+	if gotOp.Work.LastCompletedAt.IsZero() == false || !strings.Contains(gotOp.Work.LastError, "candidate_artifacts_not_verified") {
+		t.Fatalf("operation work after inconclusive verification = %#v, want no completion and typed verification error", gotOp.Work)
+	}
+	if gotOp.Stage != "verification_inconclusive" ||
+		gotOp.Proposal.Status != session.ProposalStatusPending ||
+		!strings.Contains(strings.ToLower(gotOp.Proposal.Summary), "reconcile") {
+		t.Fatalf("operation projection after inconclusive verification = stage %q proposal %#v, want pending reconciliation projection", gotOp.Stage, gotOp.Proposal)
+	}
+	nextCont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(after inconclusive verification) err = %v", err)
+	}
+	if nextCont.Status != session.ContinuationStatusPending ||
+		nextCont.ActionProposal.Status != session.ProposalStatusPending ||
+		nextCont.VerificationTarget != nil ||
+		!strings.Contains(strings.ToLower(nextCont.ActionProposal.Summary), "reconcile") ||
+		!strings.Contains(nextCont.ActionProposal.BoundedEffect, "reports/phase-f-roadmap.md") {
+		t.Fatalf("continuation after inconclusive verification = %#v, want pending read-only reconciliation approval", nextCont)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 2 || !strings.Contains(strings.ToLower(inlineText), "could not prove") || !strings.Contains(strings.ToLower(inlineText), "reconcile") {
+		t.Fatalf("inline count/text = %d/%q, want visible reconciliation approval after inconclusive verification", inlineCount, inlineText)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventWorkOutcomeVerificationInconclusive, "candidate_artifacts_not_verified") {
+		t.Fatalf("events = %#v, want inconclusive verification event", events)
+	}
+	if !hasExecutionEventPayload(events, core.ExecutionEventContinuationOffered, "work_outcome_reconciliation_required") {
+		t.Fatalf("events = %#v, want visible reconciliation continuation offer", events)
+	}
+}
+
+func TestVerifiedConsumedWorkspacePhaseOffersNextPhaseApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	now := time.Now().UTC()
+	key := session.SessionKey{ChatID: 8298, UserID: 0, Scope: telegramDMScopeRef(8298)}
+	opState := session.OperationState{
+		ID:        "verified-resume-op",
+		Objective: "Verify Phase F, then continue to Phase G.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		Work: session.WorkOperationMetadata{
+			LastOperationID:       "verified-resume-op",
+			LastActionOperationID: "phase-verified-resume-op-phase-f",
+			LastActionProposalID:  "aprop-phase-verified-resume-op-phase-f",
+			LastLeaseID:           "lease-phase-f",
+			LastWorkMode:          string(WorkModeWorkspaceWrite),
+			LastCompletedAt:       now,
+			LastExecutorUpdatedAt: now,
+			LastSummary:           "Verification confirmed reports/phase-f-roadmap.md exists and matches Phase F acceptance criteria.",
+			ChangedFiles:          []string{"reports/phase-f-roadmap.md"},
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "verified-resume-plan",
+			Goal:           "Exercise verification-resume flow.",
+			CurrentPhaseID: "phase-f",
+			Phases: []session.OperationPhase{
+				{
+					ID:             "phase-f",
+					Summary:        "Phase F: generate roadmap artifact",
+					Status:         session.PlanStatusInProgress,
+					AuthorityClass: "workspace_write",
+					BoundedEffect:  "Write roadmap artifact under reports and report local evidence.",
+					AllowedActions: []string{"write_local_markdown_reports", "validate_artifact_paths_and_sizes", "workspace_write"},
+					LeaseID:        "lease-phase-f",
+				},
+				{
+					ID:               "phase-g",
+					Summary:          "Phase G: prepare implementation slice",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "read_only_review",
+					WhyNow:           "Phase F has verified local roadmap evidence.",
+					BoundedEffect:    "Read the verified roadmap and propose the first implementation slice.",
+					AllowedActions:   []string{"read_verified_phase_f_artifacts", "draft_first_slice_plan"},
+					RequiresApproval: true,
+					GateLevel:        operationGateLevelNormalApproval,
+					GateReasonCode:   "read_only_review",
+					ApprovalSubject:  "operator",
+				},
+			},
+		},
+	}
+	if err := store.UpdateOperationState(key, opState); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	action := session.ActionProposal{
+		ID:             "aprop-phase-verified-resume-op-phase-f",
+		OperationID:    "phase-verified-resume-op-phase-f",
+		Summary:        "Phase F: generate roadmap artifact",
+		BoundedEffect:  "Write roadmap artifact under reports and report local evidence.",
+		RiskClass:      "workspace_write",
+		AllowedActions: []string{"write_local_markdown_reports", "validate_artifact_paths_and_sizes", "workspace_write"},
+		Status:         session.ProposalStatusApproved,
+		ExpiresAt:      now.Add(time.Hour),
+		CreatedAt:      now.Add(-time.Minute),
+		UpdatedAt:      now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	if err := store.UpdateContinuationState(key, session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusIdle,
+		DecisionID:     "phase-verified-resume-op-phase-f",
+		Objective:      opState.Objective,
+		StageSummary:   action.Summary,
+		RemainingTurns: 0,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-phase-f",
+			ProposalID:     action.ID,
+			Status:         session.ContinuationLeaseStatusConsumed,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			AllowedActions: action.AllowedActions,
+			ApprovedBy:     1001,
+			ApprovedAt:     now.Add(-time.Minute),
+			ConsumedAt:     now,
+			ExpiresAt:      now.Add(time.Hour),
+			PlanHash:       action.PlanHash,
+		},
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpdateContinuationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want next phase approval after verified Phase F")
+	}
+	gotOp, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if gotOp.PhasePlan.Phases[0].Status != session.PlanStatusCompleted {
+		t.Fatalf("phase F status = %q, want completed from verification evidence", gotOp.PhasePlan.Phases[0].Status)
+	}
+	if gotOp.PhasePlan.CurrentPhaseID != "phase-g" || gotOp.PhasePlan.Phases[1].LeaseID == "" {
+		t.Fatalf("phase plan = %#v, want Phase G current with pending approval lease", gotOp.PhasePlan)
+	}
+	gotCont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if gotCont.Status != session.ContinuationStatusPending ||
+		len(gotCont.ApprovalBundle.Phases) != 1 ||
+		gotCont.ApprovalBundle.Phases[0].OperationPhaseID != "phase-g" {
+		t.Fatalf("continuation = %#v, want pending approval bundle for Phase G", gotCont)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[inlineCount-1].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 || !strings.Contains(inlineText, "Phase G") {
+		t.Fatalf("inline count/text = %d/%q, want Phase G approval prompt", inlineCount, inlineText)
+	}
+}
+
+func TestWorkspaceOutcomeVerificationRejectsEscapedCandidatePath(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(outside) err = %v", err)
+	}
+	result := verifyWorkspaceWriteOutcome(session.ContinuationVerificationTarget{
+		OriginalWorkMode: string(WorkModeWorkspaceWrite),
+		Workdir:          workdir,
+		WindowStart:      time.Now().UTC().Add(-time.Minute),
+		CandidatePaths:   []string{outside, "../outside.md"},
+	})
+	if result.Verified || len(result.ChangedFiles) != 0 {
+		t.Fatalf("verification result = %#v, want escaped candidate rejected", result)
+	}
+}
+
+func TestWorkspaceOutcomeVerificationRejectsStaleCandidatePath(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	path := filepath.Join(workdir, "reports", "stale.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll(report dir) err = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("stale\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(stale) err = %v", err)
+	}
+	if err := os.Chtimes(path, time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour)); err != nil {
+		t.Fatalf("Chtimes(stale) err = %v", err)
+	}
+	result := verifyWorkspaceWriteOutcome(session.ContinuationVerificationTarget{
+		OriginalWorkMode: string(WorkModeWorkspaceWrite),
+		Workdir:          workdir,
+		WindowStart:      time.Now().UTC().Add(-time.Minute),
+		WindowEnd:        time.Now().UTC(),
+		CandidatePaths:   []string{"reports/stale.md"},
+	})
+	if result.Verified || len(result.ChangedFiles) != 0 {
+		t.Fatalf("verification result = %#v, want stale candidate rejected", result)
+	}
+}
+
+func TestWorkspaceOutcomeVerificationRejectsFutureCandidatePath(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	path := filepath.Join(workdir, "reports", "future.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll(report dir) err = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("future\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(future) err = %v", err)
+	}
+	if err := os.Chtimes(path, time.Now().Add(2*time.Hour), time.Now().Add(2*time.Hour)); err != nil {
+		t.Fatalf("Chtimes(future) err = %v", err)
+	}
+	result := verifyWorkspaceWriteOutcome(session.ContinuationVerificationTarget{
+		OriginalWorkMode: string(WorkModeWorkspaceWrite),
+		Workdir:          workdir,
+		WindowStart:      time.Now().UTC().Add(-time.Minute),
+		WindowEnd:        time.Now().UTC(),
+		CandidatePaths:   []string{"reports/future.md"},
+	})
+	if result.Verified || len(result.ChangedFiles) != 0 {
+		t.Fatalf("verification result = %#v, want future candidate rejected", result)
+	}
+}
+
+func TestWorkOutcomeResolutionWorkspaceCandidateIsVerificationOfferable(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	req := WorkRequest{
+		Mode:    WorkModeWorkspaceWrite,
+		Workdir: workdir,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-phase-f", OperationID: "phase-f"},
+			ContinuationLease: session.ContinuationLease{
+				ID: "lease-phase-f",
+			},
+		},
+	}
+	_, decision := (*Runtime)(nil).resolveWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 8299}, req, WorkResult{
+		Summary:     "Phase F is complete. Generated reports/phase-f-roadmap.md.",
+		SideEffects: true,
+	}, time.Now().Add(-time.Minute), time.Now())
+	if decision.Kind != workOutcomeResolutionVerificationOfferable ||
+		decision.VerificationTarget == nil ||
+		!stringSliceContains(decision.VerificationTarget.CandidatePaths, "reports/phase-f-roadmap.md") {
+		t.Fatalf("resolution decision = %#v, want verification-offerable workspace candidate", decision)
+	}
+}
+
+func TestWorkOutcomeResolutionWorkspaceRequiresCandidateEvidence(t *testing.T) {
+	t.Parallel()
+
+	req := WorkRequest{
+		Mode:    WorkModeWorkspaceWrite,
+		Workdir: t.TempDir(),
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-phase-f", OperationID: "phase-f"},
+			ContinuationLease: session.ContinuationLease{
+				ID: "lease-phase-f",
+			},
+		},
+	}
+	got, decision := (*Runtime)(nil).resolveWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 8300}, req, WorkResult{
+		Summary:     "Phase F is complete.",
+		SideEffects: true,
+	}, time.Now().Add(-time.Minute), time.Now())
+	if decision.Kind != workOutcomeResolutionBlockedUnverified || decision.VerificationTarget != nil || !decision.blocksRetry() {
+		t.Fatalf("resolution decision = %#v result=%#v, want blocked without verification target", decision, got)
+	}
+}
+
+func TestWorkOutcomeResolutionWithoutSideEffectsIsNone(t *testing.T) {
+	t.Parallel()
+
+	got, decision := (*Runtime)(nil).resolveWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 8301}, WorkRequest{Mode: WorkModeWorkspaceWrite}, WorkResult{
+		Summary: "No material completion evidence.",
+	}, time.Now().Add(-time.Minute), time.Now())
+	if decision.Kind != workOutcomeResolutionNone || decision.blocksRetry() {
+		t.Fatalf("resolution decision = %#v result=%#v, want none", decision, got)
+	}
+}
+
+func TestWorkOutcomeResolutionRejectsStaleCommitHash(t *testing.T) {
+	t.Parallel()
+
+	repo := initWorkOutcomeGitRepo(t)
+	short := commitWorkOutcomeFile(t, repo, "packet.md", "packet\n", "Add XPVENTA reconstruction packet artifacts")
+	result := WorkResult{
+		Summary:       "Wrapper completed commit " + short + ".",
+		Commands:      []string{"./commit-wrapper"},
+		SideEffects:   true,
+		ToolSuccesses: 1,
+	}
+	req := WorkRequest{
+		Mode:    WorkModeCommit,
+		Workdir: repo,
+		State:   approvedCommitContinuationState("stale-commit", time.Now().UTC().Add(time.Hour)),
+	}
+	windowStart := time.Now().UTC().Add(time.Hour)
+	got, decision := (*Runtime)(nil).resolveWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 8296}, req, result, windowStart, windowStart.Add(time.Minute))
+	if decision.Kind != workOutcomeResolutionBlockedUnverified || !decision.blocksRetry() || !errors.Is(decision.Err, errWorkExecutorOutcomeUnverified) {
+		t.Fatalf("resolution decision = %#v result=%#v, want stale commit blocked", decision, got)
+	}
+}
+
+func TestWorkOutcomeResolutionAutoVerifiesLocalCommit(t *testing.T) {
+	t.Parallel()
+
+	repo := initWorkOutcomeGitRepo(t)
+	short := commitWorkOutcomeFile(t, repo, "packet.md", "packet\n", "Add XPVENTA reconstruction packet artifacts")
+	result := WorkResult{
+		Summary:       "Wrapper completed commit " + short + ".",
+		Commands:      []string{"./commit-wrapper"},
+		SideEffects:   true,
+		ToolSuccesses: 1,
+	}
+	req := WorkRequest{
+		Mode:    WorkModeCommit,
+		Workdir: repo,
+		State:   approvedCommitContinuationState("verified-commit", time.Now().UTC().Add(time.Hour)),
+	}
+	got, decision := (*Runtime)(nil).resolveWorkOutcomeAfterMissingEvidence(context.Background(), session.SessionKey{ChatID: 8302}, req, result, time.Now().UTC().Add(-time.Minute), time.Now().UTC())
+	if decision.Kind != workOutcomeResolutionAutoVerified || decision.blocksRetry() {
+		t.Fatalf("resolution decision = %#v result=%#v, want auto-verified commit", decision, got)
+	}
+	if !strings.Contains(got.CommitLaneStatus, "reconciled_local_git_commit") || !stringSliceContains(got.ChangedFiles, "packet.md") {
+		t.Fatalf("resolved result = %#v, want commit evidence", got)
+	}
 }
 
 func TestWorkFailureRetryFallbackSendsPlainNoticeWhenInlinePromptFails(t *testing.T) {
@@ -1175,6 +2170,13 @@ func TestWorkFailureRetryFallbackSendsPlainNoticeWhenInlinePromptFails(t *testin
 	}
 	if len(sent) != 1 || !strings.Contains(sent[0].Text, "I could not show the retry approval buttons.") || !strings.Contains(sent[0].Text, "fresh manual approval") {
 		t.Fatalf("sent = %#v, want plain fallback retry notice", sent)
+	}
+	got, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if got.Status == session.ContinuationStatusPending || got.ActionProposal.Status == session.ProposalStatusPending || got.ContinuationLease.Status == session.ContinuationLeaseStatusPending {
+		t.Fatalf("continuation = %#v, want undelivered retry prompt revoked", got)
 	}
 	events, err := store.ExecutionEventsBySession(key, 0, 50)
 	if err != nil {
@@ -1624,7 +2626,7 @@ func TestTriggerCodingContinuationAllowsCompoundWorkspaceRiskClass(t *testing.T)
 	if err != nil {
 		t.Fatalf("New() err = %v", err)
 	}
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, result: WorkResult{
 		Summary:      "patched child runner",
 		ChangedFiles: []string{"runtime/durable_child.go"},
 	}}
@@ -1695,7 +2697,7 @@ func TestTriggerCodingContinuationWarnsWhenFallingBackToNative(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	codex := &fakeWorkExecutor{name: "codex", ready: false, reason: "app-server unreachable"}
-	native := &fakeWorkExecutor{name: "native", ready: true, result: WorkResult{
+	native := &fakeWorkExecutor{name: "native", ready: true, attemptStore: store, result: WorkResult{
 		Summary:      "native completed",
 		ChangedFiles: []string{"runtime/work_executor.go"},
 	}}
@@ -1763,7 +2765,7 @@ func TestTriggerCodingContinuationStoresFullWorkEvidenceArtifact(t *testing.T) {
 		t.Fatalf("New() err = %v", err)
 	}
 	longSummary := "full tool evidence " + strings.Repeat("line-with-important-output ", 120)
-	work := &fakeWorkExecutor{name: "codex", ready: true, result: WorkResult{
+	work := &fakeWorkExecutor{name: "codex", ready: true, attemptStore: store, result: WorkResult{
 		Summary:      longSummary,
 		ChangedFiles: []string{"runtime/runtime.go"},
 		Commands:     []string{"go test ./runtime"},
@@ -1836,4 +2838,80 @@ func TestTriggerCodingContinuationStoresFullWorkEvidenceArtifact(t *testing.T) {
 	if !strings.Contains(sender.sent[0].Text, "Full evidence artifact:") || !strings.Contains(sender.sent[0].Text, op.Artifacts[0].Ref) {
 		t.Fatalf("telegram text = %q, want artifact reference", sender.sent[0].Text)
 	}
+}
+
+func approvedCommitContinuationState(id string, expiresAt time.Time) session.ContinuationState {
+	now := expiresAt.Add(-time.Hour)
+	action := session.ActionProposal{
+		ID:             "aprop-" + id,
+		Summary:        "Commit approved repository changes",
+		WhyNow:         "The approved commit phase should run now.",
+		BoundedEffect:  "Commit only the approved local repository changes and report commit evidence.",
+		RiskClass:      "commit",
+		AllowedActions: []string{"git_commit", "report_commit_evidence"},
+		Status:         session.ProposalStatusApproved,
+		ExpiresAt:      expiresAt,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	action.PlanHash = actionProposalHash(action)
+	return session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		DecisionID:     id,
+		Objective:      "Commit approved repository changes.",
+		StageSummary:   action.Summary,
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: action,
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-" + id,
+			ProposalID:     action.ID,
+			Status:         session.ContinuationLeaseStatusActive,
+			MaxTurns:       1,
+			RemainingTurns: 1,
+			AllowedActions: action.AllowedActions,
+			ApprovedBy:     1001,
+			ApprovedAt:     now,
+			ExpiresAt:      expiresAt,
+			PlanHash:       action.PlanHash,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+	}
+}
+
+func initWorkOutcomeGitRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	runWorkOutcomeGit(t, repo, "init")
+	runWorkOutcomeGit(t, repo, "config", "user.email", "aphelion-test@example.com")
+	runWorkOutcomeGit(t, repo, "config", "user.name", "Aphelion Test")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(seed) err = %v", err)
+	}
+	runWorkOutcomeGit(t, repo, "add", "README.md")
+	runWorkOutcomeGit(t, repo, "commit", "-m", "seed")
+	return repo
+}
+
+func commitWorkOutcomeFile(t *testing.T, repo string, name string, body string, message string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) err = %v", name, err)
+	}
+	runWorkOutcomeGit(t, repo, "add", name)
+	runWorkOutcomeGit(t, repo, "commit", "-m", message)
+	return strings.TrimSpace(runWorkOutcomeGit(t, repo, "rev-parse", "--short", "HEAD"))
+}
+
+func runWorkOutcomeGit(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	cmdArgs := append([]string{"-C", repo}, args...)
+	cmd := exec.Command("git", cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s err = %v output=%s", strings.Join(args, " "), err, string(out))
+	}
+	return string(out)
 }

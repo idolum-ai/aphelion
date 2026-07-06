@@ -94,6 +94,32 @@ func TestApprovalWindowRowsExposeOnlyReachableCompoundCallbacks(t *testing.T) {
 	}
 }
 
+func TestApprovalWindowRowsUseConfiguredDefaultDuration(t *testing.T) {
+	t.Parallel()
+
+	offer := session.ApprovalWindowOffer{ID: "offer-configured"}
+	standaloneData := callbackDataForCommandButton(t, ApprovalWindowOfferRowsForDuration("offer-configured", 30*time.Minute), "Approve 30m")
+	_, standaloneAction, ok := decodeApprovalWindowCallbackData(standaloneData)
+	if !ok || standaloneAction != approvalWindowActionEnable15 {
+		t.Fatalf("standalone callback action = %q ok=%v, want plain enable15", standaloneAction, ok)
+	}
+	embeddedData := callbackDataForCommandButton(t, ApprovalWindowEmbeddedOfferRowsForDuration(offer, 30*time.Minute), "Approve 30m")
+	_, embeddedAction, ok := decodeApprovalWindowCallbackData(embeddedData)
+	if !ok || embeddedAction != approvalWindowActionEnable15Compound {
+		t.Fatalf("embedded callback action = %q ok=%v, want compound enable15", embeddedAction, ok)
+	}
+	router := &stubCommandRouter{defaultApprovalWindowDuration: 30 * time.Minute}
+	continuationRows, err := approvalWindowOfferRowsForSource(context.Background(), router, core.InboundMessage{ChatID: 7, SenderID: 1001}, session.ApprovalWindowOfferSourceContinuation, "decision-continuation-30m", "continuation")
+	if err != nil {
+		t.Fatalf("approvalWindowOfferRowsForSource() err = %v", err)
+	}
+	continuationData := callbackDataForCommandButton(t, continuationRows, "Approve 30m")
+	_, continuationAction, ok := decodeApprovalWindowCallbackData(continuationData)
+	if !ok || continuationAction != approvalWindowActionEnable15 {
+		t.Fatalf("continuation callback action = %q ok=%v, want plain enable15", continuationAction, ok)
+	}
+}
+
 func TestApprovalWindowStandaloneEnableCallbackDoesNotApplyCompoundAction(t *testing.T) {
 	t.Parallel()
 
@@ -382,6 +408,32 @@ func TestApprovalWindowEnableCallbackTargetsThreadScope(t *testing.T) {
 	if !commandRowsContain(sender.inline[0].rows, "Double time", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionDouble)) ||
 		!commandRowsContain(sender.inline[0].rows, "Cancel approvals", encodeApprovalWindowCallbackData("offer-test", approvalWindowActionCancel)) {
 		t.Fatalf("inline rows = %#v, want active approval-window controls", sender.inline[0].rows)
+	}
+}
+
+func TestApprovalWindowEnableCallbackUsesConfiguredDefaultDuration(t *testing.T) {
+	t.Parallel()
+
+	sender := &stubCommandSender{}
+	router := &stubCommandRouter{
+		defaultApprovalWindowDuration: 30 * time.Minute,
+		approvalWindowReturn:          "Approval window active.",
+		approvalWindowActive:          true,
+	}
+	handled, err := handleTelegramCommandCallback(context.Background(), sender, router, telegram.CallbackQuery{
+		ID:      "cb-aw-enable-30m",
+		From:    &telegram.User{ID: 1001},
+		Data:    encodeApprovalWindowCallbackData("offer-test-30m", approvalWindowActionEnable15),
+		Message: &telegram.Message{MessageID: 77, Chat: &telegram.Chat{ID: 7}},
+	})
+	if err != nil {
+		t.Fatalf("handleTelegramCommandCallback() err = %v", err)
+	}
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	if router.approvalWindowAction != approvalWindowActionEnable15 || router.approvalWindowDuration != 30*time.Minute {
+		t.Fatalf("approval action/duration = %q/%s, want enable15/30m", router.approvalWindowAction, router.approvalWindowDuration)
 	}
 }
 

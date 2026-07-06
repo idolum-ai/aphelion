@@ -33,6 +33,27 @@ const schemaVersion65 = 65
 const schemaVersion66 = 66
 const schemaVersion67 = 67
 const schemaVersion68 = 68
+const schemaVersion69 = 69
+const schemaVersion70 = 70
+const schemaVersion71 = 71
+const schemaVersion72 = 72
+const schemaVersion73 = 73
+const schemaVersion74 = 74
+const schemaVersion75 = 75
+const schemaVersion76 = 76
+const schemaVersion77 = 77
+const schemaVersion78 = 78
+const schemaVersion79 = 79
+const schemaVersion80 = 80
+const schemaVersion81 = 81
+const schemaVersion82 = 82
+const schemaVersion83 = 83
+const schemaVersion84 = 84
+const schemaVersion85 = 85
+const schemaVersion86 = 86
+const schemaVersion87 = 87
+const schemaVersion88 = 88
+const schemaVersion89 = 89
 
 var migratableSchemaVersions = map[int]struct{}{
 	schemaVersion43: {},
@@ -61,6 +82,27 @@ var migratableSchemaVersions = map[int]struct{}{
 	schemaVersion66: {},
 	schemaVersion67: {},
 	schemaVersion68: {},
+	schemaVersion69: {},
+	schemaVersion70: {},
+	schemaVersion71: {},
+	schemaVersion72: {},
+	schemaVersion73: {},
+	schemaVersion74: {},
+	schemaVersion75: {},
+	schemaVersion76: {},
+	schemaVersion77: {},
+	schemaVersion78: {},
+	schemaVersion79: {},
+	schemaVersion80: {},
+	schemaVersion81: {},
+	schemaVersion82: {},
+	schemaVersion83: {},
+	schemaVersion84: {},
+	schemaVersion85: {},
+	schemaVersion86: {},
+	schemaVersion87: {},
+	schemaVersion88: {},
+	schemaVersion89: {},
 }
 
 func existingUserTableCount(tx *sql.Tx) (int, error) {
@@ -328,6 +370,195 @@ func migrateCurrentSchemaVersion(tx *sql.Tx, currentVersion int) (int, error) {
 	}
 	if version == schemaVersion68 {
 		if err := migrateSchemaV68ToV69(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion69); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion69, err)
+		}
+		version = schemaVersion69
+	}
+	if version == schemaVersion69 {
+		if err := migrateSchemaV69ToV70(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion70); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion70, err)
+		}
+		version = schemaVersion70
+	}
+	if version == schemaVersion70 {
+		if err := migrateSchemaV70ToV71(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion71); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion71, err)
+		}
+		version = schemaVersion71
+	}
+	if version == schemaVersion71 {
+		if err := migrateSchemaV71ToV72(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion72); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion72, err)
+		}
+		version = schemaVersion72
+	}
+	if version == schemaVersion72 {
+		if err := migrateSchemaV72ToV73(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion73); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion73, err)
+		}
+		version = schemaVersion73
+	}
+	if version == schemaVersion73 {
+		if err := migrateSchemaV73ToV74(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion74); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion74, err)
+		}
+		version = schemaVersion74
+	}
+	if version == schemaVersion74 {
+		if err := migrateSchemaV74ToV75(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion75); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion75, err)
+		}
+		version = schemaVersion75
+	}
+	if version == schemaVersion75 {
+		if err := migrateSchemaV75ToV76(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion76); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion76, err)
+		}
+		version = schemaVersion76
+	}
+	if version == schemaVersion76 {
+		if err := migrateSchemaV76ToV77(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion77); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion77, err)
+		}
+		version = schemaVersion77
+	}
+	if version == schemaVersion77 {
+		if err := migrateSchemaV77ToV78(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion78); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion78, err)
+		}
+		version = schemaVersion78
+	}
+	if version == schemaVersion78 {
+		if err := migrateSchemaV78ToV79(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion79); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion79, err)
+		}
+		version = schemaVersion79
+	}
+	if version == schemaVersion79 {
+		if err := migrateSchemaV79ToV80(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion80); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion80, err)
+		}
+		version = schemaVersion80
+	}
+	if version == schemaVersion80 {
+		if err := migrateSchemaV80ToV81(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion81); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion81, err)
+		}
+		version = schemaVersion81
+	}
+	if version == schemaVersion81 {
+		if err := migrateSchemaV81ToV82(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion82); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion82, err)
+		}
+		version = schemaVersion82
+	}
+	if version == schemaVersion82 {
+		if err := migrateSchemaV82ToV83(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion83); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion83, err)
+		}
+		version = schemaVersion83
+	}
+	if version == schemaVersion83 {
+		if err := migrateSchemaV83ToV84(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion84); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion84, err)
+		}
+		version = schemaVersion84
+	}
+	if version == schemaVersion84 {
+		if err := migrateSchemaV84ToV85(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion85); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion85, err)
+		}
+		version = schemaVersion85
+	}
+	if version == schemaVersion85 {
+		if err := migrateSchemaV85ToV86(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion86); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion86, err)
+		}
+		version = schemaVersion86
+	}
+	if version == schemaVersion86 {
+		if err := migrateSchemaV86ToV87(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion87); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion87, err)
+		}
+		version = schemaVersion87
+	}
+	if version == schemaVersion87 {
+		if err := migrateSchemaV87ToV88(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion88); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion88, err)
+		}
+		version = schemaVersion88
+	}
+	if version == schemaVersion88 {
+		if err := migrateSchemaV88ToV89(tx); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion89); err != nil {
+			return 0, fmt.Errorf("insert schema version %d: %w", schemaVersion89, err)
+		}
+		version = schemaVersion89
+	}
+	if version == schemaVersion89 {
+		if err := migrateSchemaV89ToV90(tx); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(`INSERT INTO schema_version(version) VALUES (?)`, schemaVersion); err != nil {

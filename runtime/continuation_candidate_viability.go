@@ -44,12 +44,15 @@ func (r *Runtime) operationContinuationCandidateViability(key session.SessionKey
 	}
 	return continuationCandidateViability{
 		Live:               false,
-		Reason:             "stale_vs_working_objective",
+		Reason:             recoveryCandidateReasonStaleVsWorkingObjective,
 		WorkingObjective:   working.Objective,
 		CandidateObjective: firstNonEmptyContinuation(opState.Objective, opState.Summary, opState.PhasePlan.Goal, opState.Proposal.Summary),
 	}
 }
 
+// Working objectives are allowed to suppress stale durable candidates only while
+// they are fresh, high-confidence current intent. Older objectives become
+// background evidence again so the operator is not trapped by stale suppression.
 func workingObjectiveCanSuppressContinuationCandidate(working session.WorkingObjective, now time.Time) bool {
 	if strings.TrimSpace(working.Objective) == "" {
 		return false
@@ -137,7 +140,7 @@ func continuationCandidateMeaningfulTokens(text string) map[string]struct{} {
 
 func continuationCandidateStopword(token string) bool {
 	switch token {
-	case "about", "action", "approval", "approve", "bounded", "chat", "check", "continue", "continuation", "current", "draft", "evidence", "finding", "findings", "fresh", "generate", "inspect", "local", "metadata", "next", "objective", "operation", "phase", "plan", "proposal", "report", "request", "resume", "review", "state", "step", "work":
+	case "about", "action", "active", "approval", "approve", "bounded", "chat", "check", "continue", "continuation", "current", "draft", "evidence", "finding", "findings", "fresh", "generate", "inspect", "local", "metadata", "next", "objective", "operation", "phase", "plan", "proposal", "report", "request", "resume", "review", "state", "step", "work":
 		return true
 	default:
 		return false

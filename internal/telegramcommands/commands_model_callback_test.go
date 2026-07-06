@@ -6,8 +6,24 @@ import (
 	"context"
 	"testing"
 
+	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/telegram"
 )
+
+func TestModelCallbackCodecRoundTripsAllModelSlots(t *testing.T) {
+	t.Parallel()
+
+	for _, slot := range core.ModelSlotNames() {
+		data := encodeModelCallbackData(modelCallbackSlot, slot, "")
+		action, gotSlot, value, ok := decodeModelCallbackData(data)
+		if !ok {
+			t.Fatalf("decodeModelCallbackData(%q) ok = false", data)
+		}
+		if action != modelCallbackSlot || gotSlot != slot || value != "" {
+			t.Fatalf("decodeModelCallbackData(%q) = %s/%s/%s, want slot/%s/empty", data, action, gotSlot, value, slot)
+		}
+	}
+}
 
 func TestHandleTelegramCommandCallbackIgnoresRetiredRecipeModelCallbacks(t *testing.T) {
 	t.Parallel()

@@ -58,7 +58,7 @@ func TestRepairCapabilityGrantDriftDryRunLeavesMissingRuntimeActive(t *testing.T
 	}
 }
 
-func TestRepairCapabilityGrantDriftRevokesExpiredActiveGrant(t *testing.T) {
+func TestRepairCapabilityGrantDriftExpiresExpiredActiveGrant(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -90,15 +90,15 @@ func TestRepairCapabilityGrantDriftRevokesExpiredActiveGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("maintenancecli.RepairCapabilityGrantDrift() err = %v", err)
 	}
-	if result.Inspected != 1 || result.RevokeCandidates != 1 || result.RevokesApplied != 1 || result.Errors != 0 {
-		t.Fatalf("repair result = %#v, want one revoked expired grant", result)
+	if result.Inspected != 1 || result.ExpireCandidates != 1 || result.ExpiresApplied != 1 || result.RevokeCandidates != 0 || result.RevokesApplied != 0 || result.Errors != 0 {
+		t.Fatalf("repair result = %#v, want one expired grant", result)
 	}
 	updated, ok, err := store.CapabilityGrant(grantID)
 	if err != nil {
 		t.Fatalf("CapabilityGrant() err = %v", err)
 	}
-	if !ok || updated.Status != session.CapabilityGrantStatusRevoked || updated.RevokedAt.IsZero() {
-		t.Fatalf("updated grant = %#v, want revoked with revoked_at", updated)
+	if !ok || updated.Status != session.CapabilityGrantStatusExpired || !updated.RevokedAt.IsZero() {
+		t.Fatalf("updated grant = %#v, want expired without revoked_at", updated)
 	}
 	if !strings.Contains(updated.StaleReason, "expired") {
 		t.Fatalf("stale reason = %q, want expired reason", updated.StaleReason)
@@ -259,7 +259,7 @@ func TestRunRepairCapabilityGrantsCommandDefaultsToDryRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("maintenancecli.RunRepairCapabilityGrantsCommand() err = %v", err)
 	}
-	for _, needle := range []string{"action: repair-capability-grants", "dry_run: true", "revoke_candidates: 1", "revokes_applied: 0"} {
+	for _, needle := range []string{"action: repair-capability-grants", "dry_run: true", "expire_candidates: 1", "expires_applied: 0", "revoke_candidates: 0", "revokes_applied: 0"} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("output = %q, want %q", out, needle)
 		}

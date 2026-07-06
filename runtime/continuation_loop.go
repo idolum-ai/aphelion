@@ -29,48 +29,63 @@ type missionLoopAssessment struct {
 	Continue  bool
 }
 
+type continuationTriggerResult struct {
+	Ran      bool
+	TurnsRun int
+	State    session.ContinuationState
+}
+
 func (r *Runtime) triggerContinuationLoop(ctx context.Context, key session.SessionKey) error {
+	_, err := r.triggerContinuationLoopWithResult(ctx, key)
+	return err
+}
+
+func (r *Runtime) triggerContinuationLoopWithResult(ctx context.Context, key session.SessionKey) (continuationTriggerResult, error) {
 	if r == nil {
-		return nil
+		return continuationTriggerResult{}, nil
 	}
 	state, ran, loopBudget, err := r.triggerApprovedContinuationOnce(ctx, key)
 	if err != nil {
-		return err
+		return continuationTriggerResult{State: state}, err
 	}
 	if !ran {
-		return nil
+		return continuationTriggerResult{State: state}, nil
 	}
 	turnsRun := 1
+	result := continuationTriggerResult{Ran: true, TurnsRun: turnsRun, State: state}
 	decision := r.continuationLoopDecisionForState(key, state, time.Now().UTC())
 	r.recordContinuationLoopAssessment(key, state, decision, turnsRun)
 	for {
 		if !decision.Continue {
 			r.recordContinuationLoopBoundary(key, state, decision, turnsRun)
-			return r.maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx, key, state, decision)
+			return result, r.maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx, key, state, decision)
 		}
 		if turnsRun >= loopBudget {
 			decision.Continue = false
 			decision.Reason = "loop_budget_exhausted"
 			decision.Boundary = fmt.Sprintf("automatic loop stopped after %d approved turn(s); remaining work requires a fresh trigger or approval boundary", turnsRun)
 			r.recordContinuationLoopBoundary(key, state, decision, turnsRun)
-			return r.maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx, key, state, decision)
+			return result, r.maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx, key, state, decision)
 		}
 		if err := ctx.Err(); err != nil {
-			return err
+			return result, err
 		}
 		if err := r.sendContinuationLoopProgress(ctx, key, state, decision); err != nil {
 			log.Printf("WARN continuation loop progress send failed chat_id=%d err=%v", key.ChatID, err)
 		}
 		state, ran, _, err = r.triggerApprovedContinuationOnce(ctx, key)
 		if err != nil {
-			return err
+			return result, err
 		}
 		if !ran {
 			decision = r.continuationLoopDecisionForState(key, state, time.Now().UTC())
 			r.recordContinuationLoopBoundary(key, state, decision, turnsRun)
-			return r.maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx, key, state, decision)
+			result.State = state
+			return result, r.maybeOfferNextOperationPhaseAfterContinuationBoundary(ctx, key, state, decision)
 		}
 		turnsRun++
+		result.TurnsRun = turnsRun
+		result.State = state
 		decision = r.continuationLoopDecisionForState(key, state, time.Now().UTC())
 		r.recordContinuationLoopAssessment(key, state, decision, turnsRun)
 	}

@@ -27,6 +27,8 @@ func (r *Runtime) reconciledContinuationStateFromInvalidAuthority(state session.
 	allowedToRemove := map[string]struct{}{}
 	for _, contradiction := range compilation.Contradictions {
 		switch strings.TrimSpace(contradiction.Reason) {
+		case session.AuthorityContradictionReasonProposalRequiresForbiddenGitPush:
+			return session.ContinuationState{}, false
 		case "allowed_action_implies_forbidden_authority", "allowed_action_exactly_forbidden":
 		default:
 			continue

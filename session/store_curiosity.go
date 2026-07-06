@@ -238,6 +238,39 @@ func (s *SQLiteStore) CuriosityObservations(limit int) ([]CuriosityObservation, 
 	return out, nil
 }
 
+func (s *SQLiteStore) StrandedCuriosityObservations(limit int) ([]CuriosityObservation, error) {
+	if s == nil {
+		return nil, fmt.Errorf("store is nil")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	observations, err := s.CuriosityObservations(1000)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CuriosityObservation, 0, limit)
+	for _, observation := range observations {
+		fingerprint := CuriosityPressureFingerprint(observation.LeaseID, observation.CandidateID, observation.ContentHash)
+		var count int
+		if err := s.db.QueryRow(`
+			SELECT COUNT(*)
+			FROM interior_signal_observations
+			WHERE source = 'curiosity'
+				AND source_fingerprint = ?
+		`, fingerprint).Scan(&count); err != nil {
+			return nil, fmt.Errorf("query curiosity pressure handoff: %w", err)
+		}
+		if count == 0 {
+			out = append(out, observation)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func curiosityLeaseByIDTx(tx *sql.Tx, id string) (CuriosityLease, error) {
 	row := tx.QueryRow(`
 		SELECT id, status, scope_kind, scope_id, scope_durable_agent_id, lease_class, work_action,

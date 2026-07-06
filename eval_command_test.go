@@ -50,7 +50,7 @@ func TestEvalListCommandSupportsTrajectorySuite(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode trajectory list JSON: %v\n%s", err, out.String())
 	}
-	if decoded.Suite != "trajectory" || len(decoded.Scenarios) != 19 {
+	if decoded.Suite != "trajectory" || len(decoded.Scenarios) != 20 {
 		t.Fatalf("decoded trajectory list = %#v", decoded)
 	}
 }
@@ -71,6 +71,25 @@ func TestEvalListCommandSupportsBoundaryAttackSuite(t *testing.T) {
 	}
 	if decoded.Suite != "boundary_attack" || len(decoded.Scenarios) != 17 {
 		t.Fatalf("decoded boundary_attack list = %#v", decoded)
+	}
+}
+
+func TestEvalListCommandSupportsChallengeSuite(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	if err := runEvalCommandWithDeps([]string{"list", "--suite", "challenge", "--format", "json"}, &out); err != nil {
+		t.Fatalf("eval list challenge err = %v", err)
+	}
+	var decoded struct {
+		Suite     string                        `json:"suite"`
+		Scenarios []aphruntime.EvalScenarioInfo `json:"scenarios"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode challenge list JSON: %v\n%s", err, out.String())
+	}
+	if decoded.Suite != "challenge" || len(decoded.Scenarios) != 16 {
+		t.Fatalf("decoded challenge list = %#v", decoded)
 	}
 }
 
@@ -314,6 +333,162 @@ func TestEvalLocalModeDoesNotRequireConfigOrRoutes(t *testing.T) {
 	}
 }
 
+func TestEvalModelBakeoffCommandLocalGovernorRendersJSON(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"model-bakeoff", "--role", "governor", "--mode", "local", "--suites", "canonical", "--scenario", "token_budget_recovery_no_dead_end", "--rollouts", "1", "--format", "json"}, &out)
+	if err != nil {
+		t.Fatalf("eval model-bakeoff err = %v\n%s", err, out.String())
+	}
+	var report evalModelBakeoffReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode model bakeoff JSON: %v\n%s", err, out.String())
+	}
+	if report.Role != "governor" || report.RoleStatus != "runnable" || report.ResultCount != 1 || len(report.Routes) != 1 || len(report.SuiteReports) != 1 {
+		t.Fatalf("report = %#v", report)
+	}
+	if report.Routes[0].PassRate != 1 || report.Routes[0].EstimatedPromptTokens == 0 {
+		t.Fatalf("route summary = %#v, want pass and cost evidence", report.Routes[0])
+	}
+	if len(report.RoleReadiness) < 4 {
+		t.Fatalf("role readiness = %#v, want scaffolded non-governor roles included", report.RoleReadiness)
+	}
+}
+
+func TestEvalModelBakeoffCommandSupportsMultipleLocalRoutes(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"model-bakeoff", "--role", "governor", "--mode", "local", "--routes", "local:a,local:b", "--suites", "canonical", "--scenario", "token_budget_recovery_no_dead_end", "--rollouts", "1", "--format", "json"}, &out)
+	if err != nil {
+		t.Fatalf("eval model-bakeoff err = %v\n%s", err, out.String())
+	}
+	var report evalModelBakeoffReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode model bakeoff JSON: %v\n%s", err, out.String())
+	}
+	if len(report.Routes) != 2 || report.Routes[0].Route != "local:a" || report.Routes[1].Route != "local:b" {
+		t.Fatalf("routes = %#v, want stable local route aggregation", report.Routes)
+	}
+}
+
+func TestEvalModelBakeoffCommandExpandsLocalRoutesByEffort(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"model-bakeoff", "--role", "governor", "--mode", "local", "--routes", "local:gpt-test", "--efforts", "low,medium,hard", "--suites", "canonical", "--scenario", "token_budget_recovery_no_dead_end", "--rollouts", "1", "--format", "json"}, &out)
+	if err != nil {
+		t.Fatalf("eval model-bakeoff err = %v\n%s", err, out.String())
+	}
+	var report evalModelBakeoffReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode model bakeoff JSON: %v\n%s", err, out.String())
+	}
+	if len(report.Routes) != 3 {
+		t.Fatalf("routes = %#v, want three effort-expanded routes", report.Routes)
+	}
+	got := map[string]string{}
+	for _, route := range report.Routes {
+		got[route.Route] = route.Effort
+	}
+	for route, effort := range map[string]string{
+		"local:gpt-test@low":    "low",
+		"local:gpt-test@medium": "medium",
+		"local:gpt-test@high":   "high",
+	} {
+		if got[route] != effort {
+			t.Fatalf("routes = %#v, want %s/%s", report.Routes, route, effort)
+		}
+	}
+}
+
+func TestEvalModelBakeoffCommandRejectsInvalidEffort(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"model-bakeoff", "--role", "governor", "--mode", "local", "--routes", "local:gpt-test", "--efforts", "tiny", "--suites", "canonical", "--scenario", "token_budget_recovery_no_dead_end", "--rollouts", "1", "--format", "json"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "unsupported eval model-bakeoff effort") {
+		t.Fatalf("eval model-bakeoff err = %v, want invalid effort error", err)
+	}
+}
+
+func TestEvalModelBakeoffCommandRejectsScaffoldedRole(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"model-bakeoff", "--role", "persona", "--mode", "local", "--format", "json"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "not runnable") {
+		t.Fatalf("eval model-bakeoff err = %v, want scaffolded role error", err)
+	}
+}
+
+func TestEvalModelBakeoffCommandRejectsAttackCorpusForMixedSuites(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{"model-bakeoff", "--role", "governor", "--mode", "local", "--suites", "canonical,boundary_attack", "--attack-corpus", filepath.Join(t.TempDir(), "corpus.json"), "--format", "json"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "requires --suites boundary_attack") {
+		t.Fatalf("eval model-bakeoff err = %v, want attack corpus suite error", err)
+	}
+}
+
+func TestEvalModelBakeoffLiveCostEstimateCountsSubjectAttackerAndJudgeCalls(t *testing.T) {
+	t.Parallel()
+
+	estimate, err := estimateEvalModelBakeoffLiveCost(evalModelBakeoffLiveCostInputs{
+		Mode:        aphruntime.EvalModeLive,
+		Suites:      []string{aphruntime.EvalSuiteBoundaryAttack},
+		ScenarioIDs: []string{"boundary_no_grant_external_action"},
+		Rollouts:    2,
+		Routes: []aphruntime.EvalRoute{
+			{Name: "openai:a", Provider: "openai", Model: "a"},
+			{Name: "openai:b", Provider: "openai", Model: "b"},
+		},
+		AttackerRoutes: []aphruntime.EvalRoute{{Name: "subject", Provider: "subject", Model: "same-as-subject"}},
+		Scoring:        aphruntime.EvalScoringJudge,
+		JudgeRoutes: []aphruntime.EvalRoute{
+			{Name: "openai:judge-a", Provider: "openai", Model: "judge-a"},
+			{Name: "openai:judge-b", Provider: "openai", Model: "judge-b"},
+		},
+		Threshold: 10,
+	})
+	if err != nil {
+		t.Fatalf("estimate err = %v", err)
+	}
+	if estimate.SubjectCalls != 8 || estimate.AttackerCalls != 8 || estimate.JudgeCalls != 8 || estimate.ProviderCalls != 24 {
+		t.Fatalf("estimate = %#v, want subject=8 attacker=8 judge=8 total=24", estimate)
+	}
+	if !estimate.ConfirmationRequired {
+		t.Fatalf("estimate = %#v, want confirmation required", estimate)
+	}
+}
+
+func TestEvalModelBakeoffCommandRequiresConfirmationForLargeLiveSweep(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeEvalCommandOpenAITestConfig(t)
+	var out bytes.Buffer
+	err := runEvalCommandWithDeps([]string{
+		"model-bakeoff",
+		"--role", "governor",
+		"--mode", "live",
+		"--config", configPath,
+		"--routes", "openai:gpt-test",
+		"--suites", "canonical",
+		"--scenario", "token_budget_recovery_no_dead_end",
+		"--rollouts", "2",
+		"--live-cost-threshold", "1",
+		"--format", "json",
+	}, &out)
+	if err == nil || !strings.Contains(err.Error(), "--confirm-live-cost") {
+		t.Fatalf("eval model-bakeoff err = %v, want live cost confirmation error", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("output = %q, want no live report before confirmation", out.String())
+	}
+}
+
 func TestEvalGateCommandRendersMarkdown(t *testing.T) {
 	t.Parallel()
 
@@ -381,6 +556,30 @@ func TestEvalCompareCommandRendersMarkdown(t *testing.T) {
 	if !strings.Contains(out.String(), "Measured Impact") || !strings.Contains(out.String(), "token_budget_recovery_no_dead_end") {
 		t.Fatalf("compare output missing expected content:\n%s", out.String())
 	}
+}
+
+func writeEvalCommandOpenAITestConfig(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(`
+[telegram]
+bot_token = "tg-test"
+
+[principals.telegram]
+admin_user_ids = [123]
+
+[providers]
+selection = "manual"
+default = "openai"
+
+[providers.openai]
+api_key = "test-key"
+model = "gpt-test"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return configPath
 }
 
 func writeEvalReportFixture(t *testing.T, path string, report aphruntime.EvalReport) {

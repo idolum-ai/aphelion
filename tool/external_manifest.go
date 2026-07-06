@@ -17,6 +17,7 @@ import (
 type ExternalToolManifest struct {
 	Name        string                          `json:"name"`
 	Owner       string                          `json:"owner"`
+	Description string                          `json:"description,omitempty"`
 	Version     string                          `json:"version,omitempty"`
 	Execution   ExternalToolManifestExecution   `json:"execution"`
 	IO          ExternalToolManifestIO          `json:"io"`
@@ -93,6 +94,7 @@ type ExternalToolManifestProvenance struct {
 func NormalizeExternalToolManifest(m ExternalToolManifest) ExternalToolManifest {
 	m.Name = strings.TrimSpace(m.Name)
 	m.Owner = strings.TrimSpace(m.Owner)
+	m.Description = strings.TrimSpace(m.Description)
 	m.Version = strings.TrimSpace(m.Version)
 	m.Execution.Mode = strings.TrimSpace(strings.ToLower(m.Execution.Mode))
 	m.Execution.Entry = strings.TrimSpace(m.Execution.Entry)
@@ -161,6 +163,9 @@ func validateExternalToolManifest(m ExternalToolManifest) error {
 	}
 	if len(m.IO.OutputSchema) > 0 && !json.Valid(m.IO.OutputSchema) {
 		return fmt.Errorf("external tool manifest io.output_schema must be valid json")
+	}
+	if err := validateExternalToolTimeoutBudget(m); err != nil {
+		return err
 	}
 	switch m.Constraints.Network {
 	case "", "allowlist", "denylist", "none":

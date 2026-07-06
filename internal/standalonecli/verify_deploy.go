@@ -275,6 +275,15 @@ func verifyDeployment(ctx context.Context, cfg *config.Config, opts deployVerifi
 		return report, err
 	}
 
+	if err := runProbe("schema_shape", func() (string, error) {
+		if store == nil {
+			return "", fmt.Errorf("schema shape probe has no session store")
+		}
+		return store.VerifyCriticalSchemaShape()
+	}); err != nil {
+		return report, err
+	}
+
 	if err := runProbe("tool_path", func() (string, error) {
 		if built.Probe == nil {
 			return "", fmt.Errorf("verification runtime builder returned nil tool probe")
@@ -569,6 +578,8 @@ func diagnoseDeployFailure(probe string, detail string) string {
 	switch probe {
 	case "boot":
 		return "deployment verification failed during runtime startup: " + detail
+	case "schema_shape":
+		return "deployment verification failed during schema-shape validation: " + detail
 	case "golden_path":
 		return "deployment verification failed on the live governed reply path: " + detail
 	case "persistence":

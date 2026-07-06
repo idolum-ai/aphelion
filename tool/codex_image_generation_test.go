@@ -57,7 +57,8 @@ func TestCodexImageGenerationInvokesBuiltInAndWritesArtifact(t *testing.T) {
 	grantToolInvoke(t, store, codexImageGenerationToolName, "durable_agent:child-alpha")
 
 	key := adminSessionKey()
-	out, err := registry.executeWithScopeAndPrincipal(context.Background(), codexImageGenerationToolName, json.RawMessage(`{"prompt":"make a slide"}`), sandbox.Scope{WorkingRoot: registry.workspace, SharedMemoryRoot: registry.workspace}, p, key)
+	ctx := authorityRunContextForPrincipal(t, store, key, p)
+	out, err := registry.executeWithScopeAndPrincipal(ctx, codexImageGenerationToolName, json.RawMessage(`{"prompt":"make a slide"}`), sandbox.Scope{WorkingRoot: registry.workspace, SharedMemoryRoot: registry.workspace}, p, key)
 	if err != nil {
 		t.Fatalf("codex_image_generation err = %v output=%s", err, out)
 	}

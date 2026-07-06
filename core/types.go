@@ -57,14 +57,14 @@ type InboundReaction struct {
 }
 
 type OutboundMessage struct {
-	ChatID    int64
-	Text      string
-	Media     []Media
-	ReplyTo   *int64
-	ParseMode string
-	Reactions []string
+	ChatID     int64
+	Text       string
+	Media      []Media
+	ReplyTo    *int64
+	ParseMode  string
+	Reactions  []string
 	ButtonRows [][]OutboundButton
-	Delivery  *OutboundDelivery
+	Delivery   *OutboundDelivery
 }
 
 type OutboundButton struct {
@@ -120,6 +120,15 @@ type TurnResult struct {
 	ProviderFailure string
 	ProviderEvents  []ProviderEvent
 	Recovery        *TurnRecovery
+	ChildTaskResult *ChildTaskResultContract
+}
+
+// ChildTaskResultContract is a typed child-turn result envelope. Text remains
+// projection; durable child state should be recorded from this contract when it
+// is available.
+type ChildTaskResultContract struct {
+	Status      string
+	BlockerKind string
 }
 
 type TurnRecoveryKind string

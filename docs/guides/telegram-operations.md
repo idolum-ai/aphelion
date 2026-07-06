@@ -238,10 +238,18 @@ an explicit expiry.
 ## Grant Bounded Automation
 
 After an approval succeeds, the approved message shows `Approve 15m` and
-`Close`. `Approve 15m` opens a bounded approval window for new approval
+`Close` by default. The approve label follows `[autonomy].default_approval_window`
+when configured to another finite duration. `Approve <duration>` opens a bounded approval window for new approval
 requests in the current chat or side thread. It creates the temporary automation
 gate and the spendable approval grant together, so the operator does not have to
 manage them as separate controls.
+
+`[autonomy].default_approval_window` is off by default. When set to a duration
+such as `15m` or `30m`, the first approval-window prompt is hidden by opening
+the same finite typed rows for eligible admin-owned approval requests. After
+that baseline window expires, later messages can show the normal
+`Approve <duration>` prompt again. `always` means rolling finite 15-minute
+windows, not non-expiring authority.
 
 An active window shows `Double time` and `Cancel approvals`. Each `Double time`
 press doubles the current window duration within the configured live-override
@@ -260,6 +268,13 @@ parked child after checks, and `Retire` removes a child from active use only
 after a confirmation card. `Analyze` queues a read-only main-chat board analysis
 and does not wake children or change authority. Replies to `/agents` cards route
 back to the ledgered child and show an `(agent <id>)` prefix for attribution.
+The model-facing `durable_agent` tool keeps the same split explicit:
+`conversation_send` appends parent guidance without waking the child, while
+`wake_once` can ask an approved child-wake continuation to consume already
+pending guidance exactly once. When the wake itself is the approved recovery
+action, `wake_once` may also carry one bounded inline `message`/`reason` payload;
+that payload is first materialized as parent guidance and then consumed by the
+same leased wake.
 
 Use `/context` to inspect the current chat/thread context that is shaping replies.
 It is read-only; `Ask Me` queues clarification questions without writing memory.
@@ -298,9 +313,17 @@ the next turn should still request the smallest required approval.
 
 The candidates are typed paths, not prose guesses. Runtime weighs the current
 operation, missions, same-chat threads, interior-pressure signals, memory, and
-hydrated evidence refs, then presents at most three short choices. A selected
-candidate carries its source and evidence refs into the next turn as context,
-but the normal authority and evidence gates still decide what can happen.
+hydrated evidence refs, then presents at most three short choices only when at
+least one concrete opportunity exists. Labels are rendered from typed state, so
+they should name the path being resumed or repaired instead of asking you to
+reconsider work in general. A selected candidate carries its source, intent,
+timing, why-now reason, and evidence refs into the next turn as context, but the
+normal authority and evidence gates still decide what can happen.
+
+Ignoring a card dampens the same semantic opportunity for a short cooldown, and
+stale cards are penalized before they can resurface. Pure fallback cards such
+as "ask what would be useful next" are suppressed; Aphelion should stay quiet
+when it cannot name a useful path from durable state.
 
 Heartbeat nudges may also mention recurring interior pressure. Those nudges are
 continuity signals derived from hidden-input recurrence and support pressure.

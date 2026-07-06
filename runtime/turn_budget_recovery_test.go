@@ -536,6 +536,168 @@ func TestBudgetRecoveryScopeUsesActiveStoredOperationWhenResultIsTerminal(t *tes
 	}
 }
 
+func TestBudgetRecoveryScopeUsesCurrentRequestWhenStoredOperationConflictsWithWorkingObjective(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 9746, UserID: 0, Scope: telegramDMScopeRef(9746)}
+	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "The Imexx PDF still is not visible. Stay on the file delivery task.", MessageID: 53, Timestamp: now}
+	stale := budgetRecoveryTestOperationState()
+	stale.ID = "stale-pr-review"
+	stale.Objective = "Review PR #220 and repair the stale Aphelion continuation prompt."
+	stale.Status = session.OperationStatusBlocked
+	stale.PhasePlan.Goal = "Review PR #220."
+	stale.PhasePlan.CurrentPhaseID = "review-pr-220"
+	stale.PhasePlan.Phases[0].ID = "review-pr-220"
+	stale.PhasePlan.Phases[0].Summary = "Review PR #220 and report findings."
+	stale.PhasePlan.Phases[0].Status = session.PlanStatusPending
+	if err := store.UpdateOperationState(key, stale); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateWorkingObjective(key, session.WorkingObjective{
+		Objective:  "Deliver the Imexx PDF file in the active conversation.",
+		Source:     "operator_message",
+		Confidence: "high",
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(2 * time.Hour),
+	}); err != nil {
+		t.Fatalf("UpdateWorkingObjective() err = %v", err)
+	}
+
+	scope, payload := rt.turnBudgetRecoveryScope(key, msg, nil)
+	if !strings.HasPrefix(scope, "request:") {
+		t.Fatalf("scope = %q, want current request scope instead of stale operation", scope)
+	}
+	if got, want := payload["reason"], recoveryCandidateReasonStaleVsWorkingObjective; got != want {
+		t.Fatalf("payload reason = %#v, want %q; payload=%#v", got, want, payload)
+	}
+	if got, want := payload["operation_id"], "stale-pr-review"; got != want {
+		t.Fatalf("payload operation_id = %#v, want %q", got, want)
+	}
+	if got, want := payload["working_objective"], "Deliver the Imexx PDF file in the active conversation."; got != want {
+		t.Fatalf("payload working_objective = %#v, want %q", got, want)
+	}
+	events, err := store.LatestExecutionEventsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("LatestExecutionEventsBySession() err = %v", err)
+	}
+	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventRecoveryCandidateSuppressed, "surface", "budget_recovery") {
+		t.Fatalf("events = %#v, want unified budget recovery suppression event", events)
+	}
+	if !budgetRecoveryEventPayloadContains(events, core.ExecutionEventRecoveryCandidateSuppressed, "reason", recoveryCandidateReasonStaleVsWorkingObjective) {
+		t.Fatalf("events = %#v, want stale working-objective suppression reason", events)
+	}
+	judgments, err := store.JudgmentsByKind(key, "recovery_candidate_arbitration", 10)
+	if err != nil {
+		t.Fatalf("JudgmentsByKind(recovery_candidate_arbitration) err = %v", err)
+	}
+	if len(judgments) != 1 {
+		t.Fatalf("judgments len = %d, want 1: %#v", len(judgments), judgments)
+	}
+	if judgments[0].OperationID != "stale-pr-review" || judgments[0].Completeness != session.JudgmentCompletenessComplete {
+		t.Fatalf("judgment = %#v, want complete stale-pr-review arbitration", judgments[0])
+	}
+	uses, err := store.JudgmentUsesByJudgmentRef(judgments[0].ID, 10)
+	if err != nil {
+		t.Fatalf("JudgmentUsesByJudgmentRef() err = %v", err)
+	}
+	if len(uses) != 1 {
+		t.Fatalf("uses len = %d, want 1: %#v", len(uses), uses)
+	}
+	if uses[0].Consequence != session.JudgmentUseConsequenceRecoverySelection || uses[0].ConsumerID != "runtime.recovery_candidate_arbitration" {
+		t.Fatalf("use = %#v, want recovery-selection arbitration use", uses[0])
+	}
+}
+
+func TestBudgetRecoveryScopeAllowsExplicitResumeOfStoredOperation(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 9747, UserID: 0, Scope: telegramDMScopeRef(9747)}
+	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "Resume PR 220 review now.", MessageID: 54, Timestamp: now}
+	stored := budgetRecoveryTestOperationState()
+	stored.ID = "stale-pr-review"
+	stored.Objective = "Review PR 220 and repair the stale Aphelion continuation prompt."
+	stored.Status = session.OperationStatusBlocked
+	stored.PhasePlan.Goal = "Review PR 220."
+	stored.PhasePlan.CurrentPhaseID = "review-pr-220"
+	stored.PhasePlan.Phases[0].ID = "review-pr-220"
+	stored.PhasePlan.Phases[0].Summary = "Review PR 220 and report findings."
+	stored.PhasePlan.Phases[0].Status = session.PlanStatusPending
+	if err := store.UpdateOperationState(key, stored); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateWorkingObjective(key, session.WorkingObjective{
+		Objective:  "Deliver the Imexx PDF file in the active conversation.",
+		Source:     "operator_message",
+		Confidence: "high",
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(2 * time.Hour),
+	}); err != nil {
+		t.Fatalf("UpdateWorkingObjective() err = %v", err)
+	}
+
+	scope, payload := rt.turnBudgetRecoveryScope(key, msg, nil)
+	if !strings.Contains(scope, "operation:stale-pr-review") {
+		t.Fatalf("scope = %q, want explicit resume to keep operation scope", scope)
+	}
+	if got, want := payload["operation_id"], "stale-pr-review"; got != want {
+		t.Fatalf("operation_id = %#v, want %q", got, want)
+	}
+	if _, ok := payload["reason"]; ok {
+		t.Fatalf("payload = %#v, want no stale suppression reason", payload)
+	}
+}
+
+func TestBudgetRecoveryScopeDoesNotTreatNegatedResumeAsExplicitSelection(t *testing.T) {
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	key := session.SessionKey{ChatID: 9748, UserID: 0, Scope: telegramDMScopeRef(9748)}
+	msg := core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "Do not continue PR 220; stay on the Imexx PDF.", MessageID: 55, Timestamp: now}
+	stored := budgetRecoveryTestOperationState()
+	stored.ID = "stale-pr-review"
+	stored.Objective = "Review PR 220 and repair the stale Aphelion continuation prompt."
+	stored.Status = session.OperationStatusBlocked
+	stored.PhasePlan.Goal = "Review PR 220."
+	stored.PhasePlan.CurrentPhaseID = "review-pr-220"
+	stored.PhasePlan.Phases[0].ID = "review-pr-220"
+	stored.PhasePlan.Phases[0].Summary = "Review PR 220 and report findings."
+	stored.PhasePlan.Phases[0].Status = session.PlanStatusPending
+	if err := store.UpdateOperationState(key, stored); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	if err := store.UpdateWorkingObjective(key, session.WorkingObjective{
+		Objective:  "Deliver the Imexx PDF file in the active conversation.",
+		Source:     "operator_message",
+		Confidence: "high",
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(2 * time.Hour),
+	}); err != nil {
+		t.Fatalf("UpdateWorkingObjective() err = %v", err)
+	}
+
+	scope, payload := rt.turnBudgetRecoveryScope(key, msg, nil)
+	if !strings.HasPrefix(scope, "request:") {
+		t.Fatalf("scope = %q, want negated resume to stay on current request", scope)
+	}
+	if got, want := payload["reason"], recoveryCandidateReasonStaleVsWorkingObjective; got != want {
+		t.Fatalf("payload reason = %#v, want %q; payload=%#v", got, want, payload)
+	}
+}
+
 func TestBudgetRecoveryCurrentPhaseFallsThroughWhenCompleted(t *testing.T) {
 	opState := budgetRecoveryTestOperationState()
 	opState.PhasePlan.CurrentPhaseID = "phase-completed"

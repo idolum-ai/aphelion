@@ -103,6 +103,7 @@ func (s *SQLiteStore) ExpireIdle(maxIdle time.Duration) (int, error) {
 	res, err := s.db.Exec(`
 		DELETE FROM sessions
 		WHERE updated_at < datetime('now', ?)
+			AND COALESCE(scope_kind, '') NOT IN ('telegram_thread', 'heartbeat', 'cron', 'recovery', 'curiosity', 'durable_agent')
 	`, sqliteNegativeDuration(maxIdle))
 	if err != nil {
 		return 0, fmt.Errorf("expire idle sessions: %w", err)

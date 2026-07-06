@@ -41,7 +41,7 @@ func renderModelSlotStatuses(statuses []core.ModelSlotStatus) string {
 		Title:    "Models",
 		State:    fmt.Sprintf("%d slot(s) configured", len(statuses)),
 		Why:      "Model slots control which backend handles each kind of runtime work.",
-		Next:     "Open a slot button, or use /model set <slot> <provider/model> effort=<low|medium|high|xhigh> speed=<standard|fast>.",
+		Next:     "Open a slot button, or use /model set <slot> <provider/model> effort=<low|medium|high|xhigh> speed=<standard|fast>. Clear restores this install's default.",
 		Details:  details,
 		Evidence: evidence,
 	}, false)
@@ -60,6 +60,11 @@ func renderModelStatusRows() [][]telegram.InlineButton {
 		{
 			{Text: "Health", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotDoctor, "")},
 			{Text: "Children", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotChildDefault, "")},
+		},
+		{
+			{Text: "Status", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotStatusReadable, "")},
+			{Text: "Heartbeat", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotHeartbeat, "")},
+			{Text: "Curiosity", CallbackData: encodeModelCallbackData(modelCallbackSlot, core.ModelSlotCuriosity, "")},
 		},
 		{
 			{Text: "Refresh", CallbackData: encodeModelCallbackData(modelCallbackStatus, "", "")},
@@ -95,7 +100,7 @@ func renderModelSlotDetail(status core.ModelSlotStatus) string {
 		Title:    modelSlotTitle(status.Slot),
 		State:    state,
 		Why:      "This slot determines the backend used for its runtime role.",
-		Next:     "Choose a preset, thinking level, speed when available, or clear the override.",
+		Next:     "Choose a preset, thinking level, speed when available, or clear the override to restore this install's default.",
 		Details:  details,
 		Evidence: evidence,
 	}, false)
@@ -114,10 +119,15 @@ func renderModelSlotRows(status core.ModelSlotStatus) [][]telegram.InlineButton 
 	rows := [][]telegram.InlineButton{
 		{
 			{Text: "Sonnet", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "sonnet")},
-			{Text: "Opus 4.7", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "opus47")},
+			{Text: "Opus 4.8", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "opus48")},
 			{Text: modelGPT55PresetLabel(slot), CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "gpt55")},
 		},
 		effortRow,
+	}
+	if modelSlotSupportsCheapPreset(slot) {
+		rows = append([][]telegram.InlineButton{{
+			{Text: "Cheap", CallbackData: encodeModelCallbackData(modelCallbackPreset, slot, "cheap")},
+		}}, rows...)
 	}
 	if core.NormalizeModelProvider(status.Effective.Provider) == core.ModelProviderOpenAI {
 		rows = append(rows, []telegram.InlineButton{
@@ -290,8 +300,9 @@ func renderModelCommandHelp() string {
 			"/model changes [slot] limit=8",
 		},
 		Evidence: []string{
-			"Slots: persona, governor, doctor, child_default",
+			"Slots: persona, governor, doctor, child_default, status, heartbeat, curiosity",
 			"Providers: openai, anthropic, openrouter, codex",
+			"Defaults are role-specific and local to this Aphelion install.",
 		},
 	}, false)
 }
@@ -306,8 +317,23 @@ func modelSlotTitle(slot string) string {
 		return "Health"
 	case core.ModelSlotChildDefault:
 		return "Children"
+	case core.ModelSlotStatusReadable:
+		return "Status"
+	case core.ModelSlotHeartbeat:
+		return "Heartbeat"
+	case core.ModelSlotCuriosity:
+		return "Curiosity"
 	default:
 		return strings.TrimSpace(slot)
+	}
+}
+
+func modelSlotSupportsCheapPreset(slot string) bool {
+	switch core.NormalizeModelSlot(slot) {
+	case core.ModelSlotStatusReadable, core.ModelSlotHeartbeat, core.ModelSlotCuriosity:
+		return true
+	default:
+		return false
 	}
 }
 
