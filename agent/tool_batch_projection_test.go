@@ -4,6 +4,7 @@ package agent
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -32,6 +33,19 @@ func TestToolResultContentRequiresProjectedFailureProvenance(t *testing.T) {
 	content, failed = toolResultContent(projected, projectedFailureErrorForTest{})
 	if !failed {
 		t.Fatal("failed = false for projected failure")
+	}
+	if content != projected {
+		t.Fatalf("projected failure content = %s, want %s", content, projected)
+	}
+}
+
+func TestToolResultContentTrustsWrappedProjectedFailure(t *testing.T) {
+	t.Parallel()
+
+	projected := `{"ok":false,"safe_summary":"sandbox denied","failure_class":"policy_denied","retry_policy":"do_not_retry","policy_ref":"sandbox"}`
+	content, failed := toolResultContent(projected, fmt.Errorf("exec failed: %w", projectedFailureErrorForTest{}))
+	if !failed {
+		t.Fatal("failed = false for wrapped projected failure")
 	}
 	if content != projected {
 		t.Fatalf("projected failure content = %s, want %s", content, projected)
