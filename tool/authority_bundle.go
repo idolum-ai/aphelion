@@ -255,15 +255,23 @@ func (r *Registry) authorityBundleSourceActions(key session.SessionKey, in autho
 	}
 	out := []session.NextActionRecord{}
 	for _, action := range open {
-		if in.IncludeOpenAuthorityBlockers && action.State == session.NextActionBlockedNeedsAuthority {
+		if _, ok := wanted[strings.TrimSpace(action.RecordID)]; ok {
 			out = append(out, action)
 			continue
 		}
-		if _, ok := wanted[strings.TrimSpace(action.RecordID)]; ok {
+		if in.IncludeOpenAuthorityBlockers && authorityBundleAutoIncludesOpenAuthorityBlocker(action) {
 			out = append(out, action)
 		}
 	}
 	return out, nil
+}
+
+func authorityBundleAutoIncludesOpenAuthorityBlocker(action session.NextActionRecord) bool {
+	if action.State != session.NextActionBlockedNeedsAuthority {
+		return false
+	}
+	return strings.TrimSpace(action.OperationTool) == requestApprovalToolName &&
+		strings.TrimSpace(action.OperationKind) == "continuation_lease_request"
 }
 
 func (r *Registry) authorityBundleComponentFromNextAction(action session.NextActionRecord) (session.AuthorityBundleComponent, string, []session.CapabilityGrantSpec, error) {
@@ -492,7 +500,7 @@ func authorityBundleToolDefinition() agent.ToolDef {
 				"objective": {"type": "string", "description": "Objective this authority bundle serves"},
 				"summary": {"type": "string", "description": "Short operator-readable bundle summary"},
 				"source_next_action_record_ids": {"type": "array", "items": {"type": "string"}, "description": "Open typed blocker rows this bundle addresses"},
-				"include_open_authority_blockers": {"type": "boolean", "description": "When true, include current open blocked_needs_authority rows in this session"},
+				"include_open_authority_blockers": {"type": "boolean", "description": "When true, include current open continuation-lease authority blockers in this session. Capability grant blockers must be named explicitly."},
 				"allowed_actions": {"type": "array", "items": {"type": "string"}},
 				"forbidden_actions": {"type": "array", "items": {"type": "string"}},
 				"stop_conditions": {"type": "array", "items": {"type": "string"}},
