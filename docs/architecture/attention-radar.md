@@ -252,14 +252,17 @@ The projection should record presentation events as returns:
 | selected | `recommendation_click` | `selection` |
 | ignored | `operator` | `dampening` |
 | parked | `operator` | `holding` |
-| expired-unreviewed | `absence` | `expired_unreviewed` |
+| expired-unreviewed after confirmed delivery | `absence` | `expired_unreviewed` |
 | conflict-rendered | `recommendation_card` | `conflict` |
 | superseded | `source_event` | `supersession` |
 | stale-callback | `recommendation_click` | `stale_callback` |
 
-Those events are returns too. The operator's inaction and attention are part of
-the signal. Silence that expires a card is an actor-stamped return, not missing
-history.
+Those events are returns too, but absence is not a synonym for missing delivery
+state. Silence may become an actor-stamped return only when the runtime has
+evidence that the card was shown or delivered, the card had a bounded review
+window, and no selection, ignore, park, or stale-callback response arrived before
+expiry. Delivery failure, withheld presentation, restart gaps, or unknown display
+state are delivery/projection gaps, not operator preference.
 
 ## Selection And Handoff
 
@@ -301,7 +304,9 @@ Rules:
 - A stale operation state may be shown in details, but not recommended as live.
 - A selected track should supersede conflicting tracks or force a conflict card.
 - Repeated ignores dampen by track hash without suppressing unrelated tracks.
-- Expiry without review records operator absence.
+- Expiry without review records operator absence only for recommendations with
+  confirmed delivery or presentation evidence; otherwise the system records a
+  delivery/projection gap.
 - Coasting windows must be source-specific and short; indefinite coasting is a
   ghost with nicer wording.
 - Existing re-entry dampening TTLs provide a first calibration point: ignored
@@ -526,7 +531,8 @@ Hard invariants:
 - A stale callback never binds to a different live track.
 - Model ranking never creates, reacquires, or selects a track.
 - Selecting a track compiles a typed token or fails closed.
-- Operator silence is recorded when a recommendation expires unreviewed.
+- Operator silence is recorded only when a delivered recommendation expires
+  unreviewed; missing delivery or presentation evidence is not absence.
 
 Journey tests:
 
@@ -540,6 +546,8 @@ Journey tests:
   superseding the task cools it.
 - **Ignore dampening:** repeated ignores suppress the same track hash without
   suppressing unrelated tracks.
+- **Delivery gap:** a recommendation without delivery or presentation evidence
+  does not dampen as operator absence when its review window passes.
 - **Stale callback:** pressing an old recommendation callback never binds to a
   newer track silently.
 - **Conflict alert:** two tracks compete for the active work lane; the card asks
