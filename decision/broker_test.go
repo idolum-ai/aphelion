@@ -312,31 +312,72 @@ func TestBrokerObserverReceivesOpenedAndResolvedEvents(t *testing.T) {
 	var (
 		eventsMu sync.Mutex
 		events   []Event
-		broker   *Broker
 	)
-	broker = NewBroker(func(_ context.Context, pending PendingDecision) (Delivery, error) {
-		go broker.Resolve(pending.ID, "queue")
+	pendingSeen := make(chan PendingDecision, 1)
+	openedSeen := make(chan Event, 1)
+	broker := NewBroker(func(_ context.Context, pending PendingDecision) (Delivery, error) {
+		pendingSeen <- pending
 		return Delivery{MessageID: 50}, nil
 	}, WithObserver(func(_ context.Context, event Event) {
 		eventsMu.Lock()
 		events = append(events, event)
 		eventsMu.Unlock()
+		if event.Type == EventTypeOpened {
+			select {
+			case openedSeen <- event:
+			default:
+			}
+		}
 	}))
 
-	result, err := broker.Request(context.Background(), Request{
-		Kind:          KindInterrupt,
-		ChatID:        77,
-		SenderID:      1001,
-		Prompt:        "Still working. What next?",
-		Choices:       []Choice{{ID: "stop", Label: "Stop"}, {ID: "queue", Label: "Queue"}},
-		DefaultChoice: "queue",
-		Timeout:       time.Second,
-	})
-	if err != nil {
-		t.Fatalf("Request() err = %v", err)
+	resultCh := make(chan Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := broker.Request(context.Background(), Request{
+			Kind:          KindInterrupt,
+			ChatID:        77,
+			SenderID:      1001,
+			Prompt:        "Still working. What next?",
+			Choices:       []Choice{{ID: "stop", Label: "Stop"}, {ID: "queue", Label: "Queue"}},
+			DefaultChoice: "queue",
+			Timeout:       time.Second,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- result
+	}()
+
+	var pending PendingDecision
+	select {
+	case pending = <-pendingSeen:
+	case err := <-errCh:
+		t.Fatalf("Request() err before delivery: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("Request() did not publish pending decision")
 	}
-	if strings.TrimSpace(result.DecisionID) == "" {
-		t.Fatal("DecisionID empty")
+	select {
+	case opened := <-openedSeen:
+		if opened.Decision.ID != pending.ID {
+			t.Fatalf("opened decision id = %q, want pending id %q", opened.Decision.ID, pending.ID)
+		}
+	case err := <-errCh:
+		t.Fatalf("Request() err before opened event: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("observer did not receive opened event")
+	}
+	if !broker.Resolve(pending.ID, "queue") {
+		t.Fatalf("Resolve(%q) = false, want true", pending.ID)
+	}
+
+	var result Result
+	select {
+	case err := <-errCh:
+		t.Fatalf("Request() err = %v", err)
+	case result = <-resultCh:
+	case <-time.After(time.Second):
+		t.Fatal("Request() did not resolve after approval")
 	}
 
 	eventsMu.Lock()
