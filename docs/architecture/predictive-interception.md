@@ -1,11 +1,11 @@
 # Predictive Interception
 
-_Status: draft architecture direction._
+_Status: implementation target._
 
 Predictive interception is goal-backward execution for Aphelion. It is the
-controller that should eventually consume a selected attention track and pursue a
-goal by steering toward where the goal will be satisfied, not merely toward the
-next prewritten step.
+controller that consumes a selected attention track and pursues a goal by
+steering toward where the goal will be satisfied, not merely toward the next
+prewritten step.
 
 The motivating image is a dragonfly intercepting prey: it does not chase the
 current position; it continuously re-projects the intercept point. In Aphelion,
@@ -308,7 +308,7 @@ The current tree already has several pieces of the controller:
   autonomy below fixed authority.
 - The evidence ledger already distinguishes observed, attested, projected, and
   gap-like records.
-- Re-entry recommendations and Attention Radar provide the eventual entry point:
+- Re-entry recommendations and Attention Radar provide the entry point:
   select a live track, then pursue its goal.
 
 Predictive interception should reuse those pieces. It should not introduce a
@@ -374,7 +374,7 @@ Leverage:
 - `runtime/continuation_supersession.go`: stale card/approval retirement.
 - `runtime/eval.go`: trajectory and live-eval substrate.
 
-Likely additions:
+Implementation files:
 
 - `session/types_goal_contract.go`
 - `session/store_goal_contracts.go`
@@ -383,7 +383,9 @@ Likely additions:
 - `runtime/goal_pursuit_controller.go`
 - `runtime/eval_goal_pursuit.go`
 
-## Rollout
+## Implementation Target
+
+Land the implementation as one coherent feature slice:
 
 1. Goal acceptance contract scaffold and versioning.
 2. Deterministic evaluator over contracts and evidence snapshots.

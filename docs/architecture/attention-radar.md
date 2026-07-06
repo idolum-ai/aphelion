@@ -1,6 +1,6 @@
 # Attention Radar
 
-_Status: draft architecture direction._
+_Status: implementation target._
 
 **Live-track recommendations for Aphelion**
 
@@ -179,7 +179,7 @@ freshness policy, operator actions, and supersession rules.
 `Status` owns lifecycle and operator action. `FreshnessClass` owns measured
 recency. `ghost` is not a stored status; it is a projection-time classification:
 the durable source row still exists, but current witnesses do not support
-recommendation. Keeping those axes separate prevents a future schema from
+recommendation. Keeping those axes separate prevents the schema from
 confusing "old signal" with "terminal lifecycle."
 
 An attention archetype is the redacted class of why a source is recommendable:
@@ -346,7 +346,7 @@ Weaknesses this design closes:
 - **Producer/consumer drift:** the recommendation sweep reconstructs liveness
   from neighboring state instead of consuming source-owned returns.
 - **Stale-card ambiguity:** old callbacks must not silently select newer work.
-- **Silence loss:** ignored or expired recommendations should shape future
+- **Silence loss:** ignored or expired recommendations should shape subsequent
   recommendation pressure.
 - **No cumulative track memory:** repeated stale suggestions are not yet a
   durable signal with dampening and reacquisition semantics.
@@ -588,7 +588,7 @@ Current surfaces to leverage:
   discovery state and live witnesses.
 - `core/status.go` and `/frontier`: model for typed operator inspection panels.
 
-Likely additions:
+Implementation files:
 
 - `session/types_attention_track.go`
 - `session/store_attention_tracks.go`
@@ -597,9 +597,10 @@ Likely additions:
 - `runtime/attention_radar_test.go`
 - `/radar` or a `/status` subsection for current tracks
 
-## Implementation Arc
+## Implementation Target
 
-The PR sequence should follow the same discipline as PR #283:
+The implementation should follow the same discipline as PR #283 while landing
+the radar and selected-track pursuit boundary together:
 
 1. **Canonical surface first:** define track and return types, liveness
    witnesses, and ghost-track semantics.
@@ -612,9 +613,10 @@ The PR sequence should follow the same discipline as PR #283:
 5. **Runtime consumers last:** move re-entry recommendations to consume radar
    projections instead of reconstructing liveness from nearby state.
 
-The first implementation slice should be honest if it stops at the substrate:
-typed tracks, returns, liveness witnesses, ghost suppression, and a compact
-inspection surface. Predictive Interception can consume tracks later.
+The implementation should land as one coherent feature slice: typed tracks,
+returns, liveness witnesses, ghost suppression, compact inspection, selection
+handoff, and the goal-pursuit handoff point that lets Predictive Interception
+consume selected tracks through typed records.
 
 ## Design Rule
 

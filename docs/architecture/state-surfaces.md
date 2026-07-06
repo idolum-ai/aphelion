@@ -43,10 +43,11 @@ Aphelion state is intentionally multi-surface.
 - Re-entry recommendations (`reentry_recommendations`) are current projection
   records for recommendation cards. They are not canonical for whether the
   recommended work surface is still live.
-- Attention Radar is the planned replacement liveness surface. Its future track
-  ledger should become canonical for recommendation liveness and provenance
-  once implemented, but no planned ledger is classified as a current state
-  surface until concrete schema and runtime writers exist.
+- Attention Radar is the implementation target replacement liveness surface. Its
+  track ledger becomes canonical for recommendation liveness and provenance in
+  the implementation change that introduces concrete schema and runtime writers.
+  Until that change lands, no non-existent ledger is classified as a current
+  state surface.
 
 Code anchors:
 
