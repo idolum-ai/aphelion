@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -861,6 +864,195 @@ func TestOperationPhaseChildWakeMaterializesGuidanceBeforeApprovedRetry(t *testi
 	}
 	if len(runner.messageIDs) != 1 || len(runner.messageIDs[0]) != 1 || strings.TrimSpace(runner.messageIDs[0][0]) == "" {
 		t.Fatalf("wake runner message IDs = %#v, want claimed inline guidance batch", runner.messageIDs)
+	}
+}
+
+func TestDiscoveredEffectRecoveryMaterializesApprovalAndExactExecRetry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	seedLocalGitFetchRepository(t, cfg.Agent.ExecRoot)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9078, UserID: 0, Scope: telegramDMScopeRef(9078)}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "op-discovered-fetch-recovery",
+		Status:    session.OperationStatusActive,
+		PhasePlan: session.OperationPhasePlan{ID: "plan-discovered-fetch-recovery", Goal: "Fetch latest refs after approval"},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState(seed operation) err = %v", err)
+	}
+	command := "git fetch origin main --prune"
+	now := time.Now().UTC()
+	readOnlyState := session.NormalizeContinuationState(session.ContinuationState{
+		Kind:           session.TurnAuthorizationKindContinuation,
+		Status:         session.ContinuationStatusApproved,
+		RemainingTurns: 1,
+		ApprovedBy:     1001,
+		ActionProposal: session.ActionProposal{
+			ID:             "aprop-runtime-read-only",
+			RiskClass:      "read_only_review",
+			AllowedActions: []string{"read_only", "inspect_code", "report_findings"},
+			Status:         session.ProposalStatusApproved,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-runtime-read-only",
+			ProposalID:     "aprop-runtime-read-only",
+			Status:         session.ContinuationLeaseStatusActive,
+			RemainingTurns: 1,
+			ApprovedBy:     1001,
+			AllowedActions: []string{"read_only", "inspect_code", "report_findings"},
+			ExpiresAt:      now.Add(time.Hour),
+		},
+		UpdatedAt: now,
+	})
+	ctx := toolpkg.WithContinuationExecAuthority(context.Background(), readOnlyState)
+
+	_, err = tools.ExecuteForSessionPrincipal(
+		ctx,
+		actor,
+		key,
+		"exec",
+		json.RawMessage(`{"command":`+strconv.Quote(command)+`}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "missing data_access continuation lease") || !strings.Contains(err.Error(), "lease request recorded") {
+		t.Fatalf("exec err = %v, want recorded missing data_access lease blocker", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(cfg.Agent.ExecRoot, ".git", "FETCH_HEAD")); !os.IsNotExist(statErr) {
+		t.Fatalf("FETCH_HEAD stat before approval = %v, want no fetch before lease approval", statErr)
+	}
+	open, err := store.OpenNextActionsBySession(key, 10)
+	if err != nil {
+		t.Fatalf("OpenNextActionsBySession(blocker) err = %v", err)
+	}
+	if len(open) != 1 || open[0].OperationTool != "request_approval" || open[0].OperationKind != "continuation_lease_request" {
+		t.Fatalf("open actions = %#v, want request_approval continuation handoff", open)
+	}
+
+	materialized, err := rt.MaterializeRequestedApproval(
+		context.Background(),
+		key,
+		core.InboundMessage{ChatID: 9078, SenderID: 1001, Text: "continue", MessageID: 401},
+		"continue",
+	)
+	if err != nil {
+		t.Fatalf("MaterializeRequestedApproval() err = %v", err)
+	}
+	if !materialized {
+		t.Fatal("materialized = false, want discovered-effect approval card")
+	}
+	pending, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(pending) err = %v", err)
+	}
+	if pending.Status != session.ContinuationStatusPending ||
+		pending.ContinuationLease.Status != session.ContinuationLeaseStatusPending ||
+		pending.ContinuationLease.LeaseClass != session.ContinuationLeaseClassDataAccess ||
+		!session.ContinuationConstraintsAreDiscoveredEffect(pending.ContinuationLease.Constraints) ||
+		pending.ContinuationLease.Constraints["command"] != command {
+		t.Fatalf("pending continuation = %#v, want pending discovered-effect data_access lease", pending)
+	}
+	retry := session.NormalizeContinuationRetryOperation(pending.ContinuationLease.RetryOperation)
+	if !retry.Active() || retry.Tool != "exec" || retry.OperationKind != session.ContinuationRecoveryRetryExecExactCommand || !strings.Contains(retry.InputJSON, strconv.Quote(command)) {
+		t.Fatalf("pending retry operation = %#v, want exact exec retry", retry)
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	inlineText := ""
+	if inlineCount > 0 {
+		inlineText = sender.inline[0].text
+	}
+	sender.mu.Unlock()
+	if inlineCount != 1 {
+		t.Fatalf("inline count = %d, want one approval card", inlineCount)
+	}
+	for _, want := range []string{"Retry discovered exact command once", command, "up to 1 turn"} {
+		if !strings.Contains(inlineText, want) {
+			t.Fatalf("inline text = %q, want %q", inlineText, want)
+		}
+	}
+
+	approved, err := rt.ApproveContinuationForKey(key, 1001)
+	if err != nil {
+		t.Fatalf("ApproveContinuationForKey() err = %v", err)
+	}
+	approvedText := approvedContinuationEventTextForState(approved)
+	if !strings.Contains(approvedText, command) || strings.Contains(approvedText, "request_approval") {
+		t.Fatalf("approved continuation text = %q, want exact exec retry without another approval request", approvedText)
+	}
+	result, err := rt.HandleInbound(context.Background(), core.InboundMessage{
+		ChatID:       9078,
+		SenderID:     1001,
+		SenderName:   "admin",
+		Text:         "[user pressed continue button: resume the previous task]",
+		MessageID:    402,
+		Origin:       core.InboundOriginTurnAuthorization,
+		OriginDetail: string(session.TurnAuthorizationKindContinuation),
+	})
+	if err != nil {
+		t.Fatalf("HandleInbound(continue approved retry) err = %v", err)
+	}
+	if result == nil || !strings.Contains(result.Text, "Running approved continuation") {
+		t.Fatalf("HandleInbound(continue approved retry) result = %#v, want approved continuation acknowledgement", result)
+	}
+	fetchHeadPath := filepath.Join(cfg.Agent.ExecRoot, ".git", "FETCH_HEAD")
+	if _, statErr := os.Stat(fetchHeadPath); statErr != nil {
+		opState, _ := store.OperationState(key)
+		current, _ := store.ContinuationState(key)
+		events, _ := store.ExecutionEventsBySession(key, 0, 200)
+		var related []string
+		for _, event := range events {
+			if strings.Contains(event.PayloadJSON, `"tool":"exec"`) ||
+				strings.Contains(event.PayloadJSON, command) ||
+				event.EventType == core.ExecutionEventContinuationConsumed ||
+				event.EventType == core.ExecutionEventWorkflowNextState {
+				related = append(related, fmt.Sprintf("%s/%s/%s", event.EventType, event.Stage, event.Status))
+			}
+		}
+		t.Fatalf("FETCH_HEAD stat after approval = %v at %s, want approved fetch retry to run; operation=%s/%s continuation=%s/%s retry_tool=%q events=%s",
+			statErr,
+			fetchHeadPath,
+			opState.Status,
+			opState.Stage,
+			current.Status,
+			current.ContinuationLease.Status,
+			current.ContinuationLease.RetryOperation.Tool,
+			strings.Join(related, ", "),
+		)
+	}
+	current, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(after trigger) err = %v", err)
+	}
+	if current.ContinuationLease.Status != session.ContinuationLeaseStatusConsumed || current.RemainingTurns != 0 {
+		t.Fatalf("continuation after trigger = %#v, want consumed one-turn retry", current)
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 200)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventToolStarted && strings.Contains(event.PayloadJSON, `"tool":"request_approval"`) {
+			t.Fatalf("events include request_approval after discovered-effect approval: %#v", event)
+		}
 	}
 }
 
@@ -3253,6 +3445,51 @@ func deliveredContinuationOfferCount(t *testing.T, store *session.SQLiteStore, k
 		}
 	}
 	return count
+}
+
+func seedLocalGitFetchRepository(t *testing.T, workspace string) {
+	t.Helper()
+
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		t.Fatal("workspace is required")
+	}
+	parent := t.TempDir()
+	origin := filepath.Join(parent, "origin.git")
+	seed := filepath.Join(parent, "seed")
+	runGit := func(workdir string, args ...string) {
+		t.Helper()
+		cmd := osexec.Command("git", args...)
+		if strings.TrimSpace(workdir) != "" {
+			cmd.Dir = workdir
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s failed in %q: %v\n%s", strings.Join(args, " "), workdir, err, string(out))
+		}
+	}
+
+	runGit("", "init", "--bare", origin)
+	if err := os.MkdirAll(seed, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) err = %v", seed, err)
+	}
+	runGit("", "init", seed)
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(seed README) err = %v", err)
+	}
+	runGit(seed, "config", "user.email", "aphelion-test@example.test")
+	runGit(seed, "config", "user.name", "Aphelion Test")
+	runGit(seed, "add", "README.md")
+	runGit(seed, "commit", "-m", "seed")
+	runGit(seed, "branch", "-M", "main")
+	runGit(seed, "remote", "add", "origin", origin)
+	runGit(seed, "push", "origin", "main")
+
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) err = %v", workspace, err)
+	}
+	runGit("", "init", workspace)
+	runGit(workspace, "remote", "add", "origin", origin)
 }
 
 type runtimeWakeRunner struct {

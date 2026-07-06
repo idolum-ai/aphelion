@@ -806,6 +806,12 @@ func TestHandleInboundRoutesRequestApprovalAuthorityInvalidBackToBrokerageRevisi
 	t.Parallel()
 
 	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	key := session.SessionKey{ChatID: 9007, UserID: 0, Scope: telegramDMScopeRef(9007)}
+	contract := discoveredEffectRecoveryContractForRuntimeTest(t, key, "git fetch origin main --prune")
+	contract, err := store.UpsertContinuationRecoveryContract(contract)
+	if err != nil {
+		t.Fatalf("UpsertContinuationRecoveryContract() err = %v", err)
+	}
 	provider.proposalReplyText = strings.Join([]string{
 		"INSPECT: yes",
 		"QUESTION: no",
@@ -818,11 +824,11 @@ func TestHandleInboundRoutesRequestApprovalAuthorityInvalidBackToBrokerageRevisi
 		"QUESTION: no",
 		"ANSWER: yes",
 		"PUSH:",
-		"- Request external_read approval for git fetch origin main --prune, then report ref evidence.",
+		"- Request the stored discovered-effect approval contract for git fetch origin main --prune, then report ref evidence.",
 		"CONTINUATION_SCHEMA_VERSION: 1",
 		"CONTINUATION_INTENT: continue",
 		"CONTINUATION_RATIONALE: The previous request_approval payload compiled to a local workspace contract that forbade external fetch.",
-		"CONTINUATION_NEXT_STEP: Ask for external_read fetch approval.",
+		"CONTINUATION_NEXT_STEP: Ask for the discovered-effect fetch approval contract.",
 		"CONTINUATION_CONFIDENCE: high",
 	}, "\n")
 	provider.planningReplies = []string{
@@ -848,12 +854,12 @@ func TestHandleInboundRoutesRequestApprovalAuthorityInvalidBackToBrokerageRevisi
 			"ANSWER: yes",
 			"RATIFICATION: accept",
 			"PLAN:",
-			"- Request external_read fetch approval.",
+			"- Request the stored discovered-effect fetch approval.",
 			"CONTINUATION_INTENT: continue",
 			"CONTINUATION_RATIONALE: The revised contract matches the compiler diagnostic.",
 			"CONTINUATION_RATIFIED: yes",
 			"CONTINUATION_NEXT_STEP: Request corrected approval.",
-			"CONTINUATION_CONSTRAINTS: Only external_read fetch and ref evidence.",
+			"CONTINUATION_CONSTRAINTS: Only the stored exact fetch command and ref evidence.",
 			"CONTINUATION_CONFIDENCE: high",
 		}, "\n"),
 	}
@@ -881,18 +887,9 @@ func TestHandleInboundRoutesRequestApprovalAuthorityInvalidBackToBrokerageRevisi
 			ID:   "good-approval",
 			Name: "request_approval",
 			Input: json.RawMessage(`{
+				"action":"request_continuation_lease",
 				"objective":"Refresh release evidence from origin/main.",
-				"phase":{
-					"id":"fresh-phase-1-fetch-origin-main",
-					"summary":"Fetch origin/main and report remote ref evidence.",
-					"authority_class":"external_read",
-					"gate_reason_code":"external_read",
-					"why_now":"The release check needs current remote refs.",
-					"bounded_effect":"Run only git fetch origin main --prune, then read refs and report evidence.",
-					"allowed_actions":["git_fetch_origin_main_prune","git_rev_parse_origin_main","report_fetch_evidence"],
-					"forbidden_actions":["workspace_write","commit","git_push","deploy","restart_service"],
-					"validation_plan":["report fetch result and origin/main hash"]
-				}
+				"contract_id":"` + contract.ContractID + `"
 			}`),
 		}}},
 		{Content: "Corrected approval requested."},
@@ -968,17 +965,62 @@ func TestHandleInboundRoutesRequestApprovalAuthorityInvalidBackToBrokerageRevisi
 		t.Fatalf("second request_approval = %#v, want successful approval request", requestApprovalCalls[1])
 	}
 
-	opState, err := store.OperationState(session.SessionKey{ChatID: 9007, UserID: 0, Scope: telegramDMScopeRef(9007)})
+	opState, err := store.OperationState(key)
 	if err != nil {
 		t.Fatalf("OperationState() err = %v", err)
 	}
-	if opState.Status != session.OperationStatusBlocked || opState.PhasePlan.CurrentPhaseID != "fresh-phase-1-fetch-origin-main" || len(opState.PhasePlan.Phases) != 1 {
-		t.Fatalf("operation state = %#v, want corrected approval request phase", opState)
+	if opState.Status != session.OperationStatusBlocked || opState.Stage != "approval_request" {
+		t.Fatalf("operation state = %#v, want corrected contract-backed approval request", opState)
 	}
-	phase := opState.PhasePlan.Phases[0]
-	if phase.AuthorityClass != session.AuthorityClassExternalRead || !phase.RequiresApproval {
-		t.Fatalf("phase = %#v, want external_read approval phase", phase)
+	cont, ok, err := store.ContinuationStateIfExists(key)
+	if err != nil {
+		t.Fatalf("ContinuationStateIfExists() err = %v", err)
 	}
+	if !ok || cont.Status != session.ContinuationStatusPending || !session.ContinuationConstraintsAreDiscoveredEffect(cont.ContinuationLease.Constraints) {
+		t.Fatalf("continuation = %#v ok=%v, want pending discovered-effect approval", cont, ok)
+	}
+}
+
+func discoveredEffectRecoveryContractForRuntimeTest(t *testing.T, key session.SessionKey, command string) session.ContinuationRecoveryContract {
+	t.Helper()
+	commandHash := session.EffectAttemptCommandHash(command)
+	retryRaw, err := json.Marshal(map[string]any{"command": command})
+	if err != nil {
+		t.Fatalf("marshal retry input: %v", err)
+	}
+	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID: "runtime-test-fetch",
+		SessionID:         session.SessionIDForKey(key),
+		SubjectKind:       session.ContinuationRecoverySubjectKindDiscoveredEffect,
+		Resource:          "command:" + commandHash,
+		Principal:         "telegram:1001",
+		LeaseClass:        session.ContinuationLeaseClassDataAccess,
+		AllowedActions:    []string{"fetch", "git_fetch_origin_main_prune", "report_fetch_evidence"},
+		Constraints: map[string]string{
+			"contract_kind":      session.ContinuationRecoveryContractKindDiscoveredEffect,
+			"effect_kind":        "network_or_external_contact",
+			"effect_action":      "fetch",
+			"effect_provider":    "git",
+			"git_subcommand":     "fetch",
+			"command":            command,
+			"command_hash":       commandHash,
+			"normalized_command": command,
+		},
+		Tool:       "exec",
+		ToolAction: session.ContinuationRecoveryRetryExecExactCommand,
+		RetryOperation: session.ContinuationRetryOperation{
+			Contract:      session.ContinuationRecoveryRetryVersion,
+			OperationKind: session.ContinuationRecoveryRetryExecExactCommand,
+			Tool:          "exec",
+			InputJSON:     string(retryRaw),
+			SubjectKind:   session.ContinuationRecoverySubjectKindDiscoveredEffect,
+		},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract() err = %v", err)
+	}
+	return contract
 }
 
 func TestGroundFinalReplyWithExecutionEvidenceAdjudicatesUngroundedSuccessClaimWithoutVisibleBanner(t *testing.T) {

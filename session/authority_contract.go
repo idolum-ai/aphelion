@@ -125,20 +125,6 @@ func authorityClassificationPriority() []authorityClassificationGroup {
 			"rank_private_material",
 			"scout_public_opportunities",
 		}},
-		{Key: AuthorityClassExternalRead, Tokens: []string{
-			AuthorityClassExternalRead,
-			"external_network_read",
-			"network_read",
-			"network_access_read",
-			"external_network_contact",
-			"network_contact",
-			"fetch",
-			"fetch_remote",
-			"git_fetch",
-			"git_fetch_read_refs",
-			"git_ls_remote",
-			"ls_remote",
-		}},
 		{Key: "data_access", Tokens: []string{"data_access", "file_access", "read_file", "read_image", "consume_attachment", "artifact_read", "network_access", "external_account_auth_status", "external_account_status_check", "read_only_auth_status_check", "credential_state_check", "credential_metadata", "credential_metadata_check", "token_health_check", "run_external_account_auth_status_or_identity_check"}},
 		{Key: "repo_publication", Tokens: []string{"repo_publication", "remote_repo_mutation", "git_push", "push_remote"}},
 		{Key: "commit", Tokens: []string{"commit", "git_commit", "git_commit_validated_slices", "repo_history_mutation", "workspace_commit", "workspace_commit_then_repo_write_bounded"}},
@@ -211,7 +197,10 @@ func actionListImpliesRepoPublication(actions []string) bool {
 func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 	key := normalizeEnumValue(token)
 	switch key {
-	case AuthorityClassExternalRead, "external_network_read", "network_read", "network_access_read", "external_network_contact", "network_contact", "fetch", "fetch_remote", "git_fetch", "git_fetch_read_refs", "git_ls_remote", "ls_remote":
+	case AuthorityClassExternalRead:
+		// Deprecated compatibility for states persisted while PR #291 was a
+		// narrow bridge. New one-time external command authority should flow
+		// through discovered-effect continuation recovery contracts instead.
 		return AuthorityContract{
 			Key:        AuthorityClassExternalRead,
 			LeaseClass: ContinuationLeaseClassDataAccess,

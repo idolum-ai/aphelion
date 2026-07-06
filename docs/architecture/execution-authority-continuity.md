@@ -231,6 +231,16 @@ compiled recovery contract instead of receiving its own pre-coded operation
 type. A new operation type is justified only when it carries durable enforcement
 semantics or provides aggregate labels that multiple surfaces can consume.
 
+The same rule applies to one-time discovered external effects. If an active
+continuation envelope blocks a dispatchable command such as `git fetch`, the
+runtime records a `discovered_effect` continuation recovery contract instead of
+inventing an `external_read` authority class. The contract carries the exact
+command, effect kind/action/provider, workdir, and retry operation; the command
+hash is evidence for correlation, not authority identity. Approval materializes
+through `request_approval action=request_continuation_lease`, and the approved
+retry bypasses generic work-executor routing so the exact `exec` invocation runs
+once under the approved continuation authority.
+
 ## Effective Authority
 
 For capability-managed tools, the effective authority is:

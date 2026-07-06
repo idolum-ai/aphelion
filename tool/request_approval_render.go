@@ -112,6 +112,9 @@ func requestApprovalContinuationLeaseSummary(requirement missingContinuationLeas
 	if requirement.LeaseClass == session.ContinuationLeaseClassChildWake && requirement.AgentID != "" {
 		return fmt.Sprintf("Invoke durable_agent wake_once for %s exactly once", requirement.AgentID)
 	}
+	if session.ContinuationConstraintsAreDiscoveredEffect(requirement.Constraints) {
+		return fmt.Sprintf("Retry discovered exact command once: %s", requestApprovalDiscoveredEffectCommand(requirement))
+	}
 	if requirement.Tool != "" && requirement.ToolAction != "" {
 		return fmt.Sprintf("Retry %s %s exactly once under the approved %s lease", requirement.Tool, requirement.ToolAction, requirement.LeaseClass)
 	}
@@ -122,11 +125,26 @@ func requestApprovalContinuationLeaseBoundedEffect(requirement missingContinuati
 	if requirement.LeaseClass == session.ContinuationLeaseClassChildWake && requirement.AgentID != "" {
 		return fmt.Sprintf("Permit durable_agent wake_once to wake only %s once, consume the pending or contract-bound parent guidance batch, and stop after one child result or pre-child failure.", requirement.AgentID)
 	}
+	if session.ContinuationConstraintsAreDiscoveredEffect(requirement.Constraints) {
+		return fmt.Sprintf("Permit exactly one retry of the discovered %s command %q, then stop and report the result.", requirement.Constraints["effect_action"], requestApprovalDiscoveredEffectCommand(requirement))
+	}
 	return fmt.Sprintf("Permit exactly one %s continuation turn for %s %s, then stop and report the result.", requirement.LeaseClass, requirement.Tool, requirement.ToolAction)
 }
 
 func requestApprovalContinuationLeaseForbiddenActions(requirement missingContinuationLeaseRequirement) []string {
 	forbidden := []string{"expand_authority_without_new_approval", "ignore_stop_or_revocation", "unbounded_retry_loop"}
+	if session.ContinuationConstraintsAreDiscoveredEffect(requirement.Constraints) {
+		return append(forbidden,
+			"workspace_write",
+			"edit_files",
+			"commit",
+			"git_push",
+			"deploy",
+			"restart_service",
+			"credential_token_output",
+			"external_effect_outside_bounded_effect",
+		)
+	}
 	if requirement.LeaseClass == session.ContinuationLeaseClassChildWake {
 		forbidden = append(forbidden,
 			"wake_unnamed_child",
@@ -147,7 +165,21 @@ func requestApprovalContinuationLeaseValidationPlan(requirement missingContinuat
 			"stop without retrying or broadening child authority",
 		}
 	}
+	if session.ContinuationConstraintsAreDiscoveredEffect(requirement.Constraints) {
+		return []string{
+			"verify the retry command exactly matches the discovered contract",
+			"record the command result or typed blocker",
+			"stop without retrying or broadening external authority",
+		}
+	}
 	return []string{"record the typed result or blocker before any retry", "stop when the single approved turn is consumed"}
+}
+
+func requestApprovalDiscoveredEffectCommand(requirement missingContinuationLeaseRequirement) string {
+	if command := strings.TrimSpace(requirement.Constraints["command"]); command != "" {
+		return command
+	}
+	return strings.TrimSpace(requirement.RetryOperation.InputJSON)
 }
 
 func requestApprovalContinuationLeaseConstraints(requirement missingContinuationLeaseRequirement) map[string]string {

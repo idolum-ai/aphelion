@@ -86,6 +86,10 @@ func (r *Registry) requestApproval(ctx context.Context, input json.RawMessage, k
 	if err != nil {
 		return "", fmt.Errorf("%s", strings.Replace(err.Error(), "update_operation phase", "request_approval phase", 1))
 	}
+	if requestApprovalActionToken(phase.AuthorityClass) == session.AuthorityClassExternalRead ||
+		requestApprovalActionToken(phase.GateReasonCode) == session.AuthorityClassExternalRead {
+		return "", requestApprovalAuthorityContractInvalidError{diagnostic: "external_read is deprecated for new approvals; request the stored discovered-effect recovery contract with action=request_continuation_lease"}
+	}
 	if requestApprovalPhaseNeedsContinuationLease(phase) {
 		return r.requestApprovalPhaseContinuationLease(ctx, in, key, p, phase)
 	}
@@ -193,7 +197,7 @@ func requestApprovalToolDefinition() agent.ToolDef {
 						"id": {"type": "string", "description": "Optional stable phase id; generated when omitted"},
 						"summary": {"type": "string", "description": "Approval-card summary / next step"},
 						"status": {"type": "string", "enum": ["pending"], "description": "Must be pending when supplied"},
-						"authority_class": {"type": "string", "description": "Authority/risk class such as read_only_review, external_read, workspace_write, commit, deploy, or system_change"},
+						"authority_class": {"type": "string", "description": "Authority/risk class such as read_only_review, workspace_write, commit, deploy, or system_change. For one-time discovered external effects, use action=request_continuation_lease with the stored contract_id."},
 						"why_now": {"type": "string", "description": "Why this approval should be offered now"},
 						"bounded_effect": {"type": "string", "description": "What approval permits, including stop conditions"},
 						"allowed_actions": {"type": "array", "items": {"type": "string"}, "description": "Allowed action labels for this approval"},

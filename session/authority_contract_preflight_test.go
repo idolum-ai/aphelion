@@ -43,44 +43,53 @@ func TestCompileActionProposalAuthorityContractRejectsFetchUnderWorkspaceWrite(t
 	}
 }
 
-func TestCompileActionProposalAuthorityContractAllowsExplicitExternalReadFetch(t *testing.T) {
+func TestCompileContinuationAuthorityContractAllowsDiscoveredEffectFetch(t *testing.T) {
 	t.Parallel()
 
-	compilation := CompileActionProposalAuthorityContract(ActionProposal{
-		Summary:       "Fetch origin/main and report remote ref evidence.",
-		BoundedEffect: "Run only git fetch origin main --prune and read refs after it.",
-		RiskClass:     AuthorityClassExternalRead,
-		AllowedActions: []string{
-			"git_fetch_origin_main_prune",
-			"git_rev_parse_origin_main",
-			"report_fetch_evidence",
+	command := "git fetch origin main --prune"
+	compilation := CompileContinuationAuthorityContract(ContinuationState{
+		ActionProposal: ActionProposal{
+			Summary:        "Fetch origin/main and report remote ref evidence.",
+			BoundedEffect:  "Run only git fetch origin main --prune and read refs after it.",
+			RiskClass:      "data_access",
+			AllowedActions: []string{"fetch", "git_fetch_origin_main_prune", "report_fetch_evidence"},
+			Status:         ProposalStatusApproved,
 		},
-		ForbiddenActions: []string{
-			"workspace_write",
-			"commit",
-			"git_push",
-			"deploy",
-			"restart_service",
+		ContinuationLease: ContinuationLease{
+			Status:         ContinuationLeaseStatusActive,
+			RemainingTurns: 1,
+			LeaseClass:     ContinuationLeaseClassDataAccess,
+			AllowedActions: []string{"fetch", "git_fetch_origin_main_prune", "report_fetch_evidence"},
+			Constraints: map[string]string{
+				"contract_kind":      ContinuationRecoveryContractKindDiscoveredEffect,
+				"effect_kind":        "network_or_external_contact",
+				"effect_action":      "fetch",
+				"effect_provider":    "git",
+				"git_subcommand":     "fetch",
+				"command":            command,
+				"command_hash":       EffectAttemptCommandHash(command),
+				"normalized_command": command,
+			},
 		},
 	})
 
 	if !compilation.Valid() {
-		t.Fatalf("compilation = %#v, want valid external_read fetch contract", compilation)
+		t.Fatalf("compilation = %#v, want valid discovered-effect fetch contract", compilation)
 	}
-	if compilation.Contract.Key != AuthorityClassExternalRead {
-		t.Fatalf("contract key = %q, want %q", compilation.Contract.Key, AuthorityClassExternalRead)
+	if compilation.Contract.Key != ContinuationRecoveryContractKindDiscoveredEffect {
+		t.Fatalf("contract key = %q, want discovered_effect", compilation.Contract.Key)
 	}
 	if !compilation.Contract.ExternalEffectsAllowed {
 		t.Fatalf("external effects allowed = false, want true")
 	}
-	for _, want := range []string{"fetch", "git_fetch", "external_network_contact"} {
+	for _, want := range []string{"fetch", "git_fetch_origin_main_prune"} {
 		if !authorityPreflightStringSliceContains(compilation.AllowedActions, want) {
 			t.Fatalf("allowed actions = %#v, want %q", compilation.AllowedActions, want)
 		}
 	}
 }
 
-func TestCompileActionProposalAuthorityContractRejectsExternalReadWithWorkspaceWrite(t *testing.T) {
+func TestCompileActionProposalAuthorityContractRejectsDeprecatedExternalReadWithWorkspaceWrite(t *testing.T) {
 	t.Parallel()
 
 	compilation := CompileActionProposalAuthorityContract(ActionProposal{

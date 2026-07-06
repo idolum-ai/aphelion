@@ -254,12 +254,22 @@ func (r *Registry) exec(ctx context.Context, input json.RawMessage, scope sandbo
 	}
 	plan := commandeffect.PlanCommand(strings.TrimSpace(in.Command))
 	var shellJudgment session.Judgment
-	continuationErr := r.validateContinuationExecAuthority(ctx, in.Command, plan)
+	var continuationDecision ContinuationExecAuthorityDecision
+	var continuationErr error
+	if state, ok := ContinuationExecAuthorityFromContext(ctx); ok {
+		continuationDecision = ContinuationExecAuthorityDecisionForPlan(state, in.Command, plan, time.Now().UTC())
+		continuationErr = ContinuationExecAuthorityError(continuationDecision)
+	}
 	dispatchErr := validateExecEffectPlanDispatchable(plan)
 	if continuationErr != nil || dispatchErr != nil {
 		cause := continuationErr
 		if cause == nil {
 			cause = dispatchErr
+		}
+		if continuationErr != nil {
+			if recoveryErr, ok := discoveredEffectMissingContinuationLeaseError(key, p, in, workdir, plan, continuationDecision, continuationErr); ok {
+				return "", recoveryErr
+			}
 		}
 		if adminExactExecApprovalAllowed(p, key) {
 			return r.runAdminApprovedExactExec(ctx, in, scope, p, key, workdir, plan, cause)

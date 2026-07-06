@@ -103,6 +103,10 @@ func authorityForbiddenIncludesBroadDeployRestart(actions []string) bool {
 }
 
 func CompileContinuationAuthorityContract(state ContinuationState) AuthorityContractCompilation {
+	state = NormalizeContinuationState(state)
+	if ContinuationConstraintsAreDiscoveredEffect(state.ContinuationLease.Constraints) {
+		return compileDiscoveredEffectContinuationAuthorityContract(state)
+	}
 	proposal := state.ActionProposal
 	proposal.AllowedActions = append(append([]string(nil), proposal.AllowedActions...), state.ContinuationLease.AllowedActions...)
 	proposal.ForbiddenActions = append(append([]string(nil), proposal.ForbiddenActions...), state.ContinuationLease.ForbiddenActions...)
@@ -114,6 +118,83 @@ func CompileContinuationAuthorityContract(state ContinuationState) AuthorityCont
 		}
 	}
 	return CompileActionProposalAuthorityContract(proposal)
+}
+
+func compileDiscoveredEffectContinuationAuthorityContract(state ContinuationState) AuthorityContractCompilation {
+	state = NormalizeContinuationState(state)
+	allowed := append([]string(nil), state.ActionProposal.AllowedActions...)
+	allowed = append(allowed, state.ContinuationLease.AllowedActions...)
+	forbidden := append([]string(nil), state.ActionProposal.ForbiddenActions...)
+	forbidden = append(forbidden, state.ContinuationLease.ForbiddenActions...)
+	if phase, ok := CurrentContinuationApprovalBundlePhase(state.ApprovalBundle); ok {
+		allowed = append(allowed, phase.AllowedActions...)
+		forbidden = append(forbidden, phase.ForbiddenActions...)
+	}
+	constraints := normalizeRecoveryStringMap(state.ContinuationLease.Constraints)
+	effectAction := strings.TrimSpace(constraints["effect_action"])
+	if effectAction != "" {
+		allowed = append(allowed, effectAction)
+	}
+	compilation := AuthorityContractCompilation{
+		Status: AuthorityContractCompilationStatusValid,
+		Contract: AuthorityContract{
+			Key:        ContinuationRecoveryContractKindDiscoveredEffect,
+			LeaseClass: ContinuationLeaseClassDataAccess,
+			WorkAction: AuthorityWorkActionReadOnly,
+			AllowedActions: []string{
+				AuthorityWorkActionReadOnly,
+				"read_approved_resource",
+				"report_data_access_result",
+				"report_evidence",
+			},
+			ForbiddenActions: []string{
+				"workspace_write",
+				"edit_files",
+				"commit",
+				"git_commit",
+				"repo_history_mutation",
+				"repo_publication",
+				"git_push",
+				"push_remote",
+				"github_pr_create",
+				"github_pr_update",
+				"deploy",
+				"restart_service",
+				"credential_token_output",
+				"external_effect_outside_bounded_effect",
+			},
+			ValidationPlan: []string{
+				"run only the discovered exact command once",
+				"record the typed result or blocker before any further retry",
+			},
+			AutoApprovalAllowed:    true,
+			RequiresInlineApproval: true,
+			ExternalEffectsAllowed: true,
+		},
+		WorkAction:       AuthorityWorkActionReadOnly,
+		AllowedActions:   normalizeActionStringSlice(allowed),
+		ForbiddenActions: normalizeActionStringSlice(forbidden),
+	}
+	compilation.AllowedActions = normalizeActionStringSlice(append(compilation.AllowedActions, compilation.Contract.AllowedActions...))
+	compilation.ForbiddenActions = normalizeActionStringSlice(append(compilation.ForbiddenActions, compilation.Contract.ForbiddenActions...))
+	compilation.Contradictions = append(compilation.Contradictions, authorityContractContradictions(compilation.AllowedActions, compilation.ForbiddenActions)...)
+	if strings.TrimSpace(constraints["command"]) == "" ||
+		strings.TrimSpace(constraints["command_hash"]) == "" ||
+		strings.TrimSpace(constraints["effect_kind"]) != "network_or_external_contact" ||
+		effectAction == "" {
+		compilation.Contradictions = append(compilation.Contradictions, AuthorityContradiction{
+			AllowedAction:   effectAction,
+			ForbiddenAction: "incomplete_discovered_effect_contract",
+			WorkAction:      AuthorityWorkActionReadOnly,
+			Reason:          "discovered_effect_contract_incomplete",
+			Severity:        AuthorityContradictionSeverityInvalid,
+		})
+	}
+	if len(compilation.Contradictions) > 0 {
+		compilation.Status = AuthorityContractCompilationStatusInvalid
+		compilation.SuggestedRepair = "request_fresh_narrower_proposal"
+	}
+	return normalizeAuthorityContractCompilation(compilation)
 }
 
 func AuthorityContractCompilationValidForApproval(state ContinuationState) bool {
@@ -417,7 +498,7 @@ func authorityWorkActionForAllowedToken(value string) string {
 
 func firstActionProposalExternalEffectAllowedAction(proposal ActionProposal) string {
 	for _, action := range proposal.AllowedActions {
-		if authorityTokenImpliesExternalRead(action) {
+		if authorityTokenImpliesExternalEffect(action) {
 			return strings.TrimSpace(action)
 		}
 	}
@@ -513,7 +594,7 @@ func authorityTokenForbidsExternalEffect(value string) bool {
 	}
 }
 
-func authorityTokenImpliesExternalRead(value string) bool {
+func authorityTokenImpliesExternalEffect(value string) bool {
 	token := normalizeAuthorityMatchText(value)
 	switch token {
 	case AuthorityClassExternalRead, "external_network_read", "network_read", "network_access_read", "external_network_contact", "network_contact", "fetch", "fetch_remote", "git_fetch", "git_fetch_read_refs", "git_ls_remote", "ls_remote":

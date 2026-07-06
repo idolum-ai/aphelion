@@ -1437,13 +1437,18 @@ func TestRequestApprovalToolRejectsWorkspaceWriteFetchPreflight(t *testing.T) {
 	}
 }
 
-func TestRequestApprovalToolPersistsExternalReadFetchApproval(t *testing.T) {
+func TestRequestApprovalToolPersistsDiscoveredEffectFetchApproval(t *testing.T) {
 	t.Parallel()
 
 	registry, store := newDurableAgentToolRegistry(t)
 	key := adminSessionKey()
 	if _, err := store.Load(key); err != nil {
 		t.Fatalf("Load() err = %v", err)
+	}
+	contract := discoveredEffectRecoveryContractForToolTest(t, key, "git fetch origin main --prune")
+	contract, err := store.UpsertContinuationRecoveryContract(contract)
+	if err != nil {
+		t.Fatalf("UpsertContinuationRecoveryContract() err = %v", err)
 	}
 
 	out, err := registry.ExecuteForSessionPrincipal(
@@ -1452,18 +1457,9 @@ func TestRequestApprovalToolPersistsExternalReadFetchApproval(t *testing.T) {
 		key,
 		"request_approval",
 		json.RawMessage(`{
+			"action":"request_continuation_lease",
 			"objective":"Refresh release evidence from origin/main.",
-			"phase":{
-				"id":"fresh-phase-1-fetch-origin-main",
-				"summary":"Fetch origin/main and report remote ref evidence.",
-				"authority_class":"external_read",
-				"gate_reason_code":"external_read",
-				"why_now":"The release check needs current remote refs.",
-				"bounded_effect":"Run only git fetch origin main --prune, then read refs and report evidence.",
-				"allowed_actions":["git_fetch_origin_main_prune","git_rev_parse_origin_main","report_fetch_evidence"],
-				"forbidden_actions":["workspace_write","commit","git_push","deploy","restart_service"],
-				"validation_plan":["report fetch result and origin/main hash"]
-			}
+			"contract_id":"`+contract.ContractID+`"
 		}`),
 	)
 	if err != nil {
@@ -1479,13 +1475,64 @@ func TestRequestApprovalToolPersistsExternalReadFetchApproval(t *testing.T) {
 	if state.Status != session.OperationStatusBlocked || state.Stage != "approval_request" {
 		t.Fatalf("operation status/stage = %q/%q, want blocked approval_request", state.Status, state.Stage)
 	}
-	if state.PhasePlan.CurrentPhaseID != "fresh-phase-1-fetch-origin-main" || len(state.PhasePlan.Phases) != 1 {
-		t.Fatalf("phase plan = %#v, want external-read fetch approval phase", state.PhasePlan)
+	cont, ok, contErr := store.ContinuationStateIfExists(key)
+	if contErr != nil {
+		t.Fatalf("ContinuationStateIfExists() err = %v", contErr)
 	}
-	phase := state.PhasePlan.Phases[0]
-	if phase.AuthorityClass != session.AuthorityClassExternalRead || !phase.RequiresApproval {
-		t.Fatalf("phase = %#v, want external_read manual approval phase", phase)
+	if !ok || cont.Status != session.ContinuationStatusPending || cont.ContinuationLease.LeaseClass != session.ContinuationLeaseClassDataAccess {
+		t.Fatalf("continuation = %#v ok=%v, want pending data_access discovered-effect lease", cont, ok)
 	}
+	if !session.ContinuationConstraintsAreDiscoveredEffect(cont.ContinuationLease.Constraints) ||
+		cont.ContinuationLease.Constraints["command"] != "git fetch origin main --prune" ||
+		cont.ContinuationLease.RetryOperation.Tool != "exec" ||
+		cont.ContinuationLease.RetryOperation.OperationKind != session.ContinuationRecoveryRetryExecExactCommand {
+		t.Fatalf("lease = %#v, want exact exec discovered-effect retry", cont.ContinuationLease)
+	}
+	if cont.ActionProposal.RiskClass == session.AuthorityClassExternalRead {
+		t.Fatalf("proposal risk class = %q, want no external_read vocabulary", cont.ActionProposal.RiskClass)
+	}
+}
+
+func discoveredEffectRecoveryContractForToolTest(t *testing.T, key session.SessionKey, command string) session.ContinuationRecoveryContract {
+	t.Helper()
+	commandHash := session.EffectAttemptCommandHash(command)
+	retryRaw, err := json.Marshal(map[string]any{"command": command})
+	if err != nil {
+		t.Fatalf("marshal retry input: %v", err)
+	}
+	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID: "tool-test-fetch",
+		SessionID:         session.SessionIDForKey(key),
+		SubjectKind:       session.ContinuationRecoverySubjectKindDiscoveredEffect,
+		Resource:          "command:" + commandHash,
+		Principal:         "telegram:1001",
+		LeaseClass:        session.ContinuationLeaseClassDataAccess,
+		AllowedActions:    []string{"fetch", "git_fetch_origin_main_prune", "report_fetch_evidence"},
+		Constraints: map[string]string{
+			"contract_kind":      session.ContinuationRecoveryContractKindDiscoveredEffect,
+			"effect_kind":        "network_or_external_contact",
+			"effect_action":      "fetch",
+			"effect_provider":    "git",
+			"git_subcommand":     "fetch",
+			"command":            command,
+			"command_hash":       commandHash,
+			"normalized_command": command,
+		},
+		Tool:       "exec",
+		ToolAction: session.ContinuationRecoveryRetryExecExactCommand,
+		RetryOperation: session.ContinuationRetryOperation{
+			Contract:      session.ContinuationRecoveryRetryVersion,
+			OperationKind: session.ContinuationRecoveryRetryExecExactCommand,
+			Tool:          "exec",
+			InputJSON:     string(retryRaw),
+			SubjectKind:   session.ContinuationRecoverySubjectKindDiscoveredEffect,
+		},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract() err = %v", err)
+	}
+	return contract
 }
 
 func TestOperationCompletionEvidenceStatusExplainsMismatch(t *testing.T) {

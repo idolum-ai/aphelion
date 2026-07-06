@@ -115,7 +115,7 @@ func AuthorizePlan(req PlanRequest) Decision {
 			decision.Reason = "read_only_effect"
 			return decision
 		}
-		return decisionForNonBoundaryEffect(state, decision, effect)
+		return decisionForNonBoundaryEffect(state, decision, effect, firstNonEmpty(req.Command, plan.Command))
 	}
 	decision.Boundary = true
 	decision.BoundaryKind = string(boundary.Kind)
@@ -235,7 +235,7 @@ func decisionForBoundary(state session.ContinuationState, decision Decision, bou
 	}
 }
 
-func decisionForNonBoundaryEffect(state session.ContinuationState, decision Decision, effect commandeffect.Effect) Decision {
+func decisionForNonBoundaryEffect(state session.ContinuationState, decision Decision, effect commandeffect.Effect, command string) Decision {
 	actions := nonBoundaryEffectActions(effect)
 	if len(actions) == 0 {
 		decision.Reason = "effect_not_represented_in_continuation_envelope"
@@ -245,6 +245,13 @@ func decisionForNonBoundaryEffect(state session.ContinuationState, decision Deci
 	case commandeffect.KindExternal:
 		if !decision.ExternalEffectsAllowed {
 			decision.Reason = "external_effect_not_allowed_by_contract"
+			return decision
+		}
+		if !discoveredEffectEnvelopeMatches(state, effect, command) {
+			decision.Reason = "discovered_effect_constraints_mismatch"
+			if action := normalizeAuthorityAction(effect.Action); action != "" {
+				decision.RequiredAction = action
+			}
 			return decision
 		}
 	case commandeffect.KindUnknown:
@@ -322,6 +329,30 @@ func dedupeAuthorityActions(actions []string) []string {
 		out = append(out, action)
 	}
 	return out
+}
+
+func discoveredEffectEnvelopeMatches(state session.ContinuationState, effect commandeffect.Effect, command string) bool {
+	state = session.NormalizeContinuationState(state)
+	constraints := state.ContinuationLease.Constraints
+	if !session.ContinuationConstraintsAreDiscoveredEffect(constraints) {
+		return true
+	}
+	if strings.TrimSpace(constraints["effect_kind"]) != string(effect.Kind) {
+		return false
+	}
+	if want := normalizeAuthorityAction(constraints["effect_action"]); want == "" || want != normalizeAuthorityAction(effect.Action) {
+		return false
+	}
+	if want := strings.TrimSpace(constraints["effect_provider"]); want != "" && want != strings.TrimSpace(effect.Provider) {
+		return false
+	}
+	if want := strings.TrimSpace(constraints["git_subcommand"]); want != "" && want != strings.TrimSpace(effect.GitSubcommand) {
+		return false
+	}
+	if want := strings.TrimSpace(constraints["command"]); want == "" || want != strings.TrimSpace(command) {
+		return false
+	}
+	return true
 }
 
 func decisionRequireRepoPublicationPush(state session.ContinuationState, decision Decision) Decision {
