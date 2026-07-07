@@ -13,10 +13,12 @@ keeps governance and evidence; the child works inside the policy it was given.
 | External-channel child | Another local adapter should observe or report status without becoming a house principal. | Create an external-channel child and keep adapter state under child runtime state. |
 | Tailnet remote child | The child should run its own Aphelion service on a Linux Tailnet host. | Configure Tailnet, dry-run `durable-agent provision`, then apply over Tailscale SSH. |
 
-A proposed architecture for future Hermes/OpenClaw-backed children is documented
-in [Durable External Runtimes](../architecture/durable-external-runtimes.md).
-That path is still governed as a durable child: runtime presence is not
-authority, and public gateway mode requires explicit grants.
+A proposed architecture for future Hermes/OpenClaw-backed children and standing
+work orders is documented in
+[Durable External Runtimes](../architecture/durable-external-runtimes.md). That
+path is not implemented runtime behavior yet. When implemented, it stays
+governed as a durable child: runtime presence is not authority, and public
+gateway mode requires explicit grants and materialized leases.
 
 ## Shared Setup Shape
 
@@ -27,15 +29,12 @@ Every child setup should leave the same trail:
    must never do.
 3. Set the bootstrap: child-local model or Codex home, storage roots, secret
    scopes, and network posture.
-4. Set the live policy: outbound mode, drift policy, capability envelope,
-   schedules/triggers, standing work orders, and any Tailnet declaration.
-5. For each standing work order, define conditional grants, credential scopes,
-   review gates, revocation behavior, and the exact leases Aphelion may
-   materialize later.
-6. Name the review routes: who approves platform/security authority, who
-   reviews customer/domain outputs, and who owns resource consent.
-7. Activate or provision.
-8. Validate with:
+4. Set the live policy: outbound mode, drift policy, capability envelope, and
+   any Tailnet declaration. Standing work orders, conditional grants, and
+   review-route setup are proposed in the external-runtime architecture but are
+   not current setup surfaces.
+5. Activate or provision.
+6. Validate with:
 
 ```bash
 ./bin/aphelion durable-agent list --config ~/.aphelion/aphelion.toml
@@ -47,17 +46,19 @@ ledger from the operator channel. `/agents` is the lifecycle board: inspect the
 child, request a bounded `Brief`, `Park` it, `Resume` it after activation checks,
 or confirm `Retire` when it should leave active use.
 
-## Standing Work Orders
+## Proposed Standing Work Orders
 
-Use a standing work order when creating the child should also define future work
-the admin is willing to pre-authorize under conditions. The work order is the
-signed operating mandate; the child still receives only the short-lived leases
-Aphelion materializes for a matching wake or action.
+The proposed external-runtime architecture adds standing work orders for cases
+where creating the child should also define future work the admin is willing to
+pre-authorize under conditions. The work order is the signed operating mandate;
+the child still receives only the short-lived leases Aphelion materializes for a
+matching wake or action.
 
-For leased agents, keep approval routes separate. The Aphelion admin usually
-approves platform/security authority, while the customer reviews content and
-domain decisions after trial graduation. Resource owners still approve access to
-private data, audience membership, or externally owned accounts.
+For leased agents, the proposed model keeps approval routes separate. The
+Aphelion admin usually approves platform/security authority, while the customer
+reviews content and domain decisions after trial graduation. Resource owners
+still approve access to private data, audience membership, or externally owned
+accounts.
 
 Common shapes:
 
@@ -73,11 +74,11 @@ Do not use a standing work order as a catch-all permission bucket. Email read,
 browser monitoring, webhook calls, channel draft, and channel send should be
 separate conditional grants that can expire or be revoked independently.
 
-When a child repeatedly needs work outside the current work order, treat that as
-a renegotiation signal. The child may propose an amendment, but the proposal is
-review evidence only. Admin approval creates a new SOW version; rejected
-amendments leave the current SOW unchanged, and old leases cannot be reused
-under a newer version.
+When a future standing-work-order child repeatedly needs work outside the
+current work order, treat that as a renegotiation signal. The child may propose
+an amendment, but the proposal is review evidence only. Admin approval creates a
+new SOW version; rejected amendments leave the current SOW unchanged, and old
+leases cannot be reused under a newer version.
 
 Daily or weekly standups should show the same routing: what the child did, what
 is blocked, which customer reviews are pending, which authority decisions belong

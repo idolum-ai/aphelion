@@ -7,7 +7,9 @@ its rendered SVG.
 ## Policy
 
 - Edit `.mmd` files here; do not hand-edit the SVGs in `../`.
-- Regenerate the SVG in the same commit as the source change.
+- Regenerate the SVG in the same commit as the source change when `mmdc` is
+  available. If rendering is unavailable, commit the `.mmd` source only and do
+  not add a hand-maintained SVG.
 - Filename base must match the rendered output (e.g.
   `01-package-map.mmd` → `../01-package-map.svg`).
 

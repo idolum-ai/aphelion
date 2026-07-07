@@ -31,11 +31,6 @@ The analysis behind this proposal was grounded in these pinned revisions:
 | Hermes Agent | `830165473e0920c2baf8c2a6863976edb0c52943` | [`pyproject.toml`](https://github.com/NousResearch/hermes-agent/blob/830165473e0920c2baf8c2a6863976edb0c52943/pyproject.toml), [`hermes_cli/main.py`](https://github.com/NousResearch/hermes-agent/blob/830165473e0920c2baf8c2a6863976edb0c52943/hermes_cli/main.py), [`acp_adapter/entry.py`](https://github.com/NousResearch/hermes-agent/blob/830165473e0920c2baf8c2a6863976edb0c52943/acp_adapter/entry.py), [`gateway/`](https://github.com/NousResearch/hermes-agent/tree/830165473e0920c2baf8c2a6863976edb0c52943/gateway) |
 | OpenClaw | `c7295e417d5daec76c18fb452d117f7b8eadc4d6` | [`openclaw.mjs`](https://github.com/openclaw/openclaw/blob/c7295e417d5daec76c18fb452d117f7b8eadc4d6/openclaw.mjs), [`docs/openclaw-agent-runtime.md`](https://github.com/openclaw/openclaw/blob/c7295e417d5daec76c18fb452d117f7b8eadc4d6/docs/openclaw-agent-runtime.md), [`docs/cli/acp.md`](https://github.com/openclaw/openclaw/blob/c7295e417d5daec76c18fb452d117f7b8eadc4d6/docs/cli/acp.md), [`docs/tools/acp-agents-setup.md`](https://github.com/openclaw/openclaw/blob/c7295e417d5daec76c18fb452d117f7b8eadc4d6/docs/tools/acp-agents-setup.md) |
 
-Local clone paths used for inspection:
-
-- Hermes: `/tmp/hermes-agent`
-- OpenClaw: `/tmp/openclaw-repo`
-
 ## Core Shape
 
 Aphelion already has the durable-child ingredients needed for this direction:
@@ -67,11 +62,17 @@ that a child runtime has:
 - bounded output and artifact contracts,
 - and an authority ceiling enforced by Aphelion before the runtime starts.
 
+Hermes/OpenClaw operational knowledge belongs in adapter profiles and adapter
+preflight/status/wake helpers. Generic parent wake code should consume only the
+adapter registry contract; it must not branch on `hermes`, `openclaw`,
+`whatsapp`, `telegram`, or any other runtime/channel-specific name.
+
 A runtime source reference is descriptive until the runtime is attested. A child
 does not become wake-eligible merely because a git ref, binary path, or image
 name exists in the spec.
 
-![Durable external runtimes](diagrams/07-durable-external-runtimes.svg)
+Diagram source:
+[`diagrams/src/07-durable-external-runtimes.mmd`](diagrams/src/07-durable-external-runtimes.mmd).
 
 ## Authority Boundary
 
@@ -110,13 +111,23 @@ Every adapter invocation MUST set:
 - an explicit child-local home/state/config root;
 - an explicit working directory;
 - an explicit environment allowlist derived from the normalized runtime spec and
-  active child secret scopes;
+  current lease materialization plus active child secret scopes;
 - and no provider, channel, GitHub, Telegram, or shell credential variables
-  unless an active child-scoped grant names them.
+  unless a current lease names the secret scope and action that can use them.
 
 Adapter preflight must fail closed when the runtime would resolve implicit
 parent state, implicit parent config, repo-local `.env` files, inherited
 sensitive environment variables, or parent-owned credential stores.
+
+Secrets should be lease-scoped at process launch whenever the runtime adapter
+can mediate them. For brokered tools such as `gog`, the broker enforces the
+lease selectors before using a child secret. If an external runtime requires a
+raw credential in its environment or config, the adapter must treat that as a
+larger authority crossing: inject it only for the matching materialized lease,
+prefer token files over broad env, keep the process lifetime within the lease,
+and document that constraints outside the brokered path are enforced by adapter
+preflight, runtime config, and post-run evidence rather than by the raw secret
+itself.
 
 ### Install, Probe, And Drift Boundary
 
@@ -533,7 +544,8 @@ Allowed `kind` values should start narrow:
       "allowed_domains": ["example.com"],
       "webhook": {
         "method": "POST",
-        "endpoint": "https://maker.ifttt.com/trigger/site_changed/with/key/<child-secret-ref>",
+        "endpoint_template": "https://maker.ifttt.com/trigger/site_changed/with/key/${ifttt_key}",
+        "secret_ref": "secret_scope:child:watch-child:ifttt:key",
         "payload_schema_ref": "schema:site-change-alert-v1"
       }
     },
@@ -548,7 +560,9 @@ Allowed `kind` values should start narrow:
 
 Conditional grants are templates. They become executable only when Aphelion
 evaluates the standing work order and emits runtime leases for the current wake
-or action.
+or action. Exact endpoint matching should happen on the normalized endpoint
+template before secret resolution; the resolved URL is execution material and
+must be redacted from logs and review artifacts.
 
 ### StandingWorkOrderAmendment
 
@@ -610,14 +624,14 @@ leases.
         "conditional_grant_id": "grant_gmail_read",
         "conditional_grant_version": 3,
         "capability": "gmail_read",
-        "expires_at": "2026-07-07T13:15:00-04:00"
+        "expires_at": "2026-07-07T17:15:00Z"
       },
       {
         "lease_id": "lease_whatsapp_draft_01J...",
         "conditional_grant_id": "grant_whatsapp_draft",
         "conditional_grant_version": 3,
         "capability": "channel_draft",
-        "expires_at": "2026-07-07T13:15:00-04:00"
+        "expires_at": "2026-07-07T17:15:00Z"
       }
     ]
   }
@@ -635,7 +649,7 @@ leases.
   "spec_hash": "sha256:...",
   "input_ref": "artifact:child-task-packet/...",
   "authority_ref": "continuation_lease:...",
-  "deadline": "2026-07-06T19:45:00Z"
+  "deadline": "2026-07-07T17:15:00Z"
 }
 ```
 
@@ -687,9 +701,9 @@ Minimum operations:
     "exception_approval_refs": []
   },
   "limits": {
-    "deadline": "2026-07-06T19:45:00Z",
+    "deadline": "2026-07-07T17:15:00Z",
     "max_output_bytes": 65536,
-    "network_classes": ["provider_egress", "public_channel_presence"]
+    "network_classes": ["provider_egress"]
   },
   "expected_result": {
     "kind": "review_artifact",
@@ -712,8 +726,8 @@ Minimum operations:
   "runtime_spec_hash": "sha256:...",
   "adapter_run_id": "adapter_run_01J...",
   "status": "completed",
-  "started_at": "2026-07-06T19:40:00Z",
-  "completed_at": "2026-07-06T19:42:11Z",
+  "started_at": "2026-07-07T17:00:12Z",
+  "completed_at": "2026-07-07T17:03:11Z",
   "summary": "Drafted the daily WhatsApp update from the approved email read.",
   "acknowledged_parent_message_ids": ["parent_msg_123"],
   "artifacts": [
@@ -771,13 +785,6 @@ do not acknowledge parent conversation messages.
     "pairing_policy": "required_for_unknown_senders",
     "unknown_sender_behavior": "pairing_only_no_memory",
     "memory_admission": "after_review_principal",
-    "inbound_event_evidence": {
-      "transport_message_id": "wamid.HBg...",
-      "sender_id": "+15551234567",
-      "channel_id": "whatsapp:audience-line",
-      "adapter_timestamp": "2026-07-06T19:30:00Z",
-      "raw_payload_hash": "sha256:..."
-    },
     "outbound_delivery_policy": "review_principal_first",
     "credential_scope": "secret_scope:child:audience-child:whatsapp",
     "state_root": "/var/lib/aphelion/children/audience/hermes",
@@ -795,6 +802,11 @@ Gateway contracts must encode sender identity and memory admission explicitly.
 Adapter-local pairing or allowlist defaults are defense-in-depth, not the
 parent authority contract. Unknown senders must not become child-memory
 contaminants unless the grant permits that memory admission path.
+
+Per-message evidence belongs in event records, not in the standing gateway
+contract. A gateway event should carry fields such as transport message ID,
+sender ID, channel ID/account ID, adapter timestamp, raw payload hash, and the
+gateway contract/version that admitted or rejected the event.
 
 ## Adapter Profiles
 
@@ -928,6 +940,10 @@ invokes the selected adapter once, records a `ChildTaskResult`, and
 acknowledges parent conversation messages only when the result says they were
 consumed.
 
+This executor should dispatch by adapter registry contract only. Runtime-specific
+process choreography, such as OpenClaw's ephemeral loopback gateway or Hermes'
+ACP entrypoint, belongs in the adapter implementation and its tests.
+
 ### 6. Runtime Evidence And Recovery
 
 Persist runtime status, source hash, last preflight, last wake, failure class,
@@ -977,111 +993,9 @@ temporary child state root, not public gateway delivery by default.
 
 ## Conversation Flow Baselines
 
-These flows are UX baselines for mockups, not literal transcript fixtures. They
-should be reconstructed from typed tests, logs, and operational incidents where
-possible, then polished only enough to show the intended conversation design.
-Each mock should distinguish what the user sees from the authority truth
-underneath: active SOW version, matched condition, materialized leases,
-reviewer route, typed blocker, or accepted result.
-
-### Setup And Trial
-
-- Create a child SOW: Admin defines the child's charter, customer, runtime,
-  schedule, credentials, review routes, and policy ceiling.
-- Approve initial SOW: Aphelion summarizes the proposed SOW and asks the
-  authority principal to sign, revise, or reject it.
-- Trial run with admin review: The child completes routine work in supervised
-  mode while the Aphelion admin validates safety and usefulness.
-- Trial graduation: After successful trial runs, Aphelion proposes moving
-  routine content/domain approval from admin to the customer review principal.
-- Customer reviewer onboarding: The customer is added as review principal for
-  drafts, audience updates, and routine domain decisions without receiving
-  platform authority.
-- Split approval routing: Aphelion routes platform changes to the authority
-  principal, content review to the customer, and private-resource consent to the
-  resource owner.
-
-### Routine Work
-
-- Scheduled email review: A daily trigger materializes Gmail read and WhatsApp
-  draft leases for this wake only.
-- Customer email draft approval: The child drafts an update and the customer
-  approves content, recipients, and timing.
-- Draft before send: The child may draft through Hermes/OpenClaw, but delivery
-  waits for the configured review route.
-- Autonomous named-audience send: A signed SOW version permits sending only to
-  named audiences under explicit outbound policy.
-- Friday browser watch: A scheduled browser task runs for a bounded duration
-  against named domains.
-- IFTTT alert dispatch: The child calls only the allowlisted endpoint, method,
-  and payload schema named by the materialized lease.
-- Public channel draft review: A child prepares a public-channel reply, but
-  outbound delivery waits for customer or admin review according to the SOW.
-
-### Operating Rhythm
-
-- Daily parent-child standup: Parent Aphelion asks the child what it did, what
-  is blocked, what the next scheduled wake is, and whether the SOW still fits.
-- Daily customer digest: Parent Aphelion sends the customer a concise summary
-  of completed work, pending reviews, blocked items, and upcoming scheduled
-  work.
-- Child blocker standup: The child reports missing credentials, stale runtime
-  status, or review delays as typed blockers instead of retrying silently.
-- SOW health review: Parent Aphelion compares actual work, exceptions, failures,
-  and skipped schedules against the current SOW.
-- End-of-week SOW retrospective: Parent, child, and customer review outcomes,
-  recurring exceptions, proposed amendments, and autonomy level.
-
-### Exceptions And Renegotiation
-
-- Exception approval: The child asks for one unplanned action outside the SOW;
-  Aphelion requests a narrow one-time approval from the correct principal.
-- Repeated exception pattern: Aphelion notices repeated approvals of the same
-  shape and suggests a formal SOW amendment.
-- Child-proposed amendment: The child proposes an amendment as review evidence
-  with a structured risk delta, not as authority.
-- Customer-proposed amendment: The customer asks for broader work; Aphelion
-  drafts an amendment and routes any authority widening to the admin.
-- Approve SOW amendment: Admin signs a new SOW version; future leases bind to
-  that version.
-- Reject SOW amendment: Admin rejects the proposal; the active SOW and current
-  lease materialization rules remain unchanged.
-- Emergency narrowing: Admin revokes or narrows a grant and future leases stop
-  materializing immediately.
-
-### Boundaries And Failures
-
-- Missing credential blocker: A scheduled wake matches, but Aphelion blocks
-  before adapter invocation because a child credential is missing, expired, or
-  stale.
-- Runtime preflight failure: Hermes/OpenClaw install, source, env, dependency,
-  or drift checks fail before child execution.
-- Child wake lease missing: A child has grant coverage but no current
-  `child_wake` lease, so Aphelion asks for the exact wake lease instead of
-  looping.
-- Old lease replay denied: A runtime tries to reuse a lease from an older SOW
-  version and Aphelion blocks it.
-- Unknown sender handling: A gateway receives an unknown sender and routes
-  pairing/review instead of admitting memory or authority.
-- Terms boundary warning: Enabling a channel, provider, or hosted service
-  surfaces external terms and credential requirements before activation.
-- Reviewer unavailable: Customer review is pending too long; Aphelion follows
-  the SOW fallback policy to wait, skip, or escalate.
-- Multi-customer tenant boundary: A leased child cannot leak memory,
-  credentials, channel state, or review authority across customers.
-- Leased agent offboarding: Customer ends the lease; Aphelion parks the child,
-  revokes credentials, stops schedules/gateways, and preserves audit evidence.
-
-### Before And After Regression Flows
-
-- Approval loop before/after: The old flow loops on unclear approval; the new
-  flow names the missing grant or lease and presents one bounded action.
-- Context shedding before/after: The old flow repeats stale context; the new
-  flow summarizes typed blockers, retrieves relevant evidence, and asks for the
-  next bounded approval or amendment.
-- Admin bottleneck before/after: The old flow sends every content decision to
-  Aphelion admin; the new flow routes customer-domain review to the customer
-  while reserving platform authority for admin.
+Conversation-flow mock baselines live in
+[`durable-external-runtime-conversation-flows.md`](./durable-external-runtime-conversation-flows.md).
+They are UX baselines for future mockups, not implemented transcript fixtures.
 
 ## Test Matrix
 
@@ -1131,3 +1045,6 @@ reviewer route, typed blocker, or accepted result.
   parent memory remains a separate governed event.
 - Do not make the parent a Hermes/OpenClaw configuration editor. The parent
   should provision bounded runtime contracts and record evidence.
+- Do not move Hermes/OpenClaw lifecycle details into the generic wake executor.
+  Runtime-specific startup, preflight, protocol, and gateway behavior belongs
+  in adapter profiles and adapter implementations.
