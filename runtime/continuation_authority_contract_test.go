@@ -84,10 +84,10 @@ func TestMaterializedInvalidAuthorityContractRoutesToRepairPhaseApproval(t *test
 		RemainingTurns: 1,
 		ActionProposal: session.ActionProposal{
 			ID:               "aprop-invalid-no-safe-repair",
-			Summary:          "Deploy-only invalid phase",
-			RiskClass:        "continuation",
-			AllowedActions:   []string{"deploy"},
-			ForbiddenActions: []string{"deploy"},
+			Summary:          "Fetch-only invalid phase",
+			RiskClass:        "workspace_write",
+			AllowedActions:   []string{"git_fetch_origin_main_prune"},
+			ForbiddenActions: []string{"external_effect_without_separate_grant", "commit", "git_push", "deploy", "restart_service"},
 			Status:           session.ProposalStatusPending,
 			ExpiresAt:        now.Add(time.Hour),
 		},
@@ -217,6 +217,79 @@ func TestInvalidAuthorityReconciliationDoesNotStripRequiredGitPush(t *testing.T)
 	var rt Runtime
 	if reconciled, ok := rt.reconciledContinuationStateFromInvalidAuthority(state, compilation, now); ok {
 		t.Fatalf("reconciled = %#v, want no unsafe non-push repair", reconciled)
+	}
+}
+
+func TestMaterializedWorkspaceWriteFetchApprovalRoutesToRepairPhaseApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9051, UserID: 0, Scope: telegramDMScopeRef(9051)}
+	now := time.Now().UTC()
+	phase := session.OperationPhase{
+		ID:               "fresh-phase-1-fetch-origin-main",
+		Summary:          "Fresh external-read/fetch approval for origin/main.",
+		Status:           session.PlanStatusPending,
+		AuthorityClass:   "workspace_write",
+		GateReasonCode:   "workspace_write",
+		BoundedEffect:    "Run git fetch origin main --prune, then read refs and report evidence.",
+		AllowedActions:   []string{"git_fetch_origin_main_prune", "git_rev_parse_origin_main", "report_fetch_evidence"},
+		ForbiddenActions: []string{"external_effect_without_separate_grant", "commit", "git_push", "deploy", "restart_service"},
+		RequiresApproval: true,
+	}
+	opState := session.OperationState{
+		ID:        "release-fetch-op",
+		Objective: "Refresh release evidence from origin/main.",
+		Status:    session.OperationStatusBlocked,
+		Stage:     "phase_plan",
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "release-fetch-plan",
+			Goal:           "Refresh release evidence from origin/main.",
+			CurrentPhaseID: phase.ID,
+			Phases:         []session.OperationPhase{phase},
+		},
+	}
+	state := continuationStateFromOperationPhase(opState, phase, "continue", now)
+	compilation := session.CompileContinuationAuthorityContract(state)
+	if compilation.Valid() {
+		t.Fatalf("compilation = %#v, want invalid workspace_write fetch materialization", compilation)
+	}
+
+	updated, blocked, err := rt.blockInvalidMaterializedContinuationAuthority(context.Background(), key, core.InboundMessage{ChatID: 9051, SenderID: 1001, Text: "continue", MessageID: 1}, opState, state, "operation_phase_plan", now)
+	if err != nil {
+		t.Fatalf("blockInvalidMaterializedContinuationAuthority() err = %v", err)
+	}
+	if !blocked {
+		t.Fatal("blocked = false, want invalid fetch authority handled")
+	}
+	updated = session.NormalizeOperationState(updated)
+	if len(updated.PhasePlan.Phases) != 2 {
+		t.Fatalf("phase count = %d, want repair phase + original phase", len(updated.PhasePlan.Phases))
+	}
+	repair := updated.PhasePlan.Phases[0]
+	original := updated.PhasePlan.Phases[1]
+	if !strings.HasPrefix(repair.ID, operationAuthorityContractRepairPhasePrefix) || repair.AuthorityClass != "read_only_review" || !repair.RequiresApproval {
+		t.Fatalf("repair phase = %#v, want read-only authority repair approval", repair)
+	}
+	if updated.PhasePlan.CurrentPhaseID != repair.ID {
+		t.Fatalf("current phase = %q, want repair phase %q", updated.PhasePlan.CurrentPhaseID, repair.ID)
+	}
+	if original.ID != phase.ID || original.Status != session.PlanStatusPending {
+		t.Fatalf("original phase = %#v, want original fetch phase preserved for later repair", original)
+	}
+	cont, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if cont.Status != session.ContinuationStatusPending || cont.ActionProposal.OperationID != operationPhaseProposalID(updated, repair) {
+		t.Fatalf("continuation = %#v, want pending repair-phase approval", cont)
+	}
+	if compilation := continuationAuthorityCompilation(cont); compilation.Invalid() {
+		t.Fatalf("repair continuation compilation = %#v, want valid read-only repair authority", compilation)
 	}
 }
 

@@ -17,6 +17,12 @@ const (
 	ContinuationRecoveryRetryVersion      = "aphelion.recovery_retry.v1"
 )
 
+const (
+	ContinuationRecoverySubjectKindDiscoveredEffect  = "discovered_effect"
+	ContinuationRecoveryContractKindDiscoveredEffect = "discovered_effect"
+	ContinuationRecoveryRetryExecExactCommand        = "exec_exact_command"
+)
+
 type ContinuationRecoveryContractStatus string
 
 const (
@@ -88,6 +94,7 @@ func CompileContinuationRecoveryContract(input ContinuationRecoveryContractInput
 	if input.SubjectKind == "" {
 		input.SubjectKind = "continuation_lease_request"
 	}
+	input = normalizeDiscoveredEffectRecoverySubject(input)
 	if input.SubjectRef == "" {
 		input.SubjectRef = ContinuationRecoverySubjectRef(input.LeaseClass, input.AgentID, input.GrantID, input.Tool, input.ToolAction, input.Resource)
 	}
@@ -110,6 +117,12 @@ func CompileContinuationRecoveryContract(input ContinuationRecoveryContractInput
 		}
 		input.Constraints["agent_id"] = input.AgentID
 	case ContinuationLeaseClassDataAccess, ContinuationLeaseClassLocalWorkspace:
+		if ContinuationRecoveryInputIsDiscoveredEffect(input) {
+			if err := validateDiscoveredEffectRecoveryInput(input); err != nil {
+				return ContinuationRecoveryContract{}, err
+			}
+			break
+		}
 		if input.GrantID == "" || input.GrantTargetResource == "" || input.Resource == "" || input.Tool == "" || input.ToolAction == "" {
 			return ContinuationRecoveryContract{}, fmt.Errorf("%s recovery contract requires grant, resource, tool, and action", input.LeaseClass)
 		}
@@ -250,6 +263,7 @@ func CanonicalizeContinuationRecoveryContract(contract ContinuationRecoveryContr
 	if input.SubjectKind == "" {
 		input.SubjectKind = "continuation_lease_request"
 	}
+	input = normalizeDiscoveredEffectRecoverySubject(input)
 	if input.SubjectRef == "" {
 		input.SubjectRef = ContinuationRecoverySubjectRef(input.LeaseClass, input.AgentID, input.GrantID, input.Tool, input.ToolAction, input.Resource)
 	}
@@ -272,6 +286,12 @@ func CanonicalizeContinuationRecoveryContract(contract ContinuationRecoveryContr
 		}
 		input.Constraints["agent_id"] = input.AgentID
 	case ContinuationLeaseClassDataAccess, ContinuationLeaseClassLocalWorkspace:
+		if ContinuationRecoveryInputIsDiscoveredEffect(input) {
+			if err := validateDiscoveredEffectRecoveryInput(input); err != nil {
+				return ContinuationRecoveryContract{}, err
+			}
+			break
+		}
 		if input.GrantID == "" || input.GrantTargetResource == "" || input.Resource == "" || input.Tool == "" || input.ToolAction == "" {
 			return ContinuationRecoveryContract{}, fmt.Errorf("%s recovery contract requires grant, resource, tool, and action", input.LeaseClass)
 		}
@@ -353,6 +373,31 @@ func ContinuationRecoveryContractProjectionInput(contractID string) string {
 	return string(raw)
 }
 
+func ContinuationRecoveryContractIsDiscoveredEffect(contract ContinuationRecoveryContract) bool {
+	contract = NormalizeContinuationRecoveryContract(contract)
+	return ContinuationRecoveryInputIsDiscoveredEffect(ContinuationRecoveryContractInput{
+		SubjectKind:    contract.SubjectKind,
+		LeaseClass:     contract.LeaseClass,
+		Constraints:    contract.Constraints,
+		Tool:           contract.Tool,
+		ToolAction:     contract.ToolAction,
+		Resource:       contract.Resource,
+		RetryOperation: contract.RetryOperation,
+	})
+}
+
+func ContinuationRecoveryInputIsDiscoveredEffect(input ContinuationRecoveryContractInput) bool {
+	input = normalizeContinuationRecoveryContractInput(input)
+	return input.LeaseClass == ContinuationLeaseClassDataAccess &&
+		(input.SubjectKind == ContinuationRecoverySubjectKindDiscoveredEffect ||
+			input.Constraints["contract_kind"] == ContinuationRecoveryContractKindDiscoveredEffect)
+}
+
+func ContinuationConstraintsAreDiscoveredEffect(constraints map[string]string) bool {
+	constraints = normalizeRecoveryStringMap(constraints)
+	return constraints["contract_kind"] == ContinuationRecoveryContractKindDiscoveredEffect
+}
+
 func ContinuationRecoverySubjectRef(class ContinuationLeaseClass, agentID string, grantID string, tool string, toolAction string, resource string) string {
 	class = NormalizeContinuationLeaseClass(class)
 	parts := []string{string(class)}
@@ -382,6 +427,25 @@ func ContinuationRecoverySubjectRef(class ContinuationLeaseClass, agentID string
 	return strings.Join(parts, ":")
 }
 
+func normalizeDiscoveredEffectRecoverySubject(input ContinuationRecoveryContractInput) ContinuationRecoveryContractInput {
+	if !ContinuationRecoveryInputIsDiscoveredEffect(input) {
+		return input
+	}
+	if input.SubjectKind == "" || input.SubjectKind == "continuation_lease_request" {
+		input.SubjectKind = ContinuationRecoverySubjectKindDiscoveredEffect
+	}
+	input.Tool = firstNonEmptyRecovery(input.Tool, "exec")
+	input.ToolAction = firstNonEmptyRecovery(input.ToolAction, ContinuationRecoveryRetryExecExactCommand)
+	if input.Resource == "" {
+		if hash := strings.TrimSpace(input.Constraints["command_hash"]); hash != "" {
+			input.Resource = "command:" + hash
+		} else if command := strings.TrimSpace(input.Constraints["command"]); command != "" {
+			input.Resource = "command:" + EffectAttemptCommandHash(command)
+		}
+	}
+	return normalizeContinuationRecoveryContractInput(input)
+}
+
 func normalizeContinuationRecoveryContractInput(input ContinuationRecoveryContractInput) ContinuationRecoveryContractInput {
 	input.RequestInstanceID = strings.TrimSpace(input.RequestInstanceID)
 	input.SessionID = strings.TrimSpace(input.SessionID)
@@ -402,6 +466,59 @@ func normalizeContinuationRecoveryContractInput(input ContinuationRecoveryContra
 		input.CreatedAt = input.CreatedAt.UTC()
 	}
 	return input
+}
+
+func validateDiscoveredEffectRecoveryInput(input ContinuationRecoveryContractInput) error {
+	input = normalizeDiscoveredEffectRecoverySubject(input)
+	if input.LeaseClass != ContinuationLeaseClassDataAccess {
+		return fmt.Errorf("discovered_effect recovery contract requires data_access lease class")
+	}
+	if input.SubjectKind != ContinuationRecoverySubjectKindDiscoveredEffect {
+		return fmt.Errorf("discovered_effect recovery contract requires discovered_effect subject_kind")
+	}
+	if input.Tool != "exec" || input.ToolAction != ContinuationRecoveryRetryExecExactCommand {
+		return fmt.Errorf("discovered_effect recovery contract must target exec exact command")
+	}
+	constraints := normalizeRecoveryStringMap(input.Constraints)
+	if constraints["contract_kind"] != ContinuationRecoveryContractKindDiscoveredEffect {
+		return fmt.Errorf("discovered_effect recovery contract requires contract_kind constraint")
+	}
+	if constraints["effect_kind"] != "network_or_external_contact" {
+		return fmt.Errorf("discovered_effect recovery contract requires network_or_external_contact effect_kind")
+	}
+	if strings.TrimSpace(constraints["effect_action"]) == "" {
+		return fmt.Errorf("discovered_effect recovery contract requires effect_action")
+	}
+	command := strings.TrimSpace(constraints["command"])
+	if command == "" {
+		return fmt.Errorf("discovered_effect recovery contract requires exact command constraint")
+	}
+	if hash := strings.TrimSpace(constraints["command_hash"]); hash == "" {
+		return fmt.Errorf("discovered_effect recovery contract requires command_hash evidence")
+	} else if hash != EffectAttemptCommandHash(command) {
+		return fmt.Errorf("discovered_effect recovery contract command_hash mismatch")
+	}
+	if !recoveryStringSliceContains(input.AllowedActions, constraints["effect_action"]) {
+		return fmt.Errorf("discovered_effect recovery contract requires exact effect action in allowed_actions")
+	}
+	op := NormalizeContinuationRetryOperation(input.RetryOperation)
+	if !op.Active() {
+		return fmt.Errorf("discovered_effect recovery contract requires executable retry operation")
+	}
+	if op.Tool != "exec" || op.OperationKind != ContinuationRecoveryRetryExecExactCommand {
+		return fmt.Errorf("discovered_effect recovery retry must invoke exec exact command")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(op.InputJSON), &payload); err != nil {
+		return fmt.Errorf("decode discovered_effect recovery retry input: %w", err)
+	}
+	if strings.TrimSpace(fmt.Sprint(payload["command"])) != command {
+		return fmt.Errorf("discovered_effect recovery retry must target exact command")
+	}
+	if want := strings.TrimSpace(constraints["workdir"]); want != "" && strings.TrimSpace(fmt.Sprint(payload["workdir"])) != want {
+		return fmt.Errorf("discovered_effect recovery retry workdir mismatch")
+	}
+	return nil
 }
 
 func normalizeContinuationRecoveryRetry(input ContinuationRecoveryContractInput) ContinuationRetryOperation {
@@ -454,10 +571,24 @@ func validateContinuationRecoveryRetry(input ContinuationRecoveryContractInput) 
 			strings.TrimSpace(fmt.Sprint(payload["agent_id"])) != input.AgentID {
 			return fmt.Errorf("child_wake recovery retry must target exact agent_id")
 		}
+	case ContinuationLeaseClassDataAccess:
+		if ContinuationRecoveryInputIsDiscoveredEffect(input) {
+			return validateDiscoveredEffectRecoveryInput(input)
+		}
+		return fmt.Errorf("%s recovery retry operation is not executable", input.LeaseClass)
 	default:
 		return fmt.Errorf("%s recovery retry operation is not executable", input.LeaseClass)
 	}
 	return nil
+}
+
+func firstNonEmptyRecovery(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func continuationRecoveryContractHash(input ContinuationRecoveryContractInput) string {

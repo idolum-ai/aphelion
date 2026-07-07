@@ -35,6 +35,20 @@ completion surface. When a matching effect attempt exists, authority-sensitive
 completion should not depend on previews, truncated JSON, model-authored
 summaries, or conversational claims.
 
+Work executors may receive the same command through several projections: a
+pre-dispatch effect attempt, a tool lifecycle event, an `exec_effect` payload, a
+Codex event, or a result summary. Those projections are correlated evidence, not
+independent execution occurrences. Runtime completion should advance the
+matching pre-dispatch effect attempt once, attach evidence refs where available,
+and treat later same-occurrence projections as duplicate evidence. A
+side-effecting command with no matching effect attempt remains a fail-closed
+ledger error.
+
+Command hashes are fuzzy correlation keys: they compact whitespace and are not
+shell-semantic equivalence proofs. Exact execution identity should come from
+effect-attempt IDs, tool invocation refs, and literal command evidence, not from
+the hash alone.
+
 ## Verification
 
 Verification is effect-family specific and intentionally conservative.

@@ -15,7 +15,10 @@ const (
 	AuthorityWorkActionDeploy         = "deploy"
 )
 
-const AuthorityClassLocalSecretMetadataReadLiveConfigRead = "local_secret_metadata_read_live_config_read"
+const (
+	AuthorityClassExternalRead                          = "external_read"
+	AuthorityClassLocalSecretMetadataReadLiveConfigRead = "local_secret_metadata_read_live_config_read"
+)
 
 type AuthorityContract struct {
 	Key                    string
@@ -194,6 +197,54 @@ func actionListImpliesRepoPublication(actions []string) bool {
 func AuthorityContractForToken(token string) (AuthorityContract, bool) {
 	key := normalizeEnumValue(token)
 	switch key {
+	case AuthorityClassExternalRead:
+		// Deprecated compatibility for states persisted while PR #291 was a
+		// narrow bridge. New one-time external command authority should flow
+		// through discovered-effect continuation recovery contracts instead.
+		return AuthorityContract{
+			Key:        AuthorityClassExternalRead,
+			LeaseClass: ContinuationLeaseClassDataAccess,
+			WorkAction: AuthorityWorkActionReadOnly,
+			AllowedActions: []string{
+				AuthorityWorkActionReadOnly,
+				AuthorityClassExternalRead,
+				"external_network_contact",
+				"network_contact",
+				"fetch",
+				"fetch_remote",
+				"git_fetch",
+				"git_fetch_read_refs",
+				"git_ls_remote",
+				"ls_remote",
+				"report_fetch_evidence",
+				"report_evidence",
+			},
+			ForbiddenActions: []string{
+				"workspace_write",
+				"edit_files",
+				"commit",
+				"git_commit",
+				"repo_history_mutation",
+				"repo_publication",
+				"git_push",
+				"push_remote",
+				"github_pr_create",
+				"github_pr_update",
+				"external_account_action",
+				"credential_token_output",
+				"read_or_print_credentials",
+				"deploy",
+				"restart_service",
+				"external_effect_outside_bounded_effect",
+			},
+			ValidationPlan: []string{
+				"run only the approved external read or fetch command",
+				"record remote/ref evidence and stop before workspace edits, commits, pushes, PR metadata, deploys, restarts, or credential output",
+			},
+			AutoApprovalAllowed:    true,
+			RequiresInlineApproval: true,
+			ExternalEffectsAllowed: true,
+		}, true
 	case AuthorityClassLocalSecretMetadataReadLiveConfigRead:
 		return AuthorityContract{
 			Key:        AuthorityClassLocalSecretMetadataReadLiveConfigRead,

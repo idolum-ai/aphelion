@@ -154,6 +154,70 @@ func TestRuntimeDefaultApprovalWindowOpensFiniteRowsForAdminRequest(t *testing.T
 	assertOperatorWindowDuration(t, overrides[0].CreatedAt, overrides[0].ExpiresAt, 30*time.Minute)
 }
 
+func TestRuntimeDefaultApprovalWindowAdminExecAutoApprovalRecordsExactKind(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	cfg.Autonomy.DefaultApprovalWindow = "15m"
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+
+	result, err := rt.AutoResolveDecision(context.Background(), decision.PendingDecision{
+		ID: "dec-default-window-admin-exec",
+		Request: decision.Request{
+			Kind:     decision.KindProposalApproval,
+			ChatID:   99296,
+			SenderID: 1001,
+			Prompt:   "Approve this proposal?",
+			Details: strings.Join([]string{
+				"Approve one exact admin shell command",
+				"Kind: admin_unbounded_exact_exec",
+				"Command class:",
+				"unknown",
+				"Workdir:",
+				"/tmp/aphelion-fixtures/workspace",
+				"Why now:",
+				"The shell command is outside the typed dispatchable subset.",
+			}, "\n\n"),
+			Choices:       []decision.Choice{{ID: "deny", Label: "Deny"}, {ID: "approve", Label: "Approve"}},
+			DefaultChoice: "deny",
+			Metadata: map[string]string{
+				"approval_kind": "admin_unbounded_exact_exec",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AutoResolveDecision() err = %v", err)
+	}
+	if result.Choice != "approve" || !strings.Contains(result.Reason, "auto_approved:") {
+		t.Fatalf("auto resolution = %#v, want approve through default approval window", result)
+	}
+
+	key := session.SessionKey{ChatID: 99296, UserID: 0, Scope: telegramDMScopeRef(99296)}
+	events, err := store.ExecutionEventsBySession(key, 0, 50)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var usedPayload map[string]any
+	for _, event := range events {
+		if event.EventType == core.ExecutionEventAutoApprovalUsed {
+			usedPayload = executionEventPayload(event.PayloadJSON)
+			break
+		}
+	}
+	if usedPayload == nil {
+		t.Fatalf("events = %#v, want auto approval used event", events)
+	}
+	if got := payloadString(usedPayload, "approval_kind"); got != "admin_unbounded_exact_exec" {
+		t.Fatalf("approval_kind = %q payload=%#v, want exact admin exec kind recorded outside truncated details", got, usedPayload)
+	}
+	if got := payloadString(usedPayload, "auto_mode_source"); got != defaultApprovalWindowEventSource {
+		t.Fatalf("auto_mode_source = %q payload=%#v, want default approval window provenance", got, usedPayload)
+	}
+}
+
 func TestRuntimeDefaultApprovalWindowFiniteDoesNotReopenAfterBaselineExpires(t *testing.T) {
 	t.Parallel()
 

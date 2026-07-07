@@ -43,6 +43,10 @@ func (s *durableStore) LoadPending(_ context.Context) ([]decision.DurableDecisio
 		if err := json.Unmarshal([]byte(choicesJSON), &choices); err != nil {
 			return nil, fmt.Errorf("decode pending decision choices id=%s: %w", record.ID, err)
 		}
+		metadata, err := decodePendingDecisionMetadata(record.MetadataJSON)
+		if err != nil {
+			return nil, fmt.Errorf("decode pending decision metadata id=%s: %w", record.ID, err)
+		}
 		out = append(out, decision.DurableDecision{
 			Pending: decision.PendingDecision{
 				ID: record.ID,
@@ -58,6 +62,7 @@ func (s *durableStore) LoadPending(_ context.Context) ([]decision.DurableDecisio
 					DurableAgentID: record.DurableAgentID,
 					Prompt:         record.Prompt,
 					Details:        record.Details,
+					Metadata:       metadata,
 					Choices:        choices,
 					DefaultChoice:  record.DefaultChoice,
 					Timeout:        time.Duration(record.TimeoutNanos),
@@ -84,6 +89,10 @@ func (s *durableStore) UpsertPending(_ context.Context, pending decision.Durable
 	if err != nil {
 		return fmt.Errorf("encode pending decision choices id=%s: %w", pending.Pending.ID, err)
 	}
+	metadataJSON, err := encodePendingDecisionMetadata(pending.Pending.Metadata)
+	if err != nil {
+		return fmt.Errorf("encode pending decision metadata id=%s: %w", pending.Pending.ID, err)
+	}
 
 	return s.store.UpsertPendingDecision(session.PendingDecisionRecord{
 		ID:                pending.Pending.ID,
@@ -99,6 +108,7 @@ func (s *durableStore) UpsertPending(_ context.Context, pending decision.Durable
 		MessageID:         pending.Pending.MessageID,
 		Prompt:            pending.Pending.Prompt,
 		Details:           pending.Pending.Details,
+		MetadataJSON:      metadataJSON,
 		ChoicesJSON:       string(choicesJSON),
 		DefaultChoice:     pending.Pending.DefaultChoice,
 		TimeoutNanos:      int64(pending.Pending.Timeout),
@@ -132,4 +142,48 @@ func (s *durableStore) DetachAll(_ context.Context) (int, error) {
 		return 0, nil
 	}
 	return s.store.DeleteAllPendingDecisions()
+}
+
+func decodePendingDecisionMetadata(raw string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var metadata map[string]string
+	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func encodePendingDecisionMetadata(metadata map[string]string) (string, error) {
+	if len(metadata) == 0 {
+		return "{}", nil
+	}
+	normalized := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		normalized[key] = value
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }

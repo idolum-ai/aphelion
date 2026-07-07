@@ -61,12 +61,12 @@ func (r *Registry) requestAuthorityBundleApproval(in requestApprovalInput, key s
 	state.ActionProposal.WhyNow = "A typed recovery path requested one bounded authority bundle instead of repeated one-step approvals."
 	state.ActionProposal.BoundedEffect = requestApprovalAuthorityBundleBoundedEffect(bundle)
 	state.ActionProposal.RiskClass = "authority_bundle"
-	state.ActionProposal.AllowedActions = mergeRequestApprovalStrings(state.ActionProposal.AllowedActions, bundle.AllowedActions)
-	state.ActionProposal.ForbiddenActions = mergeRequestApprovalStrings(state.ActionProposal.ForbiddenActions, bundle.ForbiddenActions)
+	// Bundle boundaries are presentation and review material. They must not be
+	// merged into the carrier continuation's executable authority, because the
+	// carrier is admitted against the primary compiled recovery contract.
 	state.ActionProposal.ValidationPlan = mergeRequestApprovalStrings(state.ActionProposal.ValidationPlan, bundle.StopConditions)
 	state.ActionProposal.UpdatedAt = now
 	state.ContinuationLease.RequiredCapabilityGrants = session.NormalizeCapabilityGrantSpecs(append(state.ContinuationLease.RequiredCapabilityGrants, bundle.RequiredCapabilityGrants...))
-	state.ContinuationLease.ForbiddenActions = mergeRequestApprovalStrings(state.ContinuationLease.ForbiddenActions, bundle.ForbiddenActions)
 	state.ContinuationLease.ValidationPlan = mergeRequestApprovalStrings(state.ContinuationLease.ValidationPlan, bundle.StopConditions)
 	if state.ContinuationLease.Constraints == nil {
 		state.ContinuationLease.Constraints = map[string]string{}

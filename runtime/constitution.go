@@ -138,6 +138,30 @@ func (r *turnAuditRecorder) ToolFinished(name string, inputPreview string, outpu
 	r.audit.ToolCalls = append(r.audit.ToolCalls, finished)
 }
 
+func (r *turnAuditRecorder) requestApprovalAuthorityContractInvalidFeedback() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := len(r.audit.ToolCalls) - 1; i >= 0; i-- {
+		call := r.audit.ToolCalls[i]
+		if strings.TrimSpace(call.Name) != "request_approval" {
+			continue
+		}
+		errText := strings.TrimSpace(call.Error)
+		if errText == "" || !strings.Contains(errText, "request_approval authority contract invalid") {
+			continue
+		}
+		return strings.TrimSpace(strings.Join([]string{
+			"request_approval failed typed authority preflight.",
+			"Diagnostic: " + errText,
+			"Revise the approval phase contract before retrying; do not repeat the same request_approval payload.",
+		}, "\n"))
+	}
+	return ""
+}
+
 func toolAuditMatchesFinish(started TurnToolAudit, finished TurnToolAudit) bool {
 	if strings.TrimSpace(started.Name) != finished.Name {
 		return false

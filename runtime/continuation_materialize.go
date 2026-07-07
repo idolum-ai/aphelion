@@ -663,6 +663,14 @@ func (r *Runtime) materializePendingRecoveryApprovalNextActionLocked(ctx context
 }
 
 func (r *Runtime) materializeRecoveryApprovalNextActionLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord, now time.Time) (bool, bool, error) {
+	return r.materializeRecoveryApprovalNextActionWithOfferLocked(ctx, key, msg, action, now, true)
+}
+
+func (r *Runtime) prepareRecoveryApprovalNextActionLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord, now time.Time) (bool, bool, error) {
+	return r.materializeRecoveryApprovalNextActionWithOfferLocked(ctx, key, msg, action, now, false)
+}
+
+func (r *Runtime) materializeRecoveryApprovalNextActionWithOfferLocked(ctx context.Context, key session.SessionKey, msg core.InboundMessage, action session.NextActionRecord, now time.Time, sendOffer bool) (bool, bool, error) {
 	if r == nil || r.store == nil {
 		return false, false, nil
 	}
@@ -771,6 +779,9 @@ func (r *Runtime) materializeRecoveryApprovalNextActionLocked(ctx context.Contex
 			return false, false, fmt.Errorf("materialize recovery approval handoff %s after adjudication: %w", action.RecordID, err)
 		}
 	}
+	if !sendOffer {
+		return true, false, nil
+	}
 	if err := r.sendMaterializedRecoveryApprovalOfferLocked(ctx, key, msg, action, now); err != nil {
 		return false, false, err
 	}
@@ -814,8 +825,11 @@ func (r *Runtime) recoveryApprovalContinuationContractExecutable(key session.Ses
 	if strings.TrimSpace(contract.SessionID) != "" && contract.SessionID != session.SessionIDForKey(key) {
 		return false, true, nil
 	}
-	if strings.TrimSpace(contract.SubjectKind) != "continuation_lease_request" ||
-		strings.TrimSpace(contract.SubjectRef) == "" {
+	if strings.TrimSpace(contract.SubjectRef) == "" {
+		return false, true, nil
+	}
+	if strings.TrimSpace(contract.SubjectKind) != "continuation_lease_request" &&
+		!session.ContinuationRecoveryContractIsDiscoveredEffect(contract) {
 		return false, true, nil
 	}
 	return true, false, nil

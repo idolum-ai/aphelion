@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/aphelion/commandeffect"
 	"github.com/idolum-ai/aphelion/core"
 	"github.com/idolum-ai/aphelion/session"
 )
@@ -395,6 +396,151 @@ func TestWorkResultEffectAttemptConvergesWithMonitorStartRow(t *testing.T) {
 	}
 }
 
+func TestWorkResultEffectAttemptFallsBackToWorkPreDispatchPerMissingCommand(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7008, UserID: 0, Scope: telegramDMScopeRef(7008)}
+	monitor, err := rt.startTurnMonitor(context.Background(), key, session.TurnRunKindInteractive, "run command", nil, nil, core.InboundMessage{})
+	if err != nil {
+		t.Fatalf("startTurnMonitor() err = %v", err)
+	}
+	defer monitor.Finish(context.Background(), nil)
+
+	req := WorkRequest{
+		OperationID: "op-effect-mixed-source",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-mixed-source",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-mixed-source", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-mixed-source",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-mixed-source",
+				LeaseID: "lease-effect-mixed-source",
+			}}},
+		},
+	}
+	now := time.Now().UTC()
+	unrelatedTurnCommand := "touch unrelated-generated.txt"
+	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    "eff-unrelated-turn-command",
+		Key:          key,
+		TurnRunID:    monitor.runID,
+		Executor:     "turn",
+		Tool:         "exec",
+		Command:      unrelatedTurnCommand,
+		EffectKind:   string(commandeffect.KindWorkspaceMutation),
+		EffectReason: "touch filesystem mutation",
+		Status:       session.EffectAttemptStatusAttempted,
+		StartedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertEffectAttempt(unrelated turn command) err = %v", err)
+	}
+	workCommand := "set -u\ncd /tmp/aphelion-fixtures/copilotkit\npnpm --filter @copilotkit/react-core test > /tmp/copilotkit-a2ui-recovery.log 2>&1"
+	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    "eff-work-command-predispatch",
+		Key:          key,
+		OperationID:  req.OperationID,
+		PhaseID:      "phase-effect-mixed-source",
+		LeaseID:      req.LeaseID,
+		ProposalID:   req.State.ActionProposal.ID,
+		WorkMode:     string(req.Mode),
+		Executor:     "native",
+		Tool:         "work_executor",
+		Command:      workCommand,
+		EffectKind:   string(commandeffect.KindUnknown),
+		EffectReason: "multiple authority effects require effect plan",
+		Status:       session.EffectAttemptStatusAttempted,
+		StartedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertEffectAttempt(work command) err = %v", err)
+	}
+
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{
+		ExecutorName: "native",
+		TurnRunID:    monitor.runID,
+		Commands:     []string{workCommand},
+	}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v, want work-scoped pre-dispatch fallback for missing command", err)
+	}
+	if len(attempts) != 1 || attempts[0].AttemptID != "eff-work-command-predispatch" {
+		t.Fatalf("attempts = %#v, want work-scoped pre-dispatch row advanced", attempts)
+	}
+}
+
+func TestWorkResultEffectAttemptDedupesSameHashEvidenceWithoutSecondPreDispatchRow(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7009, UserID: 0, Scope: telegramDMScopeRef(7009)}
+	req := WorkRequest{
+		OperationID: "op-effect-same-hash-evidence",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-same-hash-evidence",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-same-hash-evidence", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-same-hash-evidence",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-same-hash-evidence",
+				LeaseID: "lease-effect-same-hash-evidence",
+			}}},
+		},
+	}
+	command := "mkdir -p generated/reports"
+	commandVariant := "mkdir   -p   generated/reports"
+	if session.EffectAttemptCommandHash(command) != session.EffectAttemptCommandHash(commandVariant) {
+		t.Fatalf("test fixture hashes differ: %s vs %s", session.EffectAttemptCommandHash(command), session.EffectAttemptCommandHash(commandVariant))
+	}
+	now := time.Now().UTC()
+	if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+		AttemptID:    "eff-same-hash-evidence-predispatch",
+		Key:          key,
+		OperationID:  req.OperationID,
+		PhaseID:      "phase-effect-same-hash-evidence",
+		LeaseID:      req.LeaseID,
+		ProposalID:   req.State.ActionProposal.ID,
+		WorkMode:     string(req.Mode),
+		Executor:     "native",
+		Tool:         "work_executor",
+		Command:      command,
+		EffectKind:   string(commandeffect.KindWorkspaceMutation),
+		EffectReason: "mkdir filesystem mutation",
+		Status:       session.EffectAttemptStatusAttempted,
+		StartedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertEffectAttempt() err = %v", err)
+	}
+
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{
+		ExecutorName: "native",
+		Commands:     []string{command, commandVariant},
+	}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v, want duplicate same-hash evidence not to require a second pre-dispatch row", err)
+	}
+	if len(attempts) != 1 || attempts[0].AttemptID != "eff-same-hash-evidence-predispatch" {
+		t.Fatalf("attempts = %#v, want one advanced effect attempt", attempts)
+	}
+}
+
 func TestWorkResultEffectAttemptDedupesEventChannelReplay(t *testing.T) {
 	t.Parallel()
 
@@ -524,6 +670,83 @@ func TestWorkResultEffectAttemptsAdvanceDuplicateCommandOccurrences(t *testing.T
 		if attempt.Status != session.EffectAttemptStatusExecuted {
 			t.Fatalf("attempt = %#v, want every duplicate attempt executed", attempt)
 		}
+	}
+}
+
+func TestWorkResultEffectAttemptsUseAttemptIDAcrossFuzzyCommandHashCollision(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 7010, UserID: 0, Scope: telegramDMScopeRef(7010)}
+	req := WorkRequest{
+		OperationID: "op-effect-fuzzy-hash",
+		Mode:        WorkModeWorkspaceWrite,
+		LeaseID:     "lease-effect-fuzzy-hash",
+		Key:         key,
+		State: session.ContinuationState{
+			ActionProposal: session.ActionProposal{ID: "aprop-effect-fuzzy-hash", RiskClass: "workspace_write"},
+		},
+		Operation: session.OperationState{
+			ID: "op-effect-fuzzy-hash",
+			PhasePlan: session.OperationPhasePlan{Phases: []session.OperationPhase{{
+				ID:      "phase-effect-fuzzy-hash",
+				LeaseID: "lease-effect-fuzzy-hash",
+			}}},
+		},
+	}
+	wideQuotedWhitespace := "printf 'a  b' > generated.txt"
+	narrowQuotedWhitespace := "printf 'a b' > generated.txt"
+	if runtimeWorkCommandHash(wideQuotedWhitespace) != runtimeWorkCommandHash(narrowQuotedWhitespace) {
+		t.Fatalf("test fixture hashes differ; fuzzy command hash no longer documents quoted-whitespace collision")
+	}
+	now := time.Now().UTC()
+	for i, attempt := range []struct {
+		id      string
+		command string
+	}{
+		{id: "eff-fuzzy-hash-wide", command: wideQuotedWhitespace},
+		{id: "eff-fuzzy-hash-narrow", command: narrowQuotedWhitespace},
+	} {
+		if _, err := store.UpsertEffectAttempt(session.EffectAttemptInput{
+			AttemptID:    attempt.id,
+			Key:          key,
+			OperationID:  req.OperationID,
+			PhaseID:      "phase-effect-fuzzy-hash",
+			LeaseID:      req.LeaseID,
+			ProposalID:   req.State.ActionProposal.ID,
+			WorkMode:     string(req.Mode),
+			Executor:     "native",
+			Tool:         "work_executor",
+			Command:      attempt.command,
+			EffectKind:   string(commandeffect.KindBuildArtifact),
+			EffectReason: "shell redirection",
+			Status:       session.EffectAttemptStatusAttempted,
+			StartedAt:    now.Add(time.Duration(i) * time.Second),
+			UpdatedAt:    now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("UpsertEffectAttempt(%s) err = %v", attempt.id, err)
+		}
+	}
+
+	attempts, err := rt.recordWorkResultEffectAttempts(key, req, WorkResult{
+		ExecutorName: "native",
+		CommandEvidence: []WorkCommandEvidence{
+			{Command: wideQuotedWhitespace, EffectAttemptID: "eff-fuzzy-hash-wide", Source: "test"},
+			{Command: narrowQuotedWhitespace, EffectAttemptID: "eff-fuzzy-hash-narrow", Source: "test"},
+		},
+	}, nil, now, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("recordWorkResultEffectAttempts() err = %v", err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("attempts = %#v, want both quoted-whitespace executions advanced by attempt id", attempts)
+	}
+	if attempts[0].AttemptID != "eff-fuzzy-hash-wide" || attempts[1].AttemptID != "eff-fuzzy-hash-narrow" {
+		t.Fatalf("attempt ids = %q, %q; want effect-attempt identity to beat fuzzy hash collision", attempts[0].AttemptID, attempts[1].AttemptID)
 	}
 }
 

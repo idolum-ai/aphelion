@@ -282,8 +282,8 @@ type projectedToolFailureProvenance interface {
 }
 
 func projectedToolFailureContent(output string, err error) bool {
-	provenance, ok := err.(projectedToolFailureProvenance)
-	if !ok || !provenance.ProjectedToolFailure() {
+	var provenance projectedToolFailureProvenance
+	if !errors.As(err, &provenance) || !provenance.ProjectedToolFailure() {
 		return false
 	}
 	output = strings.TrimSpace(output)

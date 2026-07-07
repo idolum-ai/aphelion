@@ -240,6 +240,149 @@ func TestAuthorityBundleSkipsGrantSpecsAlreadyCoveredByActiveGrant(t *testing.T)
 	}
 }
 
+func TestAuthorityBundleOpenBlockerSweepDoesNotIncludeUnrelatedCapabilityRequests(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := session.SessionKey{ChatID: 99107, UserID: 1001}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	contract := authorityBundleChildWakeRecoveryContract(t, store, key, "mail-child", "bundle-wake-request-unrelated")
+	recordAuthorityBundleContinuationLeaseBlocker(t, store, key, contract)
+	if _, err := store.UpsertCapabilityRequest(session.CapabilityRequest{
+		RequestID:      "cap-unrelated-email",
+		RequestedBy:    "telegram:1001",
+		RequestedFor:   "telegram:1001",
+		Kind:           session.CapabilityKindExternalAccount,
+		TargetResource: "mailbox:unrelated@example.test",
+		Purpose:        "Unrelated mailbox wake investigation from an older blocker.",
+		ReviewStatus:   session.CapabilityReviewStatusProposed,
+		GrantID:        "grant-unrelated-email",
+	}); err != nil {
+		t.Fatalf("UpsertCapabilityRequest(unrelated) err = %v", err)
+	}
+	unrelatedAction, err := store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "tool",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "capability_request",
+		SubjectRef:         "cap-unrelated-email",
+		NextAction:         "approve unrelated mailbox grant",
+		RequiredAuthority:  "external_account",
+		ResourceBlocker:    "missing_grant",
+		OperationKind:      "capability_grant_review",
+		OperationTool:      "capability_authority",
+		OperationInputJSON: `{"action":"grant_set","request_id":"cap-unrelated-email","allowed_actions":["read"]}`,
+		CreatedAt:          time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("RecordNextAction(unrelated grant blocker) err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, authorityBundleToolName, json.RawMessage(`{
+		"action":"propose",
+		"request_instance_id":"bundle-instance-unrelated-open-blockers",
+		"objective":"Finish one child wake without bundling old session authority.",
+		"summary":"Wake mail-child and stop after one result.",
+		"include_open_authority_blockers":true,
+		"allowed_actions":["wake_named_child","report_result"],
+		"forbidden_actions":["credentials_or_tokens","send_mail","unbounded_retry_loop"],
+		"stop_conditions":["stop after one child result","stop on any typed blocker"]
+	}`))
+	if err != nil {
+		t.Fatalf("authority_bundle propose err = %v", err)
+	}
+	if !strings.Contains(out, "[AUTHORITY_BUNDLE_PROPOSED]") {
+		t.Fatalf("authority_bundle output = %q, want proposed bundle", out)
+	}
+	bundleAction := authorityBundleOpenAction(t, store, key)
+	var request requestApprovalInput
+	if err := decodeToolObjectInput(json.RawMessage(bundleAction.OperationInputJSON), &request, requestApprovalToolName); err != nil {
+		t.Fatalf("decode bundle request_approval err = %v", err)
+	}
+	bundle, ok, err := store.AuthorityBundleContract(request.ContractID)
+	if err != nil {
+		t.Fatalf("AuthorityBundleContract(%q) err = %v", request.ContractID, err)
+	}
+	if !ok {
+		t.Fatalf("AuthorityBundleContract(%q) ok=false", request.ContractID)
+	}
+	if authorityBundleContains(bundle.SourceNextActionRecordIDs, unrelatedAction.RecordID) {
+		t.Fatalf("bundle source ids = %#v, want unrelated capability blocker excluded from open sweep", bundle.SourceNextActionRecordIDs)
+	}
+	for _, grant := range bundle.RequiredCapabilityGrants {
+		if grant.GrantID == "grant-unrelated-email" || grant.RequestID == "cap-unrelated-email" {
+			t.Fatalf("bundle required grants = %#v, want unrelated capability blocker excluded unless explicitly selected", bundle.RequiredCapabilityGrants)
+		}
+	}
+	if bundle.PrimaryContinuationContractID != contract.ContractID {
+		t.Fatalf("bundle primary contract = %q, want %q", bundle.PrimaryContinuationContractID, contract.ContractID)
+	}
+}
+
+func TestAuthorityBundleDataAccessApprovalKeepsBundleBoundariesNonExecutable(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := session.SessionKey{ChatID: 99108, UserID: 1001}
+	actor := principal.Principal{Role: principal.RoleAdmin, TelegramUserID: 1001}
+	contract := authorityBundleDiscoveredEffectRecoveryContract(t, store, key, "release-fetch-request-1")
+	recordAuthorityBundleContinuationLeaseBlocker(t, store, key, contract)
+
+	out, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, authorityBundleToolName, json.RawMessage(`{
+		"action":"propose",
+		"request_instance_id":"bundle-instance-data-access-carrier",
+		"objective":"Inspect release metadata before a deployment step.",
+		"summary":"Fetch release metadata, inspect install scripts, then stop before any mutation.",
+		"include_open_authority_blockers":true,
+		"allowed_actions":["fetch","report_fetch_evidence","restart only the Aphelion user service if required"],
+		"forbidden_actions":["workspace_write","edit_files","commit","git_push","deploy","restart_service","credentials_or_tokens"],
+		"stop_conditions":["stop after the exact fetch/report command","stop before deploy or restart"]
+	}`))
+	if err != nil {
+		t.Fatalf("authority_bundle propose err = %v", err)
+	}
+	if !strings.Contains(out, "[AUTHORITY_BUNDLE_PROPOSED]") {
+		t.Fatalf("authority_bundle output = %q, want proposed bundle", out)
+	}
+	bundleAction := authorityBundleOpenAction(t, store, key)
+	var request requestApprovalInput
+	if err := decodeToolObjectInput(json.RawMessage(bundleAction.OperationInputJSON), &request, requestApprovalToolName); err != nil {
+		t.Fatalf("decode bundle request_approval err = %v", err)
+	}
+	bundle, ok, err := store.AuthorityBundleContract(request.ContractID)
+	if err != nil {
+		t.Fatalf("AuthorityBundleContract(%q) err = %v", request.ContractID, err)
+	}
+	if !ok {
+		t.Fatalf("AuthorityBundleContract(%q) ok=false", request.ContractID)
+	}
+
+	approval, err := registry.ExecuteForSessionPrincipal(context.Background(), actor, key, requestApprovalToolName, json.RawMessage(bundleAction.OperationInputJSON))
+	if err != nil {
+		t.Fatalf("request_approval authority bundle err = %v", err)
+	}
+	if !strings.Contains(approval, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("request_approval output = %q, want approval request", approval)
+	}
+	continuation, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState() err = %v", err)
+	}
+	if continuation.ActionProposal.RiskClass != "authority_bundle" || continuation.ContinuationLease.Constraints["authority_bundle_id"] != bundle.BundleID {
+		t.Fatalf("continuation state = %#v, want authority bundle presentation state", continuation)
+	}
+	if !strings.Contains(continuation.ActionProposal.BoundedEffect, "restart only the Aphelion user service if required") {
+		t.Fatalf("bounded effect = %q, want bundle boundary text preserved for operator review", continuation.ActionProposal.BoundedEffect)
+	}
+	if authorityBundleHasActionPrefix(continuation.ActionProposal.AllowedActions, "restart") ||
+		authorityBundleHasActionPrefix(continuation.ContinuationLease.AllowedActions, "restart") {
+		t.Fatalf("allowed actions proposal=%#v lease=%#v, want carrier executable authority to remain data-access only", continuation.ActionProposal.AllowedActions, continuation.ContinuationLease.AllowedActions)
+	}
+	if compilation := session.CompileContinuationAuthorityContract(continuation); compilation.Invalid() {
+		t.Fatalf("authority contract invalid after authority-bundle request: %s", session.AuthorityContractCompilationSummary(compilation))
+	}
+}
+
 func TestAuthorityBundleRejectsPartialRequiredGrantSpecBeforeApprovalCard(t *testing.T) {
 	t.Parallel()
 
@@ -373,6 +516,93 @@ func authorityBundleChildWakeRecoveryContract(t *testing.T, store *session.SQLit
 		t.Fatalf("UpsertContinuationRecoveryContract(child_wake) err = %v", err)
 	}
 	return contract
+}
+
+func authorityBundleDiscoveredEffectRecoveryContract(t *testing.T, store *session.SQLiteStore, key session.SessionKey, requestInstanceID string) session.ContinuationRecoveryContract {
+	t.Helper()
+
+	command := "git fetch origin --tags"
+	workdir := "/home/example/repo"
+	inputJSON, err := json.Marshal(map[string]any{
+		"command": command,
+		"workdir": workdir,
+	})
+	if err != nil {
+		t.Fatalf("marshal discovered-effect retry input: %v", err)
+	}
+	commandHash := session.EffectAttemptCommandHash(command)
+	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID: requestInstanceID,
+		SessionID:         session.SessionIDForKey(key),
+		SubjectKind:       session.ContinuationRecoverySubjectKindDiscoveredEffect,
+		Principal:         "telegram:1001",
+		LeaseClass:        session.ContinuationLeaseClassDataAccess,
+		AllowedActions:    []string{"fetch", "report_fetch_evidence"},
+		Constraints: map[string]string{
+			"contract_kind":      session.ContinuationRecoveryContractKindDiscoveredEffect,
+			"effect_kind":        "network_or_external_contact",
+			"effect_action":      "fetch",
+			"effect_provider":    "git",
+			"git_subcommand":     "fetch",
+			"command":            command,
+			"command_hash":       commandHash,
+			"normalized_command": command,
+			"workdir":            workdir,
+		},
+		Tool:       "exec",
+		ToolAction: session.ContinuationRecoveryRetryExecExactCommand,
+		RetryOperation: session.ContinuationRetryOperation{
+			Contract:      session.ContinuationRecoveryRetryVersion,
+			OperationKind: session.ContinuationRecoveryRetryExecExactCommand,
+			Tool:          "exec",
+			InputJSON:     string(inputJSON),
+			SubjectKind:   session.ContinuationRecoverySubjectKindDiscoveredEffect,
+		},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract(discovered_effect) err = %v", err)
+	}
+	contract, err = store.UpsertContinuationRecoveryContract(contract)
+	if err != nil {
+		t.Fatalf("UpsertContinuationRecoveryContract(discovered_effect) err = %v", err)
+	}
+	return contract
+}
+
+func recordAuthorityBundleContinuationLeaseBlocker(t *testing.T, store *session.SQLiteStore, key session.SessionKey, contract session.ContinuationRecoveryContract) {
+	t.Helper()
+
+	handoff := json.RawMessage(session.ContinuationRecoveryContractProjectionInput(contract.ContractID))
+	if _, err := store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "tool",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contract.SubjectRef,
+		NextAction:         "approve the bounded continuation lease before retrying once",
+		RequiredAuthority:  string(contract.LeaseClass),
+		ResourceBlocker:    "missing_continuation_lease",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      requestApprovalToolName,
+		OperationInputJSON: string(handoff),
+		CreatedAt:          time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordNextAction(continuation blocker) err = %v", err)
+	}
+}
+
+func authorityBundleHasActionPrefix(values []string, prefix string) bool {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return false
+	}
+	for _, value := range values {
+		if strings.HasPrefix(requestApprovalActionToken(value), prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func authorityBundleOpenAction(t *testing.T, store *session.SQLiteStore, key session.SessionKey) session.NextActionRecord {

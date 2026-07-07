@@ -22,7 +22,10 @@ const (
 	AuthorityContradictionSeverityInvalid AuthorityContradictionSeverity = "invalid"
 )
 
-const AuthorityContradictionReasonProposalRequiresForbiddenGitPush = "proposal_requires_forbidden_git_push"
+const (
+	AuthorityContradictionReasonProposalRequiresForbiddenExternalEffect = "proposal_requires_external_effect_but_contract_forbids_external_effect"
+	AuthorityContradictionReasonProposalRequiresForbiddenGitPush        = "proposal_requires_forbidden_git_push"
+)
 
 type AuthorityContradiction struct {
 	AllowedAction   string                         `json:"allowed_action,omitempty"`
@@ -61,7 +64,8 @@ func CompileActionProposalAuthorityContract(proposal ActionProposal) AuthorityCo
 	} else {
 		compilation.WorkAction = strongestAuthorityWorkActionForAllowedActions(compilation.AllowedActions)
 	}
-	compilation.Contradictions = append(proposalGitPushContradictions(proposal), authorityContractContradictions(compilation.AllowedActions, compilation.ForbiddenActions)...)
+	compilation.Contradictions = append(proposalGitPushContradictions(proposal), proposalExternalEffectContradictions(proposal, compilation)...)
+	compilation.Contradictions = append(compilation.Contradictions, authorityContractContradictions(compilation.AllowedActions, compilation.ForbiddenActions)...)
 	if len(compilation.Contradictions) > 0 {
 		compilation.Status = AuthorityContractCompilationStatusInvalid
 		compilation.SuggestedRepair = "request_fresh_narrower_proposal"
@@ -99,6 +103,10 @@ func authorityForbiddenIncludesBroadDeployRestart(actions []string) bool {
 }
 
 func CompileContinuationAuthorityContract(state ContinuationState) AuthorityContractCompilation {
+	state = NormalizeContinuationState(state)
+	if ContinuationConstraintsAreDiscoveredEffect(state.ContinuationLease.Constraints) {
+		return compileDiscoveredEffectContinuationAuthorityContract(state)
+	}
 	proposal := state.ActionProposal
 	proposal.AllowedActions = append(append([]string(nil), proposal.AllowedActions...), state.ContinuationLease.AllowedActions...)
 	proposal.ForbiddenActions = append(append([]string(nil), proposal.ForbiddenActions...), state.ContinuationLease.ForbiddenActions...)
@@ -110,6 +118,83 @@ func CompileContinuationAuthorityContract(state ContinuationState) AuthorityCont
 		}
 	}
 	return CompileActionProposalAuthorityContract(proposal)
+}
+
+func compileDiscoveredEffectContinuationAuthorityContract(state ContinuationState) AuthorityContractCompilation {
+	state = NormalizeContinuationState(state)
+	allowed := append([]string(nil), state.ActionProposal.AllowedActions...)
+	allowed = append(allowed, state.ContinuationLease.AllowedActions...)
+	forbidden := append([]string(nil), state.ActionProposal.ForbiddenActions...)
+	forbidden = append(forbidden, state.ContinuationLease.ForbiddenActions...)
+	if phase, ok := CurrentContinuationApprovalBundlePhase(state.ApprovalBundle); ok {
+		allowed = append(allowed, phase.AllowedActions...)
+		forbidden = append(forbidden, phase.ForbiddenActions...)
+	}
+	constraints := normalizeRecoveryStringMap(state.ContinuationLease.Constraints)
+	effectAction := strings.TrimSpace(constraints["effect_action"])
+	if effectAction != "" {
+		allowed = append(allowed, effectAction)
+	}
+	compilation := AuthorityContractCompilation{
+		Status: AuthorityContractCompilationStatusValid,
+		Contract: AuthorityContract{
+			Key:        ContinuationRecoveryContractKindDiscoveredEffect,
+			LeaseClass: ContinuationLeaseClassDataAccess,
+			WorkAction: AuthorityWorkActionReadOnly,
+			AllowedActions: []string{
+				AuthorityWorkActionReadOnly,
+				"read_approved_resource",
+				"report_data_access_result",
+				"report_evidence",
+			},
+			ForbiddenActions: []string{
+				"workspace_write",
+				"edit_files",
+				"commit",
+				"git_commit",
+				"repo_history_mutation",
+				"repo_publication",
+				"git_push",
+				"push_remote",
+				"github_pr_create",
+				"github_pr_update",
+				"deploy",
+				"restart_service",
+				"credential_token_output",
+				"external_effect_outside_bounded_effect",
+			},
+			ValidationPlan: []string{
+				"run only the discovered exact command once",
+				"record the typed result or blocker before any further retry",
+			},
+			AutoApprovalAllowed:    true,
+			RequiresInlineApproval: true,
+			ExternalEffectsAllowed: true,
+		},
+		WorkAction:       AuthorityWorkActionReadOnly,
+		AllowedActions:   normalizeActionStringSlice(allowed),
+		ForbiddenActions: normalizeActionStringSlice(forbidden),
+	}
+	compilation.AllowedActions = normalizeActionStringSlice(append(compilation.AllowedActions, compilation.Contract.AllowedActions...))
+	compilation.ForbiddenActions = normalizeActionStringSlice(append(compilation.ForbiddenActions, compilation.Contract.ForbiddenActions...))
+	compilation.Contradictions = append(compilation.Contradictions, authorityContractContradictions(compilation.AllowedActions, compilation.ForbiddenActions)...)
+	if strings.TrimSpace(constraints["command"]) == "" ||
+		strings.TrimSpace(constraints["command_hash"]) == "" ||
+		strings.TrimSpace(constraints["effect_kind"]) != "network_or_external_contact" ||
+		effectAction == "" {
+		compilation.Contradictions = append(compilation.Contradictions, AuthorityContradiction{
+			AllowedAction:   effectAction,
+			ForbiddenAction: "incomplete_discovered_effect_contract",
+			WorkAction:      AuthorityWorkActionReadOnly,
+			Reason:          "discovered_effect_contract_incomplete",
+			Severity:        AuthorityContradictionSeverityInvalid,
+		})
+	}
+	if len(compilation.Contradictions) > 0 {
+		compilation.Status = AuthorityContractCompilationStatusInvalid
+		compilation.SuggestedRepair = "request_fresh_narrower_proposal"
+	}
+	return normalizeAuthorityContractCompilation(compilation)
 }
 
 func AuthorityContractCompilationValidForApproval(state ContinuationState) bool {
@@ -215,6 +300,21 @@ func proposalGitPushContradictions(proposal ActionProposal) []AuthorityContradic
 		return nil
 	}
 	return []AuthorityContradiction{authorityContradiction("git_push", forbidden, AuthorityWorkActionCommit, AuthorityContradictionReasonProposalRequiresForbiddenGitPush)}
+}
+
+func proposalExternalEffectContradictions(proposal ActionProposal, compilation AuthorityContractCompilation) []AuthorityContradiction {
+	allowed := firstActionProposalExternalEffectAllowedAction(proposal)
+	if allowed == "" {
+		return nil
+	}
+	forbidden := firstAuthorityExternalEffectForbiddenAction(compilation.ForbiddenActions)
+	if compilation.Contract.ExternalEffectsAllowed && forbidden == "" {
+		return nil
+	}
+	if forbidden == "" {
+		forbidden = "external_effect_without_separate_grant"
+	}
+	return []AuthorityContradiction{authorityContradiction(allowed, forbidden, compilation.WorkAction, AuthorityContradictionReasonProposalRequiresForbiddenExternalEffect)}
 }
 
 func authorityScopedGitPushExclusionAllowed(allowedAction string, forbiddenAction string, scopedGitPushAllowed bool) bool {
@@ -396,6 +496,15 @@ func authorityWorkActionForAllowedToken(value string) string {
 	}
 }
 
+func firstActionProposalExternalEffectAllowedAction(proposal ActionProposal) string {
+	for _, action := range proposal.AllowedActions {
+		if authorityTokenImpliesExternalEffect(action) {
+			return strings.TrimSpace(action)
+		}
+	}
+	return ""
+}
+
 func actionProposalRequiresGitPush(proposal ActionProposal) bool {
 	for _, action := range proposal.AllowedActions {
 		if authorityTokenImpliesGitPush(action) {
@@ -464,6 +573,38 @@ func firstActionProposalGitPushForbiddenAction(actions []string) string {
 		}
 	}
 	return ""
+}
+
+func firstAuthorityExternalEffectForbiddenAction(actions []string) string {
+	for _, action := range actions {
+		if authorityTokenForbidsExternalEffect(action) {
+			return strings.TrimSpace(action)
+		}
+	}
+	return ""
+}
+
+func authorityTokenForbidsExternalEffect(value string) bool {
+	token := normalizeAuthorityMatchText(value)
+	switch token {
+	case "external_effect_without_separate_grant", "external_effect_without_approval", "external_contact_without_grant", "network_contact_without_grant":
+		return true
+	default:
+		return false
+	}
+}
+
+func authorityTokenImpliesExternalEffect(value string) bool {
+	token := normalizeAuthorityMatchText(value)
+	switch token {
+	case AuthorityClassExternalRead, "external_network_read", "network_read", "network_access_read", "external_network_contact", "network_contact", "fetch", "fetch_remote", "git_fetch", "git_fetch_read_refs", "git_ls_remote", "ls_remote":
+		return true
+	}
+	return strings.HasPrefix(token, "git_fetch") ||
+		strings.HasPrefix(token, "fetch_remote") ||
+		strings.HasPrefix(token, "fetch_origin") ||
+		strings.HasPrefix(token, "git_ls_remote") ||
+		strings.HasPrefix(token, "ls_remote")
 }
 
 func authorityTokenImpliesGitPush(value string) bool {

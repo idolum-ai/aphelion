@@ -427,6 +427,93 @@ func TestReviewEventLookaheadSimulatesNextPhaseCapabilityGrant(t *testing.T) {
 	assertLookaheadLabelsWithoutApprovalHaveNoExecutionEvents(t, store, key)
 }
 
+func TestReviewEventLookaheadResurfacesSimulatedFrontierAfterExpiry(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	current := time.Now().UTC().Add(2 * time.Minute)
+	rt.authorityDiscoveryClock = func() time.Time { return current }
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	seedLookaheadOperationPhase(t, store, key, "op-lookahead-resurface", "phase-lookahead-resurface")
+	event := session.ReviewEvent{
+		ID:                93,
+		SourceSessionID:   session.SessionIDForKey(key),
+		TargetSessionID:   session.SessionIDForKey(key),
+		TargetAdminChatID: 1001,
+		Summary:           "Approved the current grant.",
+		Status:            "delivered",
+		DeliveryMessageID: 93,
+	}
+	text, err := rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-lookahead-resurface-first",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 93, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionLookaheadNext),
+	}, event, core.ReviewEventActionLookaheadNext)
+	if err != nil {
+		t.Fatalf("HandleReviewEventAction(first lookahead) err = %v", err)
+	}
+	if !strings.Contains(text, "approval surfaced") {
+		t.Fatalf("first lookahead text = %q, want surfaced approval", text)
+	}
+	sender.mu.Lock()
+	firstInlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if firstInlineCount != 1 {
+		t.Fatalf("inline count after first lookahead = %d, want one approval card", firstInlineCount)
+	}
+
+	current = current.Add(session.DefaultLookaheadAllowanceTTL + time.Minute)
+	state, err := store.ContinuationState(key)
+	if err != nil {
+		t.Fatalf("ContinuationState(first approval) err = %v", err)
+	}
+	if err := store.UpdateContinuationState(key, continuationStateWithLeaseExpired(state, current)); err != nil {
+		t.Fatalf("UpdateContinuationState(expired first approval) err = %v", err)
+	}
+	if err := rt.sweepExpiredLookaheadAllowancesWithSilence(current); err != nil {
+		t.Fatalf("sweepExpiredLookaheadAllowancesWithSilence() err = %v", err)
+	}
+
+	text, err = rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-lookahead-resurface-second",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 94, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionLookaheadNext),
+	}, event, core.ReviewEventActionLookaheadNext)
+	if err != nil {
+		t.Fatalf("HandleReviewEventAction(second lookahead) err = %v", err)
+	}
+	if !strings.Contains(text, "approval surfaced") || !strings.Contains(text, "No authority was approved or executed") {
+		t.Fatalf("second lookahead text = %q, want fresh surfaced approval after expiry", text)
+	}
+	sender.mu.Lock()
+	secondInlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if secondInlineCount != 2 {
+		t.Fatalf("inline count after second lookahead = %d, want a fresh approval card after expiry", secondInlineCount)
+	}
+}
+
 func TestReviewEventLookaheadSimulatesBoundedPhaseFrontierCluster(t *testing.T) {
 	t.Parallel()
 
@@ -1845,6 +1932,128 @@ func TestReviewEventLookaheadMaterializationFailureDoesNotLeaveProposedToken(t *
 		if projection.Entry.StepRef == "next_action:"+action.RecordID {
 			t.Fatalf("lookahead projection = %#v, want no proposed next-action token without materialized card", projection)
 		}
+	}
+}
+
+func TestReviewEventLookaheadLedgerFailureDoesNotLeaveUnmeteredApproval(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	resolver, err := sandbox.NewResolver(
+		sandbox.Roots{
+			GlobalRoot:        cfg.Agent.PromptRoot,
+			AdminExecRoot:     cfg.Agent.ExecRoot,
+			SharedMemoryRoot:  cfg.Agent.SharedMemoryRoot,
+			UserWorkspaceRoot: cfg.Agent.UserWorkspaceRoot,
+			UserMemoryRoot:    cfg.Agent.UserMemoryRoot,
+		},
+		sandbox.DefaultProfiles(),
+	)
+	if err != nil {
+		t.Fatalf("NewResolver() err = %v", err)
+	}
+	tools := toolpkg.NewRegistryWithSandbox(cfg.Agent.ExecRoot, time.Second, resolver).WithSessionStore(store)
+	setFakeBubblewrapRunnerForRegistry(t, tools)
+	rt, err := New(cfg, store, provider, tools, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 1001, UserID: 0, Scope: telegramDMScopeRef(1001)}
+	now := time.Date(2026, 7, 2, 14, 0, 0, 0, time.UTC)
+	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID:   "lookahead-ledger-conflict",
+		SessionID:           session.SessionIDForKey(key),
+		SubjectKind:         "continuation_lease_request",
+		SubjectRef:          session.ContinuationRecoverySubjectRef(session.ContinuationLeaseClassChildWake, "idolum-email", "grant-idolum-email-wake", "durable_agent", "wake_once", ""),
+		Principal:           "telegram:1001",
+		LeaseClass:          session.ContinuationLeaseClassChildWake,
+		AllowedActions:      []string{"wake_named_child"},
+		Constraints:         map[string]string{"agent_id": "idolum-email"},
+		Tool:                "durable_agent",
+		ToolAction:          "wake_once",
+		AgentID:             "idolum-email",
+		GrantID:             "grant-idolum-email-wake",
+		GrantTargetResource: "durable_agent:idolum-email:wake_once",
+		CreatedAt:           now,
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract() err = %v", err)
+	}
+	if _, err := store.UpsertContinuationRecoveryContract(contract); err != nil {
+		t.Fatalf("UpsertContinuationRecoveryContract() err = %v", err)
+	}
+	action, err := store.RecordNextAction(session.NextActionInput{
+		Key:                key,
+		Owner:              "test",
+		State:              session.NextActionBlockedNeedsAuthority,
+		SubjectKind:        "continuation_lease_request",
+		SubjectRef:         contract.SubjectRef,
+		RequiredAuthority:  string(session.ContinuationLeaseClassChildWake),
+		ResourceBlocker:    "missing_continuation_lease",
+		RetryPolicy:        "ask_for_grant",
+		OperationKind:      "continuation_lease_request",
+		OperationTool:      "request_approval",
+		OperationInputJSON: session.ContinuationRecoveryContractProjectionInput(contract.ContractID),
+		CreatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("RecordNextAction() err = %v", err)
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(session.IdentificationLedgerEntryInput{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		StepRef:     "next_action:" + action.RecordID,
+		ShapeHash:   session.AuthorityShapeHashForContinuationRecoveryContract(contract),
+		LabelRef:    "crc-conflicting-existing-label",
+		Status:      session.IdentificationLedgerStatusProposed,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(conflict seed) err = %v", err)
+	}
+	if _, err := store.RecordIdentificationLedgerEntry(session.IdentificationLedgerEntryInput{
+		PlanID:      session.IdentificationPlanIDForSession(session.SessionIDForKey(key)),
+		PlanVersion: session.IdentificationDefaultPlanVersion,
+		SessionID:   session.SessionIDForKey(key),
+		StepRef:     "next_action:" + action.RecordID + "#collision:" + action.RecordID,
+		ShapeHash:   session.AuthorityShapeHashForContinuationRecoveryContract(contract),
+		LabelRef:    "crc-conflicting-collision-label",
+		Status:      session.IdentificationLedgerStatusProposed,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("RecordIdentificationLedgerEntry(collision conflict seed) err = %v", err)
+	}
+
+	event := session.ReviewEvent{
+		ID:                94,
+		SourceSessionID:   session.SessionIDForKey(key),
+		TargetSessionID:   session.SessionIDForKey(key),
+		TargetAdminChatID: 1001,
+		MetadataJSON:      `{"next_action_record_id":"` + action.RecordID + `","next_action_session_id":"` + session.SessionIDForKey(key) + `"}`,
+		Status:            "delivered",
+		DeliveryMessageID: 94,
+	}
+	_, err = rt.HandleReviewEventAction(context.Background(), telegram.CallbackQuery{
+		ID:      "cb-lookahead-ledger-conflict",
+		From:    &telegram.User{ID: 1001},
+		Message: &telegram.Message{MessageID: 94, Chat: &telegram.Chat{ID: 1001}},
+		Data:    core.EncodeReviewEventCallbackData(event.ID, core.ReviewEventActionLookaheadNext),
+	}, event, core.ReviewEventActionLookaheadNext)
+	if err == nil {
+		t.Fatal("HandleReviewEventAction(ledger conflict) err = nil, want ledger conflict")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count after ledger conflict = %d, want no unmetered approval card after failed ledger bind", inlineCount)
+	}
+	if state, exists, stateErr := store.ContinuationStateIfExists(key); stateErr != nil {
+		t.Fatalf("ContinuationStateIfExists() err = %v", stateErr)
+	} else if exists && state.Status == session.ContinuationStatusPending {
+		t.Fatalf("continuation state = %#v, want no pending approval after failed ledger bind", state)
 	}
 }
 

@@ -165,7 +165,7 @@ func (r *Registry) materializeMissingContinuationLeaseError(_ context.Context, k
 	return safeToolFailureError{
 		class:       "authority_rejected",
 		summary:     fmt.Sprintf("tool execution failed: missing %s continuation lease; lease request recorded", requirement.LeaseClass),
-		retryPolicy: "ask_for_grant",
+		retryPolicy: missingContinuationLeaseRetryPolicy(requirement),
 		cause:       err,
 	}
 }
@@ -175,7 +175,7 @@ func continuationRecoveryContractFromMissingLeaseRequirement(key session.Session
 	return session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
 		RequestInstanceID:   requirement.RequestInstanceID,
 		SessionID:           session.SessionIDForKey(key),
-		SubjectKind:         "continuation_lease_request",
+		SubjectKind:         firstNonEmpty(requirement.SubjectKind, "continuation_lease_request"),
 		SubjectRef:          missingContinuationLeaseSubjectRef(requirement),
 		Principal:           requirement.Principal,
 		LeaseClass:          requirement.LeaseClass,
@@ -387,7 +387,7 @@ func normalizeMissingContinuationLeaseRetryOperation(requirement missingContinua
 			op.Contract = recoveryRetryContractVersion
 		}
 		if op.SubjectKind == "" {
-			op.SubjectKind = "continuation_lease_request"
+			op.SubjectKind = firstNonEmpty(requirement.SubjectKind, "continuation_lease_request")
 		}
 		if op.SubjectRef == "" {
 			op.SubjectRef = missingContinuationLeaseSubjectRefFromNormalized(requirement)
@@ -411,7 +411,7 @@ func validateContinuationRetryOperationForRequirement(requirement missingContinu
 	if op.RequestInstanceID != "" && requirement.RequestInstanceID != "" && op.RequestInstanceID != requirement.RequestInstanceID {
 		return fmt.Errorf("retry operation request_instance_id mismatch")
 	}
-	if op.SubjectKind != "" && op.SubjectKind != "continuation_lease_request" {
+	if op.SubjectKind != "" && op.SubjectKind != firstNonEmpty(requirement.SubjectKind, "continuation_lease_request") {
 		return fmt.Errorf("retry operation subject kind mismatch")
 	}
 	if op.SubjectRef != "" && op.SubjectRef != missingContinuationLeaseSubjectRef(requirement) {
@@ -429,10 +429,34 @@ func validateContinuationRetryOperationForRequirement(requirement missingContinu
 		if strings.TrimSpace(input.Action) != "wake_once" || strings.TrimSpace(input.AgentID) != requirement.AgentID {
 			return fmt.Errorf("child_wake retry operation must target exact agent_id")
 		}
+	case session.ContinuationLeaseClassDataAccess:
+		if !session.ContinuationConstraintsAreDiscoveredEffect(requirement.Constraints) {
+			return fmt.Errorf("%s retry operation is not executable yet", requirement.LeaseClass)
+		}
+		if op.Tool != "exec" || op.OperationKind != session.ContinuationRecoveryRetryExecExactCommand {
+			return fmt.Errorf("discovered_effect retry operation must invoke exec exact command")
+		}
+		var input execInput
+		if err := decodeToolObjectInput(json.RawMessage(op.InputJSON), &input, "exec"); err != nil {
+			return err
+		}
+		if strings.TrimSpace(input.Command) == "" || strings.TrimSpace(input.Command) != strings.TrimSpace(requirement.Constraints["command"]) {
+			return fmt.Errorf("discovered_effect retry operation must target exact command")
+		}
+		if want := strings.TrimSpace(requirement.Constraints["workdir"]); want != "" && strings.TrimSpace(input.Workdir) != want {
+			return fmt.Errorf("discovered_effect retry operation workdir mismatch")
+		}
 	default:
 		return fmt.Errorf("%s retry operation is not executable yet", requirement.LeaseClass)
 	}
 	return nil
+}
+
+func missingContinuationLeaseRetryPolicy(requirement missingContinuationLeaseRequirement) string {
+	if session.ContinuationConstraintsAreDiscoveredEffect(requirement.Constraints) {
+		return "request_approval"
+	}
+	return "ask_for_grant"
 }
 
 func missingContinuationLeaseSubjectRefFromNormalized(requirement missingContinuationLeaseRequirement) string {

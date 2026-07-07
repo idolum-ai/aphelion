@@ -119,6 +119,32 @@ func TestObservedToolRegistryProjectedFailureDoesNotExposeRawErrorObject(t *test
 	}
 }
 
+func TestObservedToolRegistryProjectedFailureSurfacesSafeNoSuchFileDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	relativePath := "packages/react-core/src/v2/components/renderers/__tests__/A2UIRecoveryStates.test.tsx"
+	rawOutput := "stderr:\nsed: can't read " + relativePath + ": No such file or directory\n"
+	_, registry, _ := newObservedFailureRegistry(t, rawOutput, errors.New("command failed with exit code 2"))
+	output, err := registry.Execute(context.Background(), "exec", json.RawMessage(`{"command":"sed -n '1,260p' packages/react-core/src/v2/components/renderers/__tests__/A2UIRecoveryStates.test.tsx"}`))
+	if err == nil {
+		t.Fatal("Execute() err = nil, want projected failure error")
+	}
+	var failure map[string]any
+	if jsonErr := json.Unmarshal([]byte(output), &failure); jsonErr != nil {
+		t.Fatalf("projected failure json: %v\n%s", jsonErr, output)
+	}
+	summary := asString(failure["safe_summary"])
+	if !strings.Contains(summary, "No such file or directory") || !strings.Contains(summary, relativePath) {
+		t.Fatalf("safe_summary = %q, want actionable missing-file diagnostic", summary)
+	}
+	if !strings.Contains(err.Error(), "No such file or directory") {
+		t.Fatalf("projected err = %q, want actionable missing-file diagnostic", err.Error())
+	}
+	if asString(failure["protected_evidence_ref"]) == "" {
+		t.Fatalf("projected failure = %#v, want protected evidence retained for raw stderr", failure)
+	}
+}
+
 func TestObservedToolRegistryProjectedFailurePreservesContextSentinelsSafely(t *testing.T) {
 	t.Parallel()
 

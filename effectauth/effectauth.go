@@ -44,12 +44,14 @@ type Decision struct {
 type CommandRequest struct {
 	State   session.ContinuationState
 	Command string
+	Workdir string
 	Now     time.Time
 }
 
 type PlanRequest struct {
 	State   session.ContinuationState
 	Command string
+	Workdir string
 	Plan    commandeffect.EffectPlan
 	Now     time.Time
 }
@@ -68,6 +70,7 @@ func AuthorizeCommand(req CommandRequest) Decision {
 	return AuthorizePlan(PlanRequest{
 		State:   req.State,
 		Command: req.Command,
+		Workdir: req.Workdir,
 		Plan:    plan,
 		Now:     req.Now,
 	})
@@ -115,7 +118,7 @@ func AuthorizePlan(req PlanRequest) Decision {
 			decision.Reason = "read_only_effect"
 			return decision
 		}
-		return decisionForNonBoundaryEffect(state, decision, effect)
+		return decisionForNonBoundaryEffect(state, decision, effect, firstNonEmpty(req.Command, plan.Command), req.Workdir)
 	}
 	decision.Boundary = true
 	decision.BoundaryKind = string(boundary.Kind)
@@ -135,6 +138,7 @@ func AuthorizeWorkModeCommand(req WorkModeRequest) Decision {
 	decision := AuthorizeCommand(CommandRequest{
 		State:   req.State,
 		Command: req.Command,
+		Workdir: req.Workdir,
 		Now:     now,
 	})
 	if decision.Active {
@@ -235,7 +239,7 @@ func decisionForBoundary(state session.ContinuationState, decision Decision, bou
 	}
 }
 
-func decisionForNonBoundaryEffect(state session.ContinuationState, decision Decision, effect commandeffect.Effect) Decision {
+func decisionForNonBoundaryEffect(state session.ContinuationState, decision Decision, effect commandeffect.Effect, command string, workdir string) Decision {
 	actions := nonBoundaryEffectActions(effect)
 	if len(actions) == 0 {
 		decision.Reason = "effect_not_represented_in_continuation_envelope"
@@ -245,6 +249,13 @@ func decisionForNonBoundaryEffect(state session.ContinuationState, decision Deci
 	case commandeffect.KindExternal:
 		if !decision.ExternalEffectsAllowed {
 			decision.Reason = "external_effect_not_allowed_by_contract"
+			return decision
+		}
+		if !discoveredEffectEnvelopeMatches(state, effect, command, workdir) {
+			decision.Reason = "discovered_effect_constraints_mismatch"
+			if action := normalizeAuthorityAction(effect.Action); action != "" {
+				decision.RequiredAction = action
+			}
 			return decision
 		}
 	case commandeffect.KindUnknown:
@@ -322,6 +333,41 @@ func dedupeAuthorityActions(actions []string) []string {
 		out = append(out, action)
 	}
 	return out
+}
+
+func discoveredEffectEnvelopeMatches(state session.ContinuationState, effect commandeffect.Effect, command string, workdir string) bool {
+	state = session.NormalizeContinuationState(state)
+	constraints := state.ContinuationLease.Constraints
+	if !session.ContinuationConstraintsAreDiscoveredEffect(constraints) {
+		return true
+	}
+	if strings.TrimSpace(constraints["effect_kind"]) != string(effect.Kind) {
+		return false
+	}
+	if want := normalizeAuthorityAction(constraints["effect_action"]); want == "" || want != normalizeAuthorityAction(effect.Action) {
+		return false
+	}
+	if want := strings.TrimSpace(constraints["effect_provider"]); want != "" && want != strings.TrimSpace(effect.Provider) {
+		return false
+	}
+	if want := strings.TrimSpace(constraints["git_subcommand"]); want != "" && want != strings.TrimSpace(effect.GitSubcommand) {
+		return false
+	}
+	if want := strings.TrimSpace(constraints["command"]); want == "" || want != strings.TrimSpace(command) {
+		return false
+	}
+	if want := normalizeAuthorityWorkdir(constraints["workdir"]); want != "" && normalizeAuthorityWorkdir(workdir) != want {
+		return false
+	}
+	return true
+}
+
+func normalizeAuthorityWorkdir(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return filepath.Clean(value)
 }
 
 func decisionRequireRepoPublicationPush(state session.ContinuationState, decision Decision) Decision {

@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -1377,6 +1378,161 @@ func TestRequestApprovalToolRejectsPushProseWhenGitPushForbidden(t *testing.T) {
 	if !strings.Contains(err.Error(), "request_approval authority contract invalid") || !strings.Contains(err.Error(), session.AuthorityContradictionReasonProposalRequiresForbiddenGitPush) {
 		t.Fatalf("err = %v, want proposal_requires_forbidden_git_push diagnostic", err)
 	}
+}
+
+func TestRequestApprovalToolRejectsWorkspaceWriteFetchPreflight(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+
+	_, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"request_approval",
+		json.RawMessage(`{
+			"objective":"Refresh release evidence from origin/main.",
+			"phase":{
+				"id":"fresh-phase-1-fetch-origin-main",
+				"summary":"Fresh external-read/fetch approval for origin/main.",
+				"authority_class":"workspace_write",
+				"gate_reason_code":"workspace_write",
+				"why_now":"The prior continuation could not dispatch git fetch.",
+				"bounded_effect":"Run git fetch origin main --prune, then read refs and report evidence.",
+				"allowed_actions":["git_fetch_origin_main_prune","git_rev_parse_origin_main","report_fetch_evidence"],
+				"forbidden_actions":["external_effect_without_separate_grant","commit","git_push","deploy","restart_service"],
+				"validation_plan":["report fetch result and origin/main hash"]
+			}
+		}`),
+	)
+	if err == nil {
+		t.Fatal("ExecuteForSessionPrincipal(request_approval) err = nil, want fetch/workspace_write preflight rejection")
+	}
+	if !strings.Contains(err.Error(), "request_approval authority contract invalid") || !strings.Contains(err.Error(), session.AuthorityContradictionReasonProposalRequiresForbiddenExternalEffect) {
+		t.Fatalf("err = %v, want external-effect preflight diagnostic", err)
+	}
+	var safeFailure interface {
+		SafeToolFailureClass() string
+		SafeToolFailureSummary() string
+		SafeToolFailureRetryPolicy() string
+	}
+	if !errors.As(err, &safeFailure) {
+		t.Fatalf("err = %T, want model-safe projected failure diagnostic", err)
+	}
+	if safeFailure.SafeToolFailureClass() != "authority_contract_invalid" ||
+		safeFailure.SafeToolFailureRetryPolicy() != "revise_approval_contract" ||
+		!strings.Contains(safeFailure.SafeToolFailureSummary(), session.AuthorityContradictionReasonProposalRequiresForbiddenExternalEffect) {
+		t.Fatalf("safe failure = class:%q retry:%q summary:%q, want contract repair diagnostic", safeFailure.SafeToolFailureClass(), safeFailure.SafeToolFailureRetryPolicy(), safeFailure.SafeToolFailureSummary())
+	}
+	state, stateErr := store.OperationState(key)
+	if stateErr != nil {
+		t.Fatalf("OperationState() err = %v", stateErr)
+	}
+	if state.Stage == "approval_request" || state.PhasePlan.CurrentPhaseID == "fresh-phase-1-fetch-origin-main" {
+		t.Fatalf("operation state = %#v, want rejected preflight not persisted as approval request", state)
+	}
+}
+
+func TestRequestApprovalToolPersistsDiscoveredEffectFetchApproval(t *testing.T) {
+	t.Parallel()
+
+	registry, store := newDurableAgentToolRegistry(t)
+	key := adminSessionKey()
+	if _, err := store.Load(key); err != nil {
+		t.Fatalf("Load() err = %v", err)
+	}
+	contract := discoveredEffectRecoveryContractForToolTest(t, key, "git fetch origin main --prune")
+	contract, err := store.UpsertContinuationRecoveryContract(contract)
+	if err != nil {
+		t.Fatalf("UpsertContinuationRecoveryContract() err = %v", err)
+	}
+
+	out, err := registry.ExecuteForSessionPrincipal(
+		context.Background(),
+		principal.Principal{Role: principal.RoleAdmin},
+		key,
+		"request_approval",
+		json.RawMessage(`{
+			"action":"request_continuation_lease",
+			"objective":"Refresh release evidence from origin/main.",
+			"contract_id":"`+contract.ContractID+`"
+		}`),
+	)
+	if err != nil {
+		t.Fatalf("ExecuteForSessionPrincipal(request_approval) err = %v", err)
+	}
+	if !strings.Contains(out, "[APPROVAL_REQUESTED]") {
+		t.Fatalf("output = %q, want approval request render", out)
+	}
+	state, stateErr := store.OperationState(key)
+	if stateErr != nil {
+		t.Fatalf("OperationState() err = %v", stateErr)
+	}
+	if state.Status != session.OperationStatusBlocked || state.Stage != "approval_request" {
+		t.Fatalf("operation status/stage = %q/%q, want blocked approval_request", state.Status, state.Stage)
+	}
+	cont, ok, contErr := store.ContinuationStateIfExists(key)
+	if contErr != nil {
+		t.Fatalf("ContinuationStateIfExists() err = %v", contErr)
+	}
+	if !ok || cont.Status != session.ContinuationStatusPending || cont.ContinuationLease.LeaseClass != session.ContinuationLeaseClassDataAccess {
+		t.Fatalf("continuation = %#v ok=%v, want pending data_access discovered-effect lease", cont, ok)
+	}
+	if !session.ContinuationConstraintsAreDiscoveredEffect(cont.ContinuationLease.Constraints) ||
+		cont.ContinuationLease.Constraints["command"] != "git fetch origin main --prune" ||
+		cont.ContinuationLease.RetryOperation.Tool != "exec" ||
+		cont.ContinuationLease.RetryOperation.OperationKind != session.ContinuationRecoveryRetryExecExactCommand {
+		t.Fatalf("lease = %#v, want exact exec discovered-effect retry", cont.ContinuationLease)
+	}
+	if cont.ActionProposal.RiskClass == session.AuthorityClassExternalRead {
+		t.Fatalf("proposal risk class = %q, want no external_read vocabulary", cont.ActionProposal.RiskClass)
+	}
+}
+
+func discoveredEffectRecoveryContractForToolTest(t *testing.T, key session.SessionKey, command string) session.ContinuationRecoveryContract {
+	t.Helper()
+	commandHash := session.EffectAttemptCommandHash(command)
+	retryRaw, err := json.Marshal(map[string]any{"command": command})
+	if err != nil {
+		t.Fatalf("marshal retry input: %v", err)
+	}
+	contract, err := session.CompileContinuationRecoveryContract(session.ContinuationRecoveryContractInput{
+		RequestInstanceID: "tool-test-fetch",
+		SessionID:         session.SessionIDForKey(key),
+		SubjectKind:       session.ContinuationRecoverySubjectKindDiscoveredEffect,
+		Resource:          "command:" + commandHash,
+		Principal:         "telegram:1001",
+		LeaseClass:        session.ContinuationLeaseClassDataAccess,
+		AllowedActions:    []string{"fetch", "git_fetch_origin_main_prune", "report_fetch_evidence"},
+		Constraints: map[string]string{
+			"contract_kind":      session.ContinuationRecoveryContractKindDiscoveredEffect,
+			"effect_kind":        "network_or_external_contact",
+			"effect_action":      "fetch",
+			"effect_provider":    "git",
+			"git_subcommand":     "fetch",
+			"command":            command,
+			"command_hash":       commandHash,
+			"normalized_command": command,
+		},
+		Tool:       "exec",
+		ToolAction: session.ContinuationRecoveryRetryExecExactCommand,
+		RetryOperation: session.ContinuationRetryOperation{
+			Contract:      session.ContinuationRecoveryRetryVersion,
+			OperationKind: session.ContinuationRecoveryRetryExecExactCommand,
+			Tool:          "exec",
+			InputJSON:     string(retryRaw),
+			SubjectKind:   session.ContinuationRecoverySubjectKindDiscoveredEffect,
+		},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("CompileContinuationRecoveryContract() err = %v", err)
+	}
+	return contract
 }
 
 func TestOperationCompletionEvidenceStatusExplainsMismatch(t *testing.T) {

@@ -171,11 +171,14 @@ func classifyProjectedToolFailure(err error, output string) projectedToolFailure
 		}
 	}
 	lower := strings.ToLower(strings.TrimSpace(output + "\n" + errorString(err)))
+	noSuchFileSummary := safeNoSuchFileDiagnostic(output)
 	switch {
 	case looksLikeAuthorityFailureText(lower):
 		return projectedToolFailureSignals{FailureClass: "authority_rejected", RetryPolicy: "ask_for_grant"}
 	case strings.Contains(lower, "deadline") || strings.Contains(lower, "timeout") || strings.Contains(lower, "timed out"):
 		return projectedToolFailureSignals{FailureClass: "timeout", RetryPolicy: "retry_once", Retryable: true, DeadlineExceeded: true}
+	case noSuchFileSummary != "":
+		return projectedToolFailureSignals{FailureClass: "tool_error", SafeSummary: noSuchFileSummary, RetryPolicy: "reformulate"}
 	default:
 		return projectedToolFailureSignals{FailureClass: "tool_error", RetryPolicy: "reformulate"}
 	}
@@ -228,6 +231,61 @@ func safeToolFailureSummary(failureClass string, protectedRef string) string {
 		summary += "; details protected"
 	}
 	return summary
+}
+
+func safeNoSuchFileDiagnostic(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if candidate := safeNoSuchFileDiagnosticFromLine(line); candidate != "" {
+			return candidate + ": No such file or directory"
+		}
+	}
+	return ""
+}
+
+func safeNoSuchFileDiagnosticFromLine(line string) string {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
+	lower := strings.ToLower(line)
+	marker := ": no such file or directory"
+	idx := strings.LastIndex(lower, marker)
+	if idx <= 0 {
+		return ""
+	}
+	before := strings.TrimSpace(line[:idx])
+	lowerBefore := strings.ToLower(before)
+	if readIdx := strings.LastIndex(lowerBefore, "can't read "); readIdx >= 0 {
+		before = strings.TrimSpace(before[readIdx+len("can't read "):])
+	} else if colonIdx := strings.LastIndex(before, ":"); colonIdx >= 0 {
+		before = strings.TrimSpace(before[colonIdx+1:])
+	}
+	before = strings.Trim(before, `"'`)
+	before = redactRuntimeEvidenceText(before)
+	if !safeProjectedMissingFilePath(before) {
+		return ""
+	}
+	return before
+}
+
+func safeProjectedMissingFilePath(candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" || strings.HasPrefix(candidate, "/") {
+		return false
+	}
+	if strings.ContainsAny(candidate, "\r\n\t") || strings.Contains(candidate, "\x00") {
+		return false
+	}
+	if strings.Contains(candidate, "..") {
+		return false
+	}
+	lower := strings.ToLower(candidate)
+	for _, marker := range []string{"token", "secret", "password", "credential", "private-key", "private_key"} {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	return true
 }
 
 func errorString(err error) string {
