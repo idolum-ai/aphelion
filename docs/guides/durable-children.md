@@ -66,6 +66,12 @@ Do not use a standing work order as a catch-all permission bucket. Email read,
 browser monitoring, webhook calls, channel draft, and channel send should be
 separate conditional grants that can expire or be revoked independently.
 
+When a child repeatedly needs work outside the current work order, treat that as
+a renegotiation signal. The child may propose an amendment, but the proposal is
+review evidence only. Admin approval creates a new SOW version; rejected
+amendments leave the current SOW unchanged, and old leases cannot be reused
+under a newer version.
+
 ## Daily Review Recipe
 
 `aphelion init` can install the bundled `daily-review` durable-child recipe as `idolum-daily-review` on the target host. Ordinary runtime startup does not recreate the child if it is removed or disabled; after installation, the target database owns the child row and its policy/bootstrap/local state. The recipe manifest lives at `recipes/durable-children/daily-review.toml`.

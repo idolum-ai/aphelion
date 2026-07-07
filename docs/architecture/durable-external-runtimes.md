@@ -199,6 +199,40 @@ auditable. A revoked work order stops future lease materialization; it does not
 need to edit the runtime spec or erase child memory. A child request outside the
 work order becomes an exception approval or a proposed work-order amendment.
 
+### Work Order Renegotiation And Amendments
+
+Standing work orders should be renegotiable without turning renegotiation into
+authority. A child may propose that the SOW is stale, too narrow, too broad, or
+missing a recurring exception. That proposal is a review artifact and typed
+evidence only; it must not widen the child's current leases.
+
+Use versioned amendments:
+
+- `active`: the signed SOW version currently eligible for lease
+  materialization.
+- `proposed`: a draft amendment awaiting admin review.
+- `superseded`: an older SOW version replaced by a signed amendment.
+- `revoked`: a version that cannot materialize future leases.
+
+Every amendment must carry a structured diff that classifies the change as
+`narrow`, `widen`, `schedule_change`, `credential_change`, `audience_change`,
+`network_change`, `review_policy_change`, or `runtime_change`. Narrowing and
+emergency revocation may stop future lease materialization immediately. Any
+widening change requires explicit admin approval and may require fresh runtime
+preflight, credential verification, or external-service terms review before the
+new version becomes active.
+
+Existing runtime leases are fenced to the SOW version and conditional grant
+version that produced them. A later amendment cannot silently bless an old
+lease, and an old lease cannot be replayed under a new SOW version. Revocation
+or replacement should cancel reusable/pending leases where the lease contract
+allows cancellation and must prevent new leases from being materialized from the
+old version.
+
+Repeated exception approvals may produce an amendment recommendation, but not
+an automatic amendment. The operator should see the pattern, proposed new grant,
+risk delta, and suggested review gate before signing a replacement SOW.
+
 ## Runtime Modes
 
 ### Oneshot Wake Mode
@@ -402,6 +436,7 @@ Allowed `kind` values should start narrow:
 {
   "standing_work_order": {
     "id": "swo_daily_audience_update",
+    "version": 3,
     "agent_id": "audience-child",
     "status": "active",
     "title": "Daily email review and WhatsApp draft",
@@ -435,6 +470,7 @@ Allowed `kind` values should start narrow:
   "conditional_grant": {
     "id": "grant_gmail_read",
     "standing_work_order_id": "swo_daily_audience_update",
+    "standing_work_order_version": 3,
     "capability": "gmail_read",
     "tool": "gog",
     "actions": ["gmail.search", "gmail.read"],
@@ -460,6 +496,7 @@ Allowed `kind` values should start narrow:
   "conditional_grant": {
     "id": "grant_friday_site_watch_ifttt",
     "standing_work_order_id": "swo_friday_site_watch",
+    "standing_work_order_version": 1,
     "capability": "web_monitor_and_alert",
     "actions": ["browser.monitor", "webhook.call"],
     "credential_scope": "secret_scope:child:watch-child:ifttt",
@@ -491,6 +528,46 @@ Conditional grants are templates. They become executable only when Aphelion
 evaluates the standing work order and emits runtime leases for the current wake
 or action.
 
+### StandingWorkOrderAmendment
+
+```json
+{
+  "standing_work_order_amendment": {
+    "id": "swo_amend_01J...",
+    "standing_work_order_id": "swo_daily_audience_update",
+    "from_version": 3,
+    "proposed_version": 4,
+    "proposed_by": "durable_agent:audience-child",
+    "status": "proposed",
+    "reason": "The child has needed the same WhatsApp send exception three times.",
+    "change_class": ["widen", "audience_change", "review_policy_change"],
+    "diff": {
+      "conditional_grants_added": ["grant_whatsapp_send_named_audience"],
+      "conditional_grants_removed": [],
+      "review_policy": {
+        "from": "send_requires_parent_review",
+        "to": "autonomous_send_to_named_audience"
+      }
+    },
+    "risk_delta": {
+      "new_network_classes": [],
+      "new_audiences": ["whatsapp:updates-list"],
+      "new_outbound_modes": ["autonomous_send"]
+    },
+    "activation_requirements": {
+      "admin_signature": true,
+      "runtime_preflight": true,
+      "credential_verification": true,
+      "external_terms_review": false
+    }
+  }
+}
+```
+
+An amendment proposal is not authority. Only an accepted amendment can create a
+new active SOW version, and only that active version can materialize future
+leases.
+
 ### LeaseMaterialization
 
 ```json
@@ -499,6 +576,7 @@ or action.
     "id": "lm_01J...",
     "agent_id": "audience-child",
     "standing_work_order_id": "swo_daily_audience_update",
+    "standing_work_order_version": 3,
     "matched_conditions": {
       "trigger": "schedule",
       "schedule_tick": "2026-07-07T13:00:00-04:00"
@@ -508,12 +586,14 @@ or action.
       {
         "lease_id": "lease_gmail_read_01J...",
         "conditional_grant_id": "grant_gmail_read",
+        "conditional_grant_version": 3,
         "capability": "gmail_read",
         "expires_at": "2026-07-07T13:15:00-04:00"
       },
       {
         "lease_id": "lease_whatsapp_draft_01J...",
         "conditional_grant_id": "grant_whatsapp_draft",
+        "conditional_grant_version": 3,
         "capability": "channel_draft",
         "expires_at": "2026-07-07T13:15:00-04:00"
       }
@@ -566,16 +646,19 @@ Minimum operations:
   "authority": {
     "wake_lease_id": "lease_01J...",
     "standing_work_order_id": "swo_daily_audience_update",
+    "standing_work_order_version": 3,
     "lease_materialization_id": "lm_01J...",
     "materialized_leases": [
       {
         "lease_id": "lease_gmail_read_01J...",
         "conditional_grant_id": "grant_gmail_read",
+        "conditional_grant_version": 3,
         "capability": "gmail_read"
       },
       {
         "lease_id": "lease_whatsapp_draft_01J...",
         "conditional_grant_id": "grant_whatsapp_draft",
+        "conditional_grant_version": 3,
         "capability": "channel_draft"
       }
     ],
@@ -746,6 +829,7 @@ Preferred Aphelion mapping:
 | Does the durable child exist? | Aphelion session durable-agent record |
 | What runtime is configured? | Proposed Aphelion durable runtime spec |
 | What future work is pre-authorized? | Active Aphelion standing work order |
+| Which SOW amendments are pending? | Proposed SOW amendment records and review artifacts |
 | Which future actions may become leases? | Active conditional grants under that work order |
 | May the child wake now? | Active Aphelion continuation lease and policy |
 | What authority is in this task packet? | Lease materialization for the current wake/action |
@@ -766,6 +850,9 @@ health traces, but those projections must keep source attribution.
 | Runtime source drift | Mark runtime status stale and require re-attestation or operator repair. |
 | Standing work order condition does not match | Do not materialize leases; record skipped or blocked wake evidence. |
 | Conditional grant revoked or expired | Block future lease materialization and surface the grant state. |
+| Child proposes SOW amendment | Record typed proposal/review artifact; do not widen current leases. |
+| SOW amendment approved while old lease exists | New leases use the new SOW version; old leases remain fenced to their original version and cannot be replayed under the new one. |
+| SOW amendment rejected | Keep active SOW unchanged and record the rejected proposal as evidence. |
 | Missing child state root | Block wake before invoking runtime. |
 | Missing credential for gateway | Block gateway start; do not start degraded public presence. |
 | Child result claims new authority | Treat as projection and convert to capability request if appropriate. |
@@ -781,12 +868,20 @@ Define standing work order normalization, validation, operator display, and
 lease materialization before runtime-specific adapters. The contract should
 describe the durable child, policy ceiling, schedules/triggers, conditional
 grants, credential scopes, network classes, review policy, revocation behavior,
-and the runtime leases emitted for a wake/action.
+versioning/amendment state, and the runtime leases emitted for a wake/action.
 
 The runtime adapter should receive only materialized leases in the task packet,
 not the full standing work order as authority.
 
-### 2. Generic Runtime Contract
+### 2. Work Order Renegotiation
+
+Add amendment proposal, diff classification, review, activation, rejection, and
+supersession semantics before runtime-specific adapters. Amendment proposals
+from children are typed evidence; admin approval creates a new active SOW
+version. Lease materialization must bind every emitted lease to the SOW and
+conditional-grant versions that produced it.
+
+### 3. Generic Runtime Contract
 
 Define durable runtime spec normalization, validation, status projection, and
 operator display without naming Hermes or OpenClaw in core logic. The contract
@@ -794,14 +889,14 @@ should be able to describe a local executable, source reference, child state
 root, workspace root, entrypoint kind, mode, process environment allowlist, and
 network classes.
 
-### 3. Adapter Registry
+### 4. Adapter Registry
 
 Introduce a parent-side registry that maps `runtime.kind` to adapter
 implementations. The registry should expose `preflight`, `status`, `wake`,
 `start`, and `stop` operations. Unknown runtime kinds must fail closed with a
 typed blocker that can become a capability/delegation request.
 
-### 4. Oneshot Wake Executor
+### 5. Oneshot Wake Executor
 
 Add a wake path that evaluates active standing work orders, materializes
 matching conditional grants into narrow leases, builds a `ChildTaskPacket`,
@@ -809,7 +904,7 @@ invokes the selected adapter once, records a `ChildTaskResult`, and
 acknowledges parent conversation messages only when the result says they were
 consumed.
 
-### 5. Runtime Evidence And Recovery
+### 6. Runtime Evidence And Recovery
 
 Persist runtime status, source hash, last preflight, last wake, failure class,
 backoff, and artifact refs under the existing durable child runtime-state
@@ -820,13 +915,13 @@ Runtime status must include verified install/probe anchors, dependency baseline,
 entrypoint fingerprint, runtime spec hash, and stale reason when any anchor
 drifts.
 
-### 6. Hermes Adapter
+### 7. Hermes Adapter
 
 Implement Hermes support over the generic adapter contract. Start with
 non-interactive oneshot mode using child-local `HERMES_HOME`; add gateway mode
 only after the generic gateway-presence contract exists.
 
-### 7. OpenClaw Adapter
+### 8. OpenClaw Adapter
 
 Implement OpenClaw support over the same contract. Start with gateway-backed
 oneshot mode by launching an ephemeral loopback gateway per wake with channels
@@ -834,22 +929,23 @@ disabled and child-local `OPENCLAW_STATE_DIR`/`OPENCLAW_CONFIG_PATH`; add
 long-lived gateway modes later under `runtime_control_local` or
 `gateway_presence` contracts.
 
-### 8. Gateway Presence
+### 9. Gateway Presence
 
 Add public or semi-public channel presence as a generic capability grant. The
 implementation should not have `whatsapp`, `telegram`, `hermes`, or `openclaw`
 authority shortcuts. Runtime adapters translate granted gateway contracts into
 their own service commands.
 
-### 9. Operator UX
+### 10. Operator UX
 
-Expose runtime kind, mode, standing work orders, conditional grants, last lease
-materialization, status, last wake, blockers, and repair actions in thread
-promotion, `/agents`, and health traces. Keep implementation details behind
-diagnostics unless the operator is granting runtime installation, gateway
-presence, secret scopes, or standing work-order authority.
+Expose runtime kind, mode, standing work orders, active/proposed versions,
+conditional grants, last lease materialization, status, last wake, blockers, and
+repair actions in thread promotion, `/agents`, and health traces. Keep
+implementation details behind diagnostics unless the operator is granting
+runtime installation, gateway presence, secret scopes, or standing work-order
+authority.
 
-### 10. Evaluation And Live Smoke
+### 11. Evaluation And Live Smoke
 
 Add adapter contract tests with fake runtimes before live Hermes/OpenClaw tests.
 Live smoke should validate installation/preflight and one bounded wake under a
@@ -861,6 +957,8 @@ temporary child state root, not public gateway delivery by default.
 | --- | --- |
 | Runtime spec | Valid Hermes/OpenClaw specs, missing roots, unknown kind, invalid source, env containment. |
 | Standing work order | No lease before schedule/trigger match; matching schedule materializes only named grants; revoked or expired work order prevents future leases. |
+| SOW renegotiation | Child amendment proposal creates no authority; admin-approved amendment creates a new active version; rejected amendment leaves current SOW unchanged. |
+| SOW lease fencing | Old lease cannot be replayed under a newer SOW; widened amendment requires approval and preflight when needed; narrowed/revoked grant blocks future leases. |
 | Conditional grants | Daily `gog` email read grants search/read only; WhatsApp draft does not imply send; autonomous send requires named audience and outbound policy. |
 | Browser and webhook work | Browser monitoring is domain/time bounded; IFTTT calls require exact endpoint, method, payload schema, credential scope, and `webhook_egress`. |
 | Wake authority | Missing `child_wake` lease blocks before adapter invocation; active lease invokes exactly once. |

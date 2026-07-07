@@ -68,6 +68,9 @@ Code anchors:
   privileges. A schedule or trigger can authorize Aphelion to materialize a
   bounded child wake/tool/channel lease, but the child receives only the current
   lease, not the full standing grant as executable authority.
+- Standing work order renegotiation is a review path, not a privilege path. A
+  child may propose an amendment, but only admin approval can activate a new SOW
+  version, and existing leases stay fenced to the version that produced them.
 - Durable children ask upward through parent conversation, review artifacts, and capability/delegation proposals when they need system changes. The parent can grant or materialize generic capabilities, but should not become specialized application code for one child.
 - Parent guidance and child wake are separate authority events. Appending a
   parent conversation message records guidance only; waking a named child once
