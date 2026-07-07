@@ -1,11 +1,13 @@
 flowchart LR
     Operator["Operator thread<br/>or /agents"]
-    Lease["child_wake lease<br/>+ capability grants"]
+    Lease["Runtime leases<br/>materialized for wake/action"]
 
     subgraph parent["Parent Aphelion"]
         direction TB
         Registry["Durable agent registry"]
         RuntimeSpec["Durable runtime spec<br/>(proposed)"]
+        WorkOrder["Standing work order<br/>conditional grants"]
+        Materializer["Lease materializer<br/>schedule / trigger / policy"]
         Wake["Wake compiler<br/>ChildTaskPacket"]
         Adapter["Runtime adapter registry"]
         Evidence["TES / session evidence"]
@@ -31,6 +33,10 @@ flowchart LR
 
     Operator --> Registry
     Registry --> RuntimeSpec
+    Registry --> WorkOrder
+    RuntimeSpec --> Materializer
+    WorkOrder --> Materializer
+    Materializer --> Lease
     Lease --> Wake
     RuntimeSpec --> Wake
     Wake --> Adapter
@@ -56,4 +62,4 @@ flowchart LR
     Results --> Evidence
     Results --> Reviews
 
-    Channels -. "requires gateway_presence grant" .-> Lease
+    Channels -. "requires gateway_presence lease" .-> Lease

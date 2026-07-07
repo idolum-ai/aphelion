@@ -27,10 +27,13 @@ Every child setup should leave the same trail:
    must never do.
 3. Set the bootstrap: child-local model or Codex home, storage roots, secret
    scopes, and network posture.
-4. Set the live policy: outbound mode, drift policy, capability envelope, and
-   any Tailnet declaration.
-5. Activate or provision.
-6. Validate with:
+4. Set the live policy: outbound mode, drift policy, capability envelope,
+   schedules/triggers, standing work orders, and any Tailnet declaration.
+5. For each standing work order, define conditional grants, credential scopes,
+   review gates, revocation behavior, and the exact leases Aphelion may
+   materialize later.
+6. Activate or provision.
+7. Validate with:
 
 ```bash
 ./bin/aphelion durable-agent list --config ~/.aphelion/aphelion.toml
@@ -41,6 +44,27 @@ From Telegram, use `/agents`, `/status`, and `/health` to check the same parent
 ledger from the operator channel. `/agents` is the lifecycle board: inspect the
 child, request a bounded `Brief`, `Park` it, `Resume` it after activation checks,
 or confirm `Retire` when it should leave active use.
+
+## Standing Work Orders
+
+Use a standing work order when creating the child should also define future work
+the admin is willing to pre-authorize under conditions. The work order is the
+signed operating mandate; the child still receives only the short-lived leases
+Aphelion materializes for a matching wake or action.
+
+Common shapes:
+
+- Daily email review: read messages through a child-scoped `gog` Gmail read
+  credential, summarize them, and draft a WhatsApp update. Sending remains
+  parent-reviewed unless the work order names an autonomous-send audience and
+  policy.
+- Friday browser watch: monitor named domains for a bounded duration, then call
+  only an allowlisted IFTTT endpoint with the approved method and payload
+  schema.
+
+Do not use a standing work order as a catch-all permission bucket. Email read,
+browser monitoring, webhook calls, channel draft, and channel send should be
+separate conditional grants that can expire or be revoked independently.
 
 ## Daily Review Recipe
 
