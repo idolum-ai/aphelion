@@ -170,47 +170,47 @@ func TestEffectRequestCompilesToDiscoveredEffectContract(t *testing.T) {
 	}
 }
 
-func TestMaterializeStandingWorkOrderLeasesOnlyMatchingGrants(t *testing.T) {
+func TestMaterializeWorkAgreementLeasesOnlyMatchingGrants(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 7, 7, 17, 0, 0, 0, time.UTC)
-	materialization, err := MaterializeStandingWorkOrderLeases(StandingWorkOrder{
-		ID:                  "swo_daily_audience_update",
+	materialization, err := MaterializeWorkAgreementLeases(WorkAgreement{
+		ID:                  "wa_daily_audience_update",
 		Version:             3,
 		AgentID:             "audience-child",
 		Status:              "active",
 		ConditionalGrantIDs: []string{"grant_gmail_read", "grant_whatsapp_draft"},
-		Principals: StandingWorkPrincipals{
+		Principals: WorkAgreementPrincipals{
 			AuthorityPrincipal: "aphelion_admin:ops",
 			ReviewPrincipal:    "customer:acme:comms-owner",
 		},
 	}, []ConditionalGrant{
 		{
-			ID:                       "grant_gmail_read",
-			StandingWorkOrderID:      "swo_daily_audience_update",
-			StandingWorkOrderVersion: 3,
-			Capability:               "gmail_read",
-			Actions:                  []string{"gmail.search", "gmail.read"},
-			Conditions:               ConditionalGrantConditions{Triggers: []string{"schedule:swo_daily_audience_update"}},
-			Materializes:             GrantMaterialization{LeaseKind: ExternalRuntimeLeaseKindToolInvocation, TTLSeconds: 900, ReviewRoute: "resource_owner_principal", SingleUse: true},
-			Status:                   "active",
+			ID:                   "grant_gmail_read",
+			WorkAgreementID:      "wa_daily_audience_update",
+			WorkAgreementVersion: 3,
+			Capability:           "gmail_read",
+			Actions:              []string{"gmail.search", "gmail.read"},
+			Conditions:           ConditionalGrantConditions{Triggers: []string{"schedule:wa_daily_audience_update"}},
+			Materializes:         GrantMaterialization{LeaseKind: ExternalRuntimeLeaseKindToolInvocation, TTLSeconds: 900, ReviewRoute: "resource_owner_principal", SingleUse: true},
+			Status:               "active",
 		},
 		{
-			ID:                       "grant_whatsapp_draft",
-			StandingWorkOrderID:      "swo_daily_audience_update",
-			StandingWorkOrderVersion: 2,
-			Capability:               "channel_draft",
-			Actions:                  []string{"channel.draft"},
-			Conditions:               ConditionalGrantConditions{Triggers: []string{"schedule:swo_daily_audience_update"}},
-			Materializes:             GrantMaterialization{LeaseKind: ExternalRuntimeLeaseKindRuntimeTask, TTLSeconds: 900, ReviewRoute: "review_principal"},
-			Status:                   "active",
+			ID:                   "grant_whatsapp_draft",
+			WorkAgreementID:      "wa_daily_audience_update",
+			WorkAgreementVersion: 2,
+			Capability:           "channel_draft",
+			Actions:              []string{"channel.draft"},
+			Conditions:           ConditionalGrantConditions{Triggers: []string{"schedule:wa_daily_audience_update"}},
+			Materializes:         GrantMaterialization{LeaseKind: ExternalRuntimeLeaseKindRuntimeTask, TTLSeconds: 900, ReviewRoute: "review_principal"},
+			Status:               "active",
 		},
-	}, "schedule:swo_daily_audience_update", "sha256:runtime", now)
+	}, "schedule:wa_daily_audience_update", "sha256:runtime", now)
 	if err != nil {
-		t.Fatalf("MaterializeStandingWorkOrderLeases() err = %v", err)
+		t.Fatalf("MaterializeWorkAgreementLeases() err = %v", err)
 	}
 	if len(materialization.IssuedLeases) != 1 {
-		t.Fatalf("issued leases = %#v, want only matching SOW version", materialization.IssuedLeases)
+		t.Fatalf("issued leases = %#v, want only matching work agreement version", materialization.IssuedLeases)
 	}
 	lease := materialization.IssuedLeases[0]
 	if lease.ConditionalGrantID != "grant_gmail_read" || !lease.SingleUse || !lease.ExpiresAt.Equal(now.Add(15*time.Minute)) {
@@ -255,11 +255,11 @@ func TestExternalRuntimeTaskPacketPayloadAndParentMemoryAdmissionValidate(t *tes
 		CreatedAt:             now,
 	}
 	materialization := LeaseMaterialization{
-		ID:                       "lm_01J",
-		AgentID:                  "audience-child",
-		StandingWorkOrderID:      "swo_daily_audience_update",
-		StandingWorkOrderVersion: 3,
-		RuntimeSpecHash:          "sha256:runtime",
+		ID:                   "lm_01J",
+		AgentID:              "audience-child",
+		WorkAgreementID:      "wa_daily_audience_update",
+		WorkAgreementVersion: 3,
+		RuntimeSpecHash:      "sha256:runtime",
 		IssuedLeases: []MaterializedLease{{
 			LeaseID:                 "lease_01J",
 			ConditionalGrantID:      "grant_gmail_read",
@@ -367,11 +367,11 @@ func TestChildRuntimeAdapterWakeOperationFromTaskPacketBindsRuntimeSpec(t *testi
 		ExpectedResult:        ExpectedEffectResult{Kind: "effect_result", ArtifactPolicy: "bounded_redacted_summary"},
 		CreatedAt:             now,
 	}, LeaseMaterialization{
-		ID:                       "lm_01J",
-		AgentID:                  "audience-child",
-		StandingWorkOrderID:      "swo_daily_audience_update",
-		StandingWorkOrderVersion: 3,
-		RuntimeSpecHash:          specHash,
+		ID:                   "lm_01J",
+		AgentID:              "audience-child",
+		WorkAgreementID:      "wa_daily_audience_update",
+		WorkAgreementVersion: 3,
+		RuntimeSpecHash:      specHash,
 		IssuedLeases: []MaterializedLease{{
 			LeaseID:                 "lease_01J",
 			ConditionalGrantID:      "grant_gmail_read",

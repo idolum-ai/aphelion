@@ -14,11 +14,11 @@ but they remain subordinate to parent governance and policy boundaries.
 - Parent runtime owns durable-agent registry and wake loops.
 - Durable child creation supports progressive modes: `sketch` for a parent-side idea/prototype record, `local` for local workspace and memory without an external adapter, `external` for read-only adapter-backed observation, and `live` for channel-facing operation within policy.
 - Child execution stays scoped by charter, tool scope, and live policy.
-- Proposed external-runtime children may add admin-signed standing work orders:
+- Proposed external-runtime children may add admin-signed work agreements:
   future work under explicit schedules, triggers, credentials, channels,
   domains, endpoints, limits, and review gates. Those proposed contracts do not
   create ambient authority; the parent would materialize narrow leases only when
-  the work-order conditions match.
+  the work agreement conditions match.
 - Upward communication is through bounded review artifacts and summaries.
 - Telegram relay turns can target a child inline from DM using `agent:<agent_id> ...` and execute in child scope.
 - Child wakes can be transport-triggered (`telegram_update`) or scheduler-triggered (`poll`, `push`, `poll_or_push`) depending on the child role.
@@ -65,14 +65,14 @@ Code anchors:
 - Parent-child coordination uses bounded runtime channels: local bootstrap/stdout for isolated in-process execution, child-local inbox files for channel-delivered messages, and parent Tailnet `/control` for child-poll enrollment, policy, parent conversation, review artifacts, and acknowledgement. The parent does not require inbound HTTP on the child, and Tailnet reachability is paired with stored node identity and current hostname/tag posture through accepted signed control envelopes before the child can continue exercising the control plane.
 - Parent Aphelion must not accumulate child feature workarounds such as channel-, browser-, or site-specific readiness logic. Channel-specific probes and repairs belong in the child runtime environment or in pluggable adapters proposed through governance.
 - Adapter operations are governed commands, not ambient prompt authority. Parent runtime may schedule or manually trigger a command such as a read-only status heartbeat only when the durable child policy and grants allow it; prompts are payloads inside those commands and do not widen authority.
-- The proposed standing-work-order model treats future-work contracts as review
+- The proposed work agreement model treats future-work contracts as review
   and lease materialization inputs, not daemon privileges. A schedule or trigger
   would authorize Aphelion to materialize a bounded child wake/tool/channel
   lease, but the child would receive only the current lease, not the full
-  standing grant as executable authority.
-- Proposed standing work order renegotiation is a review path, not a privilege
+  conditional grant as executable authority.
+- Proposed work agreement renegotiation is a review path, not a privilege
   path. A child could propose an amendment, but only admin approval would
-  activate a new SOW version, and existing leases would stay fenced to the
+  activate a new work agreement version, and existing leases would stay fenced to the
   version that produced them.
 - The proposed durable child review routing separates platform authority from
   domain review. The Aphelion admin may remain the authority principal while a
@@ -81,7 +81,7 @@ Code anchors:
 - Proposed external-runtime gateway presence can allow admitted users to talk
   directly with the child persona. That direct dialogue is child-local
   operation, not parent conversation or tool authority; tools, secrets, parent
-  memory admission, cross-conversation sends, and SOW changes still cross the
+  memory admission, cross-conversation sends, and work agreement changes still cross the
   parent authority boundary.
 - Durable children ask upward through parent conversation, review artifacts, and capability/delegation proposals when they need system changes. The parent can grant or materialize generic capabilities, but should not become specialized application code for one child.
 - Parent guidance and child wake are separate authority events. Appending a

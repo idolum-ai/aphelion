@@ -6,7 +6,7 @@ flowchart LR
         direction TB
         Registry["Durable agent registry"]
         RuntimeSpec["Durable runtime spec<br/>(proposed)"]
-        WorkOrder["Standing work order<br/>conditional grants"]
+        WorkAgreement["Work agreement<br/>conditional grants"]
         Materializer["Lease materializer<br/>schedule / trigger / policy"]
         Wake["Wake compiler<br/>ChildTaskPacket"]
         Adapter["Runtime adapter registry"]
@@ -33,9 +33,9 @@ flowchart LR
 
     Operator --> Registry
     Registry --> RuntimeSpec
-    Registry --> WorkOrder
+    Registry --> WorkAgreement
     RuntimeSpec --> Materializer
-    WorkOrder --> Materializer
+    WorkAgreement --> Materializer
     Materializer --> Lease
     Lease --> Wake
     RuntimeSpec --> Wake

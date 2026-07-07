@@ -10,8 +10,8 @@ child security model: Aphelion owns identity, policy, wake authority, evidence,
 and review; the child runtime owns only its local process, state, and bounded
 task execution.
 
-Creating a durable child should also be able to mean signing a bounded standing
-work order up front. The admin can pre-authorize future work under explicit
+Creating a durable child should also be able to mean signing a bounded work
+agreement up front. The admin can pre-authorize future work under explicit
 conditions, such as schedule, audience, credential scope, runtime, domain,
 endpoint, duration, and review policy. At execution time, Aphelion still
 materializes narrow, consumable leases for the matching wake or action; the
@@ -39,7 +39,7 @@ Aphelion already has the durable-child ingredients needed for this direction:
 - A durable child identity and policy record in `core.DurableAgent`.
 - Child-local bootstrap, policy ceiling, storage roots, secret scopes, and
   network posture.
-- Standing work orders, conditional grants, and schedule/trigger evaluation for
+- Work agreements, conditional grants, and schedule/trigger evaluation for
   future child work.
 - Wake leases and continuation recovery around `durable_agent.wake_once`.
 - External-channel runtime state for adapter status, cursor/session reference,
@@ -115,7 +115,7 @@ pairing policy, memory policy, and revocation behavior. Parent memory admission
 remains a separate governed event.
 
 Aphelion injects itself at the effect boundary. The child must cross back
-through Aphelion for tools, secrets, external resources, standing-work-order
+through Aphelion for tools, secrets, external resources, work agreement
 changes, cross-conversation sends, broadcasts, webhooks, browser sessions,
 Gmail reads, parent memory writes, or any action outside the gateway dialogue
 grant. Free talking with the persona must not imply ambient OpenClaw/Hermes
@@ -208,7 +208,7 @@ for self-hosted Hermes/OpenClaw runtimes unless an upstream relationship
 explicitly authorizes stronger wording. Runtime names identify compatibility
 targets; they are not evidence of endorsement.
 
-### Standing Work Orders And Conditional Grants
+### Work Agreements And Conditional Grants
 
 Durable child creation may define future work, but executable authority is still
 materialized only when the schedule, trigger, policy, identity, credential, and
@@ -219,20 +219,20 @@ Use these layers:
 | Layer | Meaning |
 | --- | --- |
 | Policy ceiling | The maximum capability envelope the child can ever request or receive. |
-| Standing work order | Admin-signed statement of expected future work and conditions. |
+| Work agreement | Admin-signed statement of expected future work and conditions. |
 | Conditional grant | Reusable grant template bound to schedule, trigger, identity, tool/channel, limits, and review policy. |
 | Runtime lease | Short-lived, consumable authority generated for one wake/action after conditions match. |
-| Exception approval | Moment-to-moment approval for unplanned work outside the standing work order. |
+| Exception approval | Moment-to-moment approval for unplanned work outside the work agreement. |
 
-A standing work order is an operating mandate, not a daemon privilege. It can
+A work agreement is an operating mandate, not a daemon privilege. It can
 authorize future leases, but it must not directly expose provider credentials,
 channel tokens, browser sessions, webhooks, or public-send rights to the child.
 
-Review routing is part of the SOW:
+Review routing is part of the work agreement:
 
 | Principal | Responsibility |
 | --- | --- |
-| `authority_principal` | Approves platform/security authority such as runtime install, credential scopes, network classes, channel presence, and SOW widening. |
+| `authority_principal` | Approves platform/security authority such as runtime install, credential scopes, network classes, channel presence, and work agreement widening. |
 | `review_principal` | Approves domain/content outputs such as customer-facing drafts, audience updates, and routine business decisions. |
 | `resource_owner_principal` | Gives consent for private data, audience membership, third-party resource access, or externally owned accounts. |
 
@@ -246,29 +246,29 @@ Examples:
 - Daily audience update: every morning, read email through `gog` using a
   child-scoped Gmail credential, summarize relevant messages, and draft a
   WhatsApp update through Hermes/OpenClaw. Sending remains `review_first`
-  unless the standing work order names an autonomous-send audience and policy.
+  unless the work agreement names an autonomous-send audience and policy.
 - Friday site watch: on Friday afternoon, open a browser session for up to six
   hours against named domains, synthesize changes, and call an allowlisted IFTTT
   webhook only through an exact endpoint/method/payload lease.
 
-Standing work orders and conditional grants must be independently revocable and
-auditable. A revoked work order stops future lease materialization; it does not
+Work agreements and conditional grants must be independently revocable and
+auditable. A revoked work agreement stops future lease materialization; it does not
 need to edit the runtime spec or erase child memory. A child request outside the
-work order becomes an exception approval or a proposed work-order amendment.
+work agreement becomes an exception approval or a proposed work agreement amendment.
 
-### Work Order Renegotiation And Amendments
+### Work Agreement Renegotiation And Amendments
 
-Standing work orders should be renegotiable without turning renegotiation into
-authority. A child may propose that the SOW is stale, too narrow, too broad, or
+Work agreements should be renegotiable without turning renegotiation into
+authority. A child may propose that the work agreement is stale, too narrow, too broad, or
 missing a recurring exception. That proposal is a review artifact and typed
 evidence only; it must not widen the child's current leases.
 
 Use versioned amendments:
 
-- `active`: the signed SOW version currently eligible for lease
+- `active`: the signed work agreement version currently eligible for lease
   materialization.
 - `proposed`: a draft amendment awaiting admin review.
-- `superseded`: an older SOW version replaced by a signed amendment.
+- `superseded`: an older work agreement version replaced by a signed amendment.
 - `revoked`: a version that cannot materialize future leases.
 
 Every amendment must carry a structured diff that classifies the change as
@@ -279,16 +279,16 @@ widening change requires explicit admin approval and may require fresh runtime
 preflight, credential verification, or external-service terms review before the
 new version becomes active.
 
-Existing runtime leases are fenced to the SOW version and conditional grant
+Existing runtime leases are fenced to the work agreement version and conditional grant
 version that produced them. A later amendment cannot silently bless an old
-lease, and an old lease cannot be replayed under a new SOW version. Revocation
+lease, and an old lease cannot be replayed under a new work agreement version. Revocation
 or replacement should cancel reusable/pending leases where the lease contract
 allows cancellation and must prevent new leases from being materialized from the
 old version.
 
 Repeated exception approvals may produce an amendment recommendation, but not
 an automatic amendment. The operator should see the pattern, proposed new grant,
-risk delta, and suggested review gate before signing a replacement SOW.
+risk delta, and suggested review gate before signing a replacement work agreement.
 
 ## Runtime Modes
 
@@ -296,8 +296,8 @@ risk delta, and suggested review gate before signing a replacement SOW.
 
 This is the recommended first implementation target.
 
-The parent records a child wake claim, materializes any matching standing-work
-order leases, builds a bounded task packet, invokes the runtime adapter once,
+The parent records a child wake claim, materializes any matching work agreement
+leases, builds a bounded task packet, invokes the runtime adapter once,
 collects a typed result, and only then acknowledges parent conversation
 messages. The runtime may use its local memory and tools, but it does not keep
 an ambient public gateway open.
@@ -316,7 +316,7 @@ This is a later mode for children that need their own Telegram, WhatsApp, or
 other channel presence through Hermes/OpenClaw gateways.
 
 Starting a gateway is a larger authority crossing than a oneshot wake. It gives
-the child a standing external ingress and possibly outbound delivery. It should
+the child long-running external ingress and possibly outbound delivery. It should
 require an explicit `gateway_presence` grant and a current materialized
 start/restart lease that names:
 
@@ -337,7 +337,7 @@ For admitted senders, gateway presence can allow direct child-persona dialogue
 and same-conversation replies without parent approval on every turn. Broader
 effects still require separate leases or review: reading email, opening a
 browser, calling a webhook, broadcasting, sending outside the current
-conversation, changing the SOW, or writing parent memory must cross Aphelion's
+conversation, changing the work agreement, or writing parent memory must cross Aphelion's
 effect boundary.
 
 ### Remote Service Mode
@@ -362,9 +362,9 @@ parent process host. It must fail closed until the implementation defines:
 4. Aphelion creates or updates a durable-agent record with `runtime.kind`
    proposed as `aphelion`, `hermes`, or `openclaw`.
 5. The promotion wizard summarizes inherited context, proposed charter, storage
-   roots, runtime source, authority ceiling, and any standing work orders.
-6. Admin approval activates the durable child record and signed standing work
-   orders but does not automatically run it.
+   roots, runtime source, authority ceiling, and any work agreements.
+6. Admin approval activates the durable child record and signed work agreements
+   but does not automatically run it.
 7. A later `wake_once` consumes a `child_wake` lease, materializes matching
    conditional grants into narrow runtime leases, and invokes the configured
    runtime adapter.
@@ -372,7 +372,7 @@ parent process host. It must fail closed until the implementation defines:
 9. Aphelion records the result as typed durable evidence before advancing parent
    plans or acknowledging parent conversation messages.
 
-### Define A Standing Work Order
+### Define A Work Agreement
 
 1. Admin defines the durable child role, charter, policy ceiling, runtime kind,
    state roots, secret scopes, schedules, and review target.
@@ -380,10 +380,10 @@ parent process host. It must fail closed until the implementation defines:
    `gog` email read, WhatsApp draft, browser monitoring, or webhook alert.
 3. Aphelion validates that each grant names a credential scope, network class,
    allowed action, selectors, limits, review policy, and revocation behavior.
-4. The standing work order is stored as inactive until approved.
-5. Approval activates the work order but exposes no live credential or tool
+4. The work agreement is stored as inactive until approved.
+5. Approval activates the work agreement but exposes no live credential or tool
    authority to the child.
-6. When a schedule or trigger fires, Aphelion evaluates the active work order,
+6. When a schedule or trigger fires, Aphelion evaluates the active work agreement,
    runtime status, credential status, drift anchors, and policy constraints.
 7. Matching grants become short-lived runtime leases in the `ChildTaskPacket`.
    Non-matching, expired, revoked, or drifted grants produce typed blockers.
@@ -414,7 +414,7 @@ parent process host. It must fail closed until the implementation defines:
    state and secrets only.
 5. Admitted users can talk directly with the child persona, and the child can
    reply in that same conversation when the gateway contract allows it.
-6. If the child needs a tool, secret, external send, parent memory write, SOW
+6. If the child needs a tool, secret, external send, parent memory write, work agreement
    amendment, or other effect, the adapter routes that request through Aphelion
    authority and records the resulting lease, review, or blocker.
 7. Incoming channel events are reported upward as bounded evidence, review
@@ -457,6 +457,18 @@ Code anchors:
   adapts exact discovered-effect contracts into the existing continuation
   recovery contract path.
 
+Canonical vocabulary:
+
+- `WorkAgreement`: durable future-work intent, principals, schedules, review
+  routes, revocation, and amendment/version state.
+- `ConditionalGrant`: reusable authority template under a work agreement.
+- `LeaseMaterialization`: current executable authority emitted after conditions
+  match.
+- `ChildTaskPacket` and `ChildRuntimeAdapterOperation`: bounded runtime
+  invocation material.
+- `EffectResult`, review artifacts, and `ParentMemoryAdmission`: typed evidence
+  and admission, not authority.
+
 Canonical types should expand only when Aphelion needs a new stable surface for
 authority, routing, evidence, replay, revocation, review ownership, or memory
 admission. They should not expand for every provider action, channel quirk,
@@ -469,7 +481,7 @@ transport message
 -> gateway event
 -> admitted child dialogue
 -> optional effect request
--> standing grant or discovered-effect contract
+-> conditional grant or discovered-effect contract
 -> approval / lease materialization
 -> brokered invocation
 -> typed result evidence
@@ -478,7 +490,7 @@ transport message
 
 | Surface | Contract shape | Purpose |
 | --- | --- | --- |
-| Child creation | `StandingWorkOrder`, `ConditionalGrant`, principals | Define expected future work, policy ceiling, credential scope, and review routes. |
+| Child creation | `WorkAgreement`, `ConditionalGrant`, principals | Define expected future work, policy ceiling, credential scope, and review routes. |
 | Gateway start | `GatewayPresenceContract` | Allow direct child dialogue for admitted senders under channel, identity, memory, and revocation constraints. |
 | Inbound chat | `GatewayEvent` and `DialogueTurn` | Record sender/channel/message evidence and admission decision without treating chat as parent authority. |
 | Persona reply | `SameConversationReply` | Allow ordinary replies in the admitted conversation when the gateway contract permits it. |
@@ -563,12 +575,12 @@ Allowed `kind` values should start narrow:
 - `binary`: operator-provisioned executable with fingerprint.
 - `container_image`: image reference plus digest.
 
-### StandingWorkOrder
+### WorkAgreement
 
 ```json
 {
-  "standing_work_order": {
-    "id": "swo_daily_audience_update",
+  "work_agreement": {
+    "id": "wa_daily_audience_update",
     "version": 3,
     "agent_id": "audience-child",
     "status": "active",
@@ -608,14 +620,14 @@ Allowed `kind` values should start narrow:
 {
   "conditional_grant": {
     "id": "grant_gmail_read",
-    "standing_work_order_id": "swo_daily_audience_update",
-    "standing_work_order_version": 3,
+    "work_agreement_id": "wa_daily_audience_update",
+    "work_agreement_version": 3,
     "capability": "gmail_read",
     "tool": "gog",
     "actions": ["gmail.search", "gmail.read"],
     "credential_scope": "secret_scope:child:audience-child:gmail-read",
     "conditions": {
-      "triggers": ["schedule:swo_daily_audience_update"],
+      "triggers": ["schedule:wa_daily_audience_update"],
       "max_messages": 50
     },
     "constraints": {
@@ -635,8 +647,8 @@ Allowed `kind` values should start narrow:
 {
   "conditional_grant": {
     "id": "grant_friday_site_watch_ifttt",
-    "standing_work_order_id": "swo_friday_site_watch",
-    "standing_work_order_version": 1,
+    "work_agreement_id": "wa_friday_site_watch",
+    "work_agreement_version": 1,
     "capability": "web_monitor_and_alert",
     "actions": ["browser.monitor", "webhook.call"],
     "credential_scope": "secret_scope:child:watch-child:ifttt",
@@ -667,18 +679,18 @@ Allowed `kind` values should start narrow:
 ```
 
 Conditional grants are templates. They become executable only when Aphelion
-evaluates the standing work order and emits runtime leases for the current wake
+evaluates the work agreement and emits runtime leases for the current wake
 or action. Exact endpoint matching should happen on the normalized endpoint
 template before secret resolution; the resolved URL is execution material and
 must be redacted from logs and review artifacts.
 
-### StandingWorkOrderAmendment
+### WorkAgreementAmendment
 
 ```json
 {
-  "standing_work_order_amendment": {
-    "id": "swo_amend_01J...",
-    "standing_work_order_id": "swo_daily_audience_update",
+  "work_agreement_amendment": {
+    "id": "wa_amend_01J...",
+    "work_agreement_id": "wa_daily_audience_update",
     "from_version": 3,
     "proposed_version": 4,
     "proposed_by": "durable_agent:audience-child",
@@ -709,7 +721,7 @@ must be redacted from logs and review artifacts.
 ```
 
 An amendment proposal is not authority. Only an accepted amendment can create a
-new active SOW version, and only that active version can materialize future
+new active work agreement version, and only that active version can materialize future
 leases.
 
 ### LeaseMaterialization
@@ -719,8 +731,8 @@ leases.
   "lease_materialization": {
     "id": "lm_01J...",
     "agent_id": "audience-child",
-    "standing_work_order_id": "swo_daily_audience_update",
-    "standing_work_order_version": 3,
+    "work_agreement_id": "wa_daily_audience_update",
+    "work_agreement_version": 3,
     "matched_conditions": {
       "trigger": "schedule",
       "schedule_tick": "2026-07-07T13:00:00-04:00"
@@ -850,13 +862,13 @@ Minimum operations:
   "guidance": [
     {
       "id": "parent_msg_123",
-      "text": "Use the daily email review SOW and draft the WhatsApp update."
+      "text": "Use the daily email review work agreement and draft the WhatsApp update."
     }
   ],
   "authority": {
     "wake_lease_id": "lease_01J...",
-    "standing_work_order_id": "swo_daily_audience_update",
-    "standing_work_order_version": 3,
+    "work_agreement_id": "wa_daily_audience_update",
+    "work_agreement_version": 3,
     "lease_materialization_id": "lm_01J...",
     "materialized_leases": [
       {
@@ -951,7 +963,7 @@ do not acknowledge parent conversation messages.
     "runtime_kind": "hermes",
     "channel": "whatsapp",
     "account": "audience-line",
-    "standing_work_order_id": "swo_daily_audience_update",
+    "work_agreement_id": "wa_daily_audience_update",
     "conditional_grant_id": "grant_whatsapp_draft",
     "inbound_mode": "paired_contacts_only",
     "dialogue_mode": "direct_child_persona",
@@ -972,7 +984,7 @@ do not acknowledge parent conversation messages.
 ```
 
 This contract belongs in a capability request/grant path. It may be referenced
-by a standing work order, but it should not be silently inferred from a runtime
+by a work agreement, but it should not be silently inferred from a runtime
 kind, channel name, or schedule.
 
 Gateway contracts must encode sender identity and memory admission explicitly.
@@ -984,9 +996,9 @@ contaminants unless the grant permits that memory admission path.
 conversation. `outbound_delivery_policy` covers broader delivery such as
 customer-facing drafts, named-audience sends, cross-conversation messages, or
 broadcasts. The first may be free dialogue under the gateway grant; the second
-is an effect boundary and must follow the SOW, lease, or review route.
+is an effect boundary and must follow the work agreement, lease, or review route.
 
-Per-message evidence belongs in event records, not in the standing gateway
+Per-message evidence belongs in event records, not in the gateway presence
 contract. A gateway event should carry fields such as transport message ID,
 sender ID, channel ID/account ID, adapter timestamp, raw payload hash, and the
 gateway contract/version that admitted or rejected the event.
@@ -1047,9 +1059,9 @@ Preferred Aphelion mapping:
 | --- | --- |
 | Does the durable child exist? | Aphelion session durable-agent record |
 | What runtime is configured? | Proposed Aphelion durable runtime spec |
-| What future work is pre-authorized? | Active Aphelion standing work order |
-| Which SOW amendments are pending? | Proposed SOW amendment records and review artifacts |
-| Which future actions may become leases? | Active conditional grants under that work order |
+| What future work is pre-authorized? | Active Aphelion work agreement |
+| Which work agreement amendments are pending? | Proposed work agreement amendment records and review artifacts |
+| Which future actions may become leases? | Active conditional grants under that work agreement |
 | May the child wake now? | Active Aphelion continuation lease and policy |
 | What authority is in this task packet? | Lease materialization for the current wake/action |
 | May the runtime start a public gateway? | Active `gateway_presence` grant plus current start/restart lease |
@@ -1067,11 +1079,11 @@ health traces, but those projections must keep source attribution.
 | --- | --- |
 | Runtime executable missing | Record `runtime_missing`, do not consume parent guidance as acknowledged. |
 | Runtime source drift | Mark runtime status stale and require re-attestation or operator repair. |
-| Standing work order condition does not match | Do not materialize leases; record skipped or blocked wake evidence. |
+| Work agreement condition does not match | Do not materialize leases; record skipped or blocked wake evidence. |
 | Conditional grant revoked or expired | Block future lease materialization and surface the grant state. |
-| Child proposes SOW amendment | Record typed proposal/review artifact; do not widen current leases. |
-| SOW amendment approved while old lease exists | New leases use the new SOW version; old leases remain fenced to their original version and cannot be replayed under the new one. |
-| SOW amendment rejected | Keep active SOW unchanged and record the rejected proposal as evidence. |
+| Child proposes work agreement amendment | Record typed proposal/review artifact; do not widen current leases. |
+| Work agreement amendment approved while old lease exists | New leases use the new work agreement version; old leases remain fenced to their original version and cannot be replayed under the new one. |
+| Work agreement amendment rejected | Keep active work agreement unchanged and record the rejected proposal as evidence. |
 | Missing child state root | Block wake before invoking runtime. |
 | Missing credential for gateway | Block gateway start; do not start degraded public presence. |
 | Child result claims new authority | Treat as projection and convert to capability request if appropriate. |
@@ -1081,23 +1093,23 @@ health traces, but those projections must keep source attribution.
 
 ## Logical Implementation Roadmap
 
-### 1. Standing Work Order Contract
+### 1. Work Agreement Contract
 
-Define standing work order normalization, validation, operator display, and
+Define work agreement normalization, validation, operator display, and
 lease materialization before runtime-specific adapters. The contract should
 describe the durable child, policy ceiling, schedules/triggers, conditional
 grants, credential scopes, network classes, review policy, revocation behavior,
 versioning/amendment state, and the runtime leases emitted for a wake/action.
 
 The runtime adapter should receive only materialized leases in the task packet,
-not the full standing work order as authority.
+not the full work agreement as authority.
 
-### 2. Work Order Renegotiation
+### 2. Work Agreement Renegotiation
 
 Add amendment proposal, diff classification, review, activation, rejection, and
 supersession semantics before runtime-specific adapters. Amendment proposals
-from children are typed evidence; admin approval creates a new active SOW
-version. Lease materialization must bind every emitted lease to the SOW and
+from children are typed evidence; admin approval creates a new active work agreement
+version. Lease materialization must bind every emitted lease to the work agreement and
 conditional-grant versions that produced it.
 
 ### 3. Generic Runtime Contract
@@ -1117,7 +1129,7 @@ typed blocker that can become a capability/delegation request.
 
 ### 5. Oneshot Wake Executor
 
-Add a wake path that evaluates active standing work orders, materializes
+Add a wake path that evaluates active work agreements, materializes
 matching conditional grants into narrow leases, builds a `ChildTaskPacket`,
 invokes the selected adapter once, records a `ChildTaskResult`, and
 acknowledges parent conversation messages only when the result says they were
@@ -1161,11 +1173,11 @@ their own service commands.
 
 ### 10. Operator UX
 
-Expose runtime kind, mode, standing work orders, active/proposed versions,
+Expose runtime kind, mode, work agreements, active/proposed versions,
 conditional grants, last lease materialization, status, last wake, blockers, and
 repair actions in thread promotion, `/agents`, and health traces. Keep
 implementation details behind diagnostics unless the operator is granting
-runtime installation, gateway presence, secret scopes, or standing work-order
+runtime installation, gateway presence, secret scopes, or work agreement
 authority.
 
 ### 11. Evaluation And Live Smoke
@@ -1185,11 +1197,11 @@ They are UX baselines for future mockups, not implemented transcript fixtures.
 | Area | Required scenarios |
 | --- | --- |
 | Runtime spec | Valid Hermes/OpenClaw specs, missing roots, unknown kind, invalid source, env containment. |
-| Standing work order | No lease before schedule/trigger match; matching schedule materializes only named grants; revoked or expired work order prevents future leases. |
-| SOW renegotiation | Child amendment proposal creates no authority; admin-approved amendment creates a new active version; rejected amendment leaves current SOW unchanged. |
-| SOW lease fencing | Old lease cannot be replayed under a newer SOW; widened amendment requires approval and preflight when needed; narrowed/revoked grant blocks future leases. |
+| Work agreement | No lease before schedule/trigger match; matching schedule materializes only named grants; revoked or expired work agreement prevents future leases. |
+| Work agreement renegotiation | Child amendment proposal creates no authority; admin-approved amendment creates a new active version; rejected amendment leaves current work agreement unchanged. |
+| Work agreement lease fencing | Old lease cannot be replayed under a newer work agreement; widened amendment requires approval and preflight when needed; narrowed/revoked grant blocks future leases. |
 | Reviewer routing | Platform/security changes route to `authority_principal`; content/domain approvals route to `review_principal`; private-resource consent routes to `resource_owner_principal`. |
-| Conversation baselines | Mock flows expose SOW version, matched condition, lease materialization, reviewer route, typed blocker, and accepted result without treating prose as authority. |
+| Conversation baselines | Mock flows expose work agreement version, matched condition, lease materialization, reviewer route, typed blocker, and accepted result without treating prose as authority. |
 | Contract transformation | Gateway events become dialogue turns; dialogue turns may produce effect requests; effect requests compile into known grants or discovered-effect contracts; only leases become executable authority. |
 | Canonical/dynamic split | New canonical types are added only for authority, routing, evidence, replay, revocation, review ownership, or memory-admission boundaries; provider-specific actions stay inside discovered-effect contract data. |
 | Conditional grants | Daily `gog` email read grants search/read only; WhatsApp draft does not imply send; autonomous send requires named audience and outbound policy. |
@@ -1203,7 +1215,7 @@ They are UX baselines for future mockups, not implemented transcript fixtures.
 | Runtime failures | Missing executable, timeout, stale source, failed preflight, repeated same blocker/backoff, late result after timeout, duplicate result after retry. |
 | Gateway presence | Start requires explicit grant and materialized start lease; revoked grant stops runtime and prevents restart; unknown senders follow grant-defined pairing/memory admission. |
 | Direct child dialogue | Admitted sender can chat directly with the child and receive same-conversation replies under the gateway contract; raw chat does not become parent conversation memory by default. |
-| Gateway effect boundary | Direct dialogue cannot use OpenClaw/Hermes native tools, secrets, browser, email, webhooks, cross-conversation sends, broadcasts, SOW amendments, or parent memory writes without an Aphelion lease/review path. |
+| Gateway effect boundary | Direct dialogue cannot use OpenClaw/Hermes native tools, secrets, browser, email, webhooks, cross-conversation sends, broadcasts, work agreement amendments, or parent memory writes without an Aphelion lease/review path. |
 | Secret isolation | Parent Telegram/GitHub/provider tokens are not inherited unless named in child scope. |
 | Hermes profile | Child-local `HERMES_HOME`, pinned source, ACP/oneshot preflight, gateway gated. |
 | OpenClaw profile | Ephemeral loopback gateway per oneshot wake, child-local `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`, token not exposed in argv, public channels disabled, long-lived gateway gated. |
@@ -1214,7 +1226,7 @@ They are UX baselines for future mockups, not implemented transcript fixtures.
   Protocol residue belongs under adapter state.
 - Do not use runtime kind as authority. `runtime_kind=openclaw` does not imply
   WhatsApp access, network access, file access, or public reply authority.
-- Do not treat a standing work order as ambient runtime authority. It must
+- Do not treat a work agreement as ambient runtime authority. It must
   compile into bounded leases at wake/action time.
 - Do not collapse email read, browser monitoring, webhook calls, channel draft,
   and channel send into one broad external-access grant.
@@ -1222,10 +1234,10 @@ They are UX baselines for future mockups, not implemented transcript fixtures.
   quirk, endpoint shape, or runtime-specific operation. Use discovered-effect
   contracts for dynamic specifics unless the shape becomes a stable governance
   boundary.
-- Do not route customer content approval to the Aphelion admin once the SOW names
+- Do not route customer content approval to the Aphelion admin once the work agreement names
   a customer review principal.
 - Do not let a customer reviewer approve platform/security authority unless the
-  SOW explicitly names that principal as authority principal too.
+  work agreement explicitly names that principal as authority principal too.
 - Do not treat an upstream runtime license as permission to use third-party
   channels, hosted services, model providers, trademarks, or parent credentials.
 - Do not let child gateways acknowledge parent conversation messages by mere

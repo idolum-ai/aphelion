@@ -68,22 +68,22 @@ type RuntimeEntrypoint struct {
 	Command []string `json:"command,omitempty"`
 }
 
-type StandingWorkOrder struct {
-	ID                  string                 `json:"id,omitempty"`
-	Version             int                    `json:"version,omitempty"`
-	AgentID             string                 `json:"agent_id,omitempty"`
-	Status              string                 `json:"status,omitempty"`
-	Title               string                 `json:"title,omitempty"`
-	RuntimeKind         string                 `json:"runtime_kind,omitempty"`
-	PolicyCeilingRef    string                 `json:"policy_ceiling_ref,omitempty"`
-	Principals          StandingWorkPrincipals `json:"principals,omitempty"`
-	Schedule            ScheduleSpec           `json:"schedule,omitempty"`
-	ReviewPolicy        ReviewPolicy           `json:"review_policy,omitempty"`
-	ConditionalGrantIDs []string               `json:"conditional_grant_ids,omitempty"`
-	Revocation          RevocationPolicy       `json:"revocation,omitempty"`
+type WorkAgreement struct {
+	ID                  string                  `json:"id,omitempty"`
+	Version             int                     `json:"version,omitempty"`
+	AgentID             string                  `json:"agent_id,omitempty"`
+	Status              string                  `json:"status,omitempty"`
+	Title               string                  `json:"title,omitempty"`
+	RuntimeKind         string                  `json:"runtime_kind,omitempty"`
+	PolicyCeilingRef    string                  `json:"policy_ceiling_ref,omitempty"`
+	Principals          WorkAgreementPrincipals `json:"principals,omitempty"`
+	Schedule            ScheduleSpec            `json:"schedule,omitempty"`
+	ReviewPolicy        ReviewPolicy            `json:"review_policy,omitempty"`
+	ConditionalGrantIDs []string                `json:"conditional_grant_ids,omitempty"`
+	Revocation          RevocationPolicy        `json:"revocation,omitempty"`
 }
 
-type StandingWorkPrincipals struct {
+type WorkAgreementPrincipals struct {
 	AuthorityPrincipal      string   `json:"authority_principal,omitempty"`
 	ReviewPrincipal         string   `json:"review_principal,omitempty"`
 	ResourceOwnerPrincipals []string `json:"resource_owner_principals,omitempty"`
@@ -107,17 +107,17 @@ type RevocationPolicy struct {
 }
 
 type ConditionalGrant struct {
-	ID                       string                     `json:"id,omitempty"`
-	StandingWorkOrderID      string                     `json:"standing_work_order_id,omitempty"`
-	StandingWorkOrderVersion int                        `json:"standing_work_order_version,omitempty"`
-	Capability               string                     `json:"capability,omitempty"`
-	Tool                     string                     `json:"tool,omitempty"`
-	Actions                  []string                   `json:"actions,omitempty"`
-	CredentialScope          string                     `json:"credential_scope,omitempty"`
-	Conditions               ConditionalGrantConditions `json:"conditions,omitempty"`
-	Constraints              map[string]json.RawMessage `json:"constraints,omitempty"`
-	Materializes             GrantMaterialization       `json:"materializes,omitempty"`
-	Status                   string                     `json:"status,omitempty"`
+	ID                   string                     `json:"id,omitempty"`
+	WorkAgreementID      string                     `json:"work_agreement_id,omitempty"`
+	WorkAgreementVersion int                        `json:"work_agreement_version,omitempty"`
+	Capability           string                     `json:"capability,omitempty"`
+	Tool                 string                     `json:"tool,omitempty"`
+	Actions              []string                   `json:"actions,omitempty"`
+	CredentialScope      string                     `json:"credential_scope,omitempty"`
+	Conditions           ConditionalGrantConditions `json:"conditions,omitempty"`
+	Constraints          map[string]json.RawMessage `json:"constraints,omitempty"`
+	Materializes         GrantMaterialization       `json:"materializes,omitempty"`
+	Status               string                     `json:"status,omitempty"`
 }
 
 type ConditionalGrantConditions struct {
@@ -134,9 +134,9 @@ type GrantMaterialization struct {
 	SingleUse   bool   `json:"single_use,omitempty"`
 }
 
-type StandingWorkOrderAmendment struct {
+type WorkAgreementAmendment struct {
 	ID                     string                     `json:"id,omitempty"`
-	StandingWorkOrderID    string                     `json:"standing_work_order_id,omitempty"`
+	WorkAgreementID        string                     `json:"work_agreement_id,omitempty"`
 	FromVersion            int                        `json:"from_version,omitempty"`
 	ProposedVersion        int                        `json:"proposed_version,omitempty"`
 	ProposedBy             string                     `json:"proposed_by,omitempty"`
@@ -149,14 +149,14 @@ type StandingWorkOrderAmendment struct {
 }
 
 type LeaseMaterialization struct {
-	ID                       string              `json:"id,omitempty"`
-	AgentID                  string              `json:"agent_id,omitempty"`
-	StandingWorkOrderID      string              `json:"standing_work_order_id,omitempty"`
-	StandingWorkOrderVersion int                 `json:"standing_work_order_version,omitempty"`
-	MatchedConditions        MatchedConditions   `json:"matched_conditions,omitempty"`
-	RuntimeSpecHash          string              `json:"runtime_spec_hash,omitempty"`
-	IssuedLeases             []MaterializedLease `json:"issued_leases,omitempty"`
-	CreatedAt                time.Time           `json:"created_at,omitempty"`
+	ID                   string              `json:"id,omitempty"`
+	AgentID              string              `json:"agent_id,omitempty"`
+	WorkAgreementID      string              `json:"work_agreement_id,omitempty"`
+	WorkAgreementVersion int                 `json:"work_agreement_version,omitempty"`
+	MatchedConditions    MatchedConditions   `json:"matched_conditions,omitempty"`
+	RuntimeSpecHash      string              `json:"runtime_spec_hash,omitempty"`
+	IssuedLeases         []MaterializedLease `json:"issued_leases,omitempty"`
+	CreatedAt            time.Time           `json:"created_at,omitempty"`
 }
 
 type MatchedConditions struct {
@@ -182,7 +182,7 @@ type GatewayPresenceContract struct {
 	RuntimeKind                 string   `json:"runtime_kind,omitempty"`
 	Channel                     string   `json:"channel,omitempty"`
 	Account                     string   `json:"account,omitempty"`
-	StandingWorkOrderID         string   `json:"standing_work_order_id,omitempty"`
+	WorkAgreementID             string   `json:"work_agreement_id,omitempty"`
 	ConditionalGrantID          string   `json:"conditional_grant_id,omitempty"`
 	InboundMode                 string   `json:"inbound_mode,omitempty"`
 	DialogueMode                string   `json:"dialogue_mode,omitempty"`
@@ -403,46 +403,46 @@ func ValidateDurableExternalRuntimeSpec(spec DurableExternalRuntimeSpec) error {
 	return nil
 }
 
-func NormalizeStandingWorkOrder(order StandingWorkOrder) StandingWorkOrder {
-	order.ID = strings.TrimSpace(order.ID)
-	order.AgentID = strings.TrimSpace(order.AgentID)
-	order.Status = normalizeExternalRuntimeToken(order.Status)
-	order.Title = strings.TrimSpace(order.Title)
-	order.RuntimeKind = normalizeExternalRuntimeToken(order.RuntimeKind)
-	order.PolicyCeilingRef = strings.TrimSpace(order.PolicyCeilingRef)
-	order.Principals.AuthorityPrincipal = strings.TrimSpace(order.Principals.AuthorityPrincipal)
-	order.Principals.ReviewPrincipal = strings.TrimSpace(order.Principals.ReviewPrincipal)
-	order.Principals.ResourceOwnerPrincipals = normalizeUniqueStrings(order.Principals.ResourceOwnerPrincipals)
-	order.Schedule.Kind = normalizeExternalRuntimeToken(order.Schedule.Kind)
-	order.Schedule.Expression = strings.TrimSpace(order.Schedule.Expression)
-	order.Schedule.Timezone = strings.TrimSpace(order.Schedule.Timezone)
-	order.ReviewPolicy.DefaultOutbound = normalizeExternalRuntimeToken(order.ReviewPolicy.DefaultOutbound)
-	order.ReviewPolicy.SendRequires = normalizeExternalRuntimeToken(order.ReviewPolicy.SendRequires)
-	order.ReviewPolicy.TrialMode = normalizeExternalRuntimeToken(order.ReviewPolicy.TrialMode)
-	order.ConditionalGrantIDs = normalizeUniqueStrings(order.ConditionalGrantIDs)
-	return order
+func NormalizeWorkAgreement(agreement WorkAgreement) WorkAgreement {
+	agreement.ID = strings.TrimSpace(agreement.ID)
+	agreement.AgentID = strings.TrimSpace(agreement.AgentID)
+	agreement.Status = normalizeExternalRuntimeToken(agreement.Status)
+	agreement.Title = strings.TrimSpace(agreement.Title)
+	agreement.RuntimeKind = normalizeExternalRuntimeToken(agreement.RuntimeKind)
+	agreement.PolicyCeilingRef = strings.TrimSpace(agreement.PolicyCeilingRef)
+	agreement.Principals.AuthorityPrincipal = strings.TrimSpace(agreement.Principals.AuthorityPrincipal)
+	agreement.Principals.ReviewPrincipal = strings.TrimSpace(agreement.Principals.ReviewPrincipal)
+	agreement.Principals.ResourceOwnerPrincipals = normalizeUniqueStrings(agreement.Principals.ResourceOwnerPrincipals)
+	agreement.Schedule.Kind = normalizeExternalRuntimeToken(agreement.Schedule.Kind)
+	agreement.Schedule.Expression = strings.TrimSpace(agreement.Schedule.Expression)
+	agreement.Schedule.Timezone = strings.TrimSpace(agreement.Schedule.Timezone)
+	agreement.ReviewPolicy.DefaultOutbound = normalizeExternalRuntimeToken(agreement.ReviewPolicy.DefaultOutbound)
+	agreement.ReviewPolicy.SendRequires = normalizeExternalRuntimeToken(agreement.ReviewPolicy.SendRequires)
+	agreement.ReviewPolicy.TrialMode = normalizeExternalRuntimeToken(agreement.ReviewPolicy.TrialMode)
+	agreement.ConditionalGrantIDs = normalizeUniqueStrings(agreement.ConditionalGrantIDs)
+	return agreement
 }
 
-func ValidateStandingWorkOrder(order StandingWorkOrder) error {
-	order = NormalizeStandingWorkOrder(order)
-	if order.ID == "" || order.AgentID == "" {
-		return fmt.Errorf("standing work order requires id and agent_id")
+func ValidateWorkAgreement(agreement WorkAgreement) error {
+	agreement = NormalizeWorkAgreement(agreement)
+	if agreement.ID == "" || agreement.AgentID == "" {
+		return fmt.Errorf("work agreement requires id and agent_id")
 	}
-	if order.Version <= 0 {
-		return fmt.Errorf("standing work order requires positive version")
+	if agreement.Version <= 0 {
+		return fmt.Errorf("work agreement requires positive version")
 	}
-	if order.Status != "" && order.Status != "active" {
-		return fmt.Errorf("standing work order status %q cannot materialize leases", order.Status)
+	if agreement.Status != "" && agreement.Status != "active" {
+		return fmt.Errorf("work agreement status %q cannot materialize leases", agreement.Status)
 	}
-	if order.Principals.AuthorityPrincipal == "" {
-		return fmt.Errorf("standing work order requires authority_principal")
+	if agreement.Principals.AuthorityPrincipal == "" {
+		return fmt.Errorf("work agreement requires authority_principal")
 	}
 	return nil
 }
 
 func NormalizeConditionalGrant(grant ConditionalGrant) ConditionalGrant {
 	grant.ID = strings.TrimSpace(grant.ID)
-	grant.StandingWorkOrderID = strings.TrimSpace(grant.StandingWorkOrderID)
+	grant.WorkAgreementID = strings.TrimSpace(grant.WorkAgreementID)
 	grant.Capability = normalizeExternalRuntimeToken(grant.Capability)
 	grant.Tool = strings.TrimSpace(grant.Tool)
 	grant.Actions = normalizeExternalRuntimeTokens(grant.Actions)
@@ -460,11 +460,11 @@ func NormalizeConditionalGrant(grant ConditionalGrant) ConditionalGrant {
 
 func ValidateConditionalGrant(grant ConditionalGrant) error {
 	grant = NormalizeConditionalGrant(grant)
-	if grant.ID == "" || grant.StandingWorkOrderID == "" {
-		return fmt.Errorf("conditional grant requires id and standing_work_order_id")
+	if grant.ID == "" || grant.WorkAgreementID == "" {
+		return fmt.Errorf("conditional grant requires id and work_agreement_id")
 	}
-	if grant.StandingWorkOrderVersion <= 0 {
-		return fmt.Errorf("conditional grant requires positive standing_work_order_version")
+	if grant.WorkAgreementVersion <= 0 {
+		return fmt.Errorf("conditional grant requires positive work_agreement_version")
 	}
 	if grant.Capability == "" {
 		return fmt.Errorf("conditional grant requires capability")
@@ -484,9 +484,9 @@ func ValidateConditionalGrant(grant ConditionalGrant) error {
 	return validateExternalRuntimeRawMap("conditional grant constraints", grant.Constraints)
 }
 
-func NormalizeStandingWorkOrderAmendment(amendment StandingWorkOrderAmendment) StandingWorkOrderAmendment {
+func NormalizeWorkAgreementAmendment(amendment WorkAgreementAmendment) WorkAgreementAmendment {
 	amendment.ID = strings.TrimSpace(amendment.ID)
-	amendment.StandingWorkOrderID = strings.TrimSpace(amendment.StandingWorkOrderID)
+	amendment.WorkAgreementID = strings.TrimSpace(amendment.WorkAgreementID)
 	amendment.ProposedBy = strings.TrimSpace(amendment.ProposedBy)
 	amendment.Status = normalizeExternalRuntimeToken(amendment.Status)
 	amendment.Reason = strings.TrimSpace(amendment.Reason)
@@ -496,21 +496,21 @@ func NormalizeStandingWorkOrderAmendment(amendment StandingWorkOrderAmendment) S
 	return amendment
 }
 
-func ValidateStandingWorkOrderAmendment(amendment StandingWorkOrderAmendment) error {
-	amendment = NormalizeStandingWorkOrderAmendment(amendment)
-	if amendment.ID == "" || amendment.StandingWorkOrderID == "" || amendment.ProposedBy == "" {
-		return fmt.Errorf("standing work order amendment requires id, standing_work_order_id, and proposed_by")
+func ValidateWorkAgreementAmendment(amendment WorkAgreementAmendment) error {
+	amendment = NormalizeWorkAgreementAmendment(amendment)
+	if amendment.ID == "" || amendment.WorkAgreementID == "" || amendment.ProposedBy == "" {
+		return fmt.Errorf("work agreement amendment requires id, work_agreement_id, and proposed_by")
 	}
 	if amendment.FromVersion <= 0 || amendment.ProposedVersion <= 0 || amendment.ProposedVersion == amendment.FromVersion {
-		return fmt.Errorf("standing work order amendment requires distinct positive versions")
+		return fmt.Errorf("work agreement amendment requires distinct positive versions")
 	}
 	if len(amendment.ChangeClass) == 0 {
-		return fmt.Errorf("standing work order amendment requires change_class")
+		return fmt.Errorf("work agreement amendment requires change_class")
 	}
-	if err := validateExternalRuntimeRawMap("standing work order amendment diff", amendment.Diff); err != nil {
+	if err := validateExternalRuntimeRawMap("work agreement amendment diff", amendment.Diff); err != nil {
 		return err
 	}
-	return validateExternalRuntimeRawMap("standing work order amendment risk_delta", amendment.RiskDelta)
+	return validateExternalRuntimeRawMap("work agreement amendment risk_delta", amendment.RiskDelta)
 }
 
 func NormalizeGatewayPresenceContract(contract GatewayPresenceContract) GatewayPresenceContract {
@@ -523,7 +523,7 @@ func NormalizeGatewayPresenceContract(contract GatewayPresenceContract) GatewayP
 	contract.RuntimeKind = normalizeExternalRuntimeToken(contract.RuntimeKind)
 	contract.Channel = normalizeExternalRuntimeToken(contract.Channel)
 	contract.Account = strings.TrimSpace(contract.Account)
-	contract.StandingWorkOrderID = strings.TrimSpace(contract.StandingWorkOrderID)
+	contract.WorkAgreementID = strings.TrimSpace(contract.WorkAgreementID)
 	contract.ConditionalGrantID = strings.TrimSpace(contract.ConditionalGrantID)
 	contract.InboundMode = normalizeExternalRuntimeToken(contract.InboundMode)
 	contract.DialogueMode = normalizeExternalRuntimeToken(contract.DialogueMode)
@@ -570,7 +570,7 @@ func ValidateGatewayPresenceContract(contract GatewayPresenceContract) error {
 func NormalizeLeaseMaterialization(materialization LeaseMaterialization) LeaseMaterialization {
 	materialization.ID = strings.TrimSpace(materialization.ID)
 	materialization.AgentID = strings.TrimSpace(materialization.AgentID)
-	materialization.StandingWorkOrderID = strings.TrimSpace(materialization.StandingWorkOrderID)
+	materialization.WorkAgreementID = strings.TrimSpace(materialization.WorkAgreementID)
 	materialization.MatchedConditions.Trigger = strings.TrimSpace(materialization.MatchedConditions.Trigger)
 	materialization.RuntimeSpecHash = strings.TrimSpace(materialization.RuntimeSpecHash)
 	for i := range materialization.IssuedLeases {
@@ -599,11 +599,11 @@ func NormalizeMaterializedLease(lease MaterializedLease) MaterializedLease {
 
 func ValidateLeaseMaterialization(materialization LeaseMaterialization) error {
 	materialization = NormalizeLeaseMaterialization(materialization)
-	if materialization.ID == "" || materialization.AgentID == "" || materialization.StandingWorkOrderID == "" {
-		return fmt.Errorf("lease materialization requires id, agent_id, and standing_work_order_id")
+	if materialization.ID == "" || materialization.AgentID == "" || materialization.WorkAgreementID == "" {
+		return fmt.Errorf("lease materialization requires id, agent_id, and work_agreement_id")
 	}
-	if materialization.StandingWorkOrderVersion <= 0 {
-		return fmt.Errorf("lease materialization requires positive standing_work_order_version")
+	if materialization.WorkAgreementVersion <= 0 {
+		return fmt.Errorf("lease materialization requires positive work_agreement_version")
 	}
 	if materialization.RuntimeSpecHash == "" {
 		return fmt.Errorf("lease materialization requires runtime_spec_hash")
@@ -822,9 +822,9 @@ func EffectRequestFromDialogue(turn DialogueTurn, input EffectRequestInput) (Eff
 	}, nil
 }
 
-func MaterializeStandingWorkOrderLeases(order StandingWorkOrder, grants []ConditionalGrant, trigger string, runtimeSpecHash string, now time.Time) (LeaseMaterialization, error) {
-	order = NormalizeStandingWorkOrder(order)
-	if err := ValidateStandingWorkOrder(order); err != nil {
+func MaterializeWorkAgreementLeases(agreement WorkAgreement, grants []ConditionalGrant, trigger string, runtimeSpecHash string, now time.Time) (LeaseMaterialization, error) {
+	agreement = NormalizeWorkAgreement(agreement)
+	if err := ValidateWorkAgreement(agreement); err != nil {
 		return LeaseMaterialization{}, err
 	}
 	trigger = strings.TrimSpace(trigger)
@@ -838,8 +838,8 @@ func MaterializeStandingWorkOrderLeases(order StandingWorkOrder, grants []Condit
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	allowedGrantIDs := make(map[string]struct{}, len(order.ConditionalGrantIDs))
-	for _, id := range order.ConditionalGrantIDs {
+	allowedGrantIDs := make(map[string]struct{}, len(agreement.ConditionalGrantIDs))
+	for _, id := range agreement.ConditionalGrantIDs {
 		allowedGrantIDs[id] = struct{}{}
 	}
 	var issued []MaterializedLease
@@ -848,7 +848,7 @@ func MaterializeStandingWorkOrderLeases(order StandingWorkOrder, grants []Condit
 		if _, ok := allowedGrantIDs[grant.ID]; !ok {
 			continue
 		}
-		if grant.StandingWorkOrderID != order.ID || grant.StandingWorkOrderVersion != order.Version {
+		if grant.WorkAgreementID != agreement.ID || grant.WorkAgreementVersion != agreement.Version {
 			continue
 		}
 		if !conditionalGrantMatchesTrigger(grant, trigger) {
@@ -857,11 +857,11 @@ func MaterializeStandingWorkOrderLeases(order StandingWorkOrder, grants []Condit
 		if err := ValidateConditionalGrant(grant); err != nil {
 			return LeaseMaterialization{}, err
 		}
-		leaseSeed := externalRuntimeID("lease_seed", order.ID, fmt.Sprint(order.Version), grant.ID, trigger, now.UTC().Format(time.RFC3339Nano))
+		leaseSeed := externalRuntimeID("lease_seed", agreement.ID, fmt.Sprint(agreement.Version), grant.ID, trigger, now.UTC().Format(time.RFC3339Nano))
 		issued = append(issued, MaterializedLease{
 			LeaseID:                 "lease_" + strings.TrimPrefix(leaseSeed, "lease_seed-"),
 			ConditionalGrantID:      grant.ID,
-			ConditionalGrantVersion: grant.StandingWorkOrderVersion,
+			ConditionalGrantVersion: grant.WorkAgreementVersion,
 			Capability:              grant.Capability,
 			LeaseKind:               grant.Materializes.LeaseKind,
 			ReviewRoute:             grant.Materializes.ReviewRoute,
@@ -870,17 +870,17 @@ func MaterializeStandingWorkOrderLeases(order StandingWorkOrder, grants []Condit
 		})
 	}
 	if len(issued) == 0 {
-		return LeaseMaterialization{}, fmt.Errorf("standing work order has no matching conditional grants for trigger %q", trigger)
+		return LeaseMaterialization{}, fmt.Errorf("work agreement has no matching conditional grants for trigger %q", trigger)
 	}
 	return LeaseMaterialization{
-		ID:                       externalRuntimeID("lm", order.ID, fmt.Sprint(order.Version), trigger, now.UTC().Format(time.RFC3339Nano)),
-		AgentID:                  order.AgentID,
-		StandingWorkOrderID:      order.ID,
-		StandingWorkOrderVersion: order.Version,
-		MatchedConditions:        MatchedConditions{Trigger: trigger, ScheduleTick: now.UTC()},
-		RuntimeSpecHash:          runtimeSpecHash,
-		IssuedLeases:             issued,
-		CreatedAt:                now.UTC(),
+		ID:                   externalRuntimeID("lm", agreement.ID, fmt.Sprint(agreement.Version), trigger, now.UTC().Format(time.RFC3339Nano)),
+		AgentID:              agreement.AgentID,
+		WorkAgreementID:      agreement.ID,
+		WorkAgreementVersion: agreement.Version,
+		MatchedConditions:    MatchedConditions{Trigger: trigger, ScheduleTick: now.UTC()},
+		RuntimeSpecHash:      runtimeSpecHash,
+		IssuedLeases:         issued,
+		CreatedAt:            now.UTC(),
 	}, nil
 }
 
@@ -1259,7 +1259,7 @@ func conditionalGrantMatchesTrigger(grant ConditionalGrant, trigger string) bool
 			return true
 		}
 	}
-	if grant.Conditions.Schedule.Kind != "" && trigger == "schedule:"+grant.StandingWorkOrderID {
+	if grant.Conditions.Schedule.Kind != "" && trigger == "schedule:"+grant.WorkAgreementID {
 		return true
 	}
 	return false

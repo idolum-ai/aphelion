@@ -7,14 +7,14 @@ These flows are UX baselines for mockups, not literal transcript fixtures. They
 should be reconstructed from typed tests, logs, and operational incidents where
 possible, then polished only enough to show the intended conversation design.
 Each mock should distinguish what the user sees from the authority truth
-underneath: active SOW version, matched condition, materialized leases,
+underneath: active work agreement version, matched condition, materialized leases,
 reviewer route, typed blocker, or accepted result.
 
 ## Setup And Trial
 
-- Create a child SOW: Admin defines the child's charter, customer, runtime,
+- Create a child work agreement: Admin defines the child's charter, customer, runtime,
   schedule, credentials, review routes, and policy ceiling.
-- Approve initial SOW: Aphelion summarizes the proposed SOW and asks the
+- Approve initial work agreement: Aphelion summarizes the proposed work agreement and asks the
   authority principal to sign, revise, or reject it.
 - Trial run with admin review: The child completes routine work in supervised
   mode while the Aphelion admin validates safety and usefulness.
@@ -35,49 +35,49 @@ reviewer route, typed blocker, or accepted result.
   OpenClaw/Hermes-backed child persona, and the child replies in the same
   conversation without parent review for every turn.
 - Direct chat asks for an effect: The customer asks the child to read Gmail,
-  send to a list, open a browser, call a webhook, or change its SOW; the adapter
+  send to a list, open a browser, call a webhook, or change its work agreement; the adapter
   routes the effect request through Aphelion for a lease, review, blocker, or
   amendment proposal.
 - Customer email draft approval: The child drafts an update and the customer
   approves content, recipients, and timing.
 - Draft before send: The child may draft through Hermes/OpenClaw, but delivery
   waits for the configured review route.
-- Autonomous named-audience send: A signed SOW version permits sending only to
+- Autonomous named-audience send: A signed work agreement version permits sending only to
   named audiences under explicit outbound policy.
 - Friday browser watch: A scheduled browser task runs for a bounded duration
   against named domains.
 - IFTTT alert dispatch: The child calls only the allowlisted endpoint, method,
   and payload schema named by the materialized lease.
 - Public channel draft review: A child prepares a public-channel reply, but
-  outbound delivery waits for customer or admin review according to the SOW.
+  outbound delivery waits for customer or admin review according to the work agreement.
 
 ## Operating Rhythm
 
 - Daily parent-child standup: Parent Aphelion asks the child what it did, what
-  is blocked, what the next scheduled wake is, and whether the SOW still fits.
+  is blocked, what the next scheduled wake is, and whether the work agreement still fits.
 - Daily customer digest: Parent Aphelion sends the customer a concise summary
   of completed work, pending reviews, blocked items, and upcoming scheduled
   work.
 - Child blocker standup: The child reports missing credentials, stale runtime
   status, or review delays as typed blockers instead of retrying silently.
-- SOW health review: Parent Aphelion compares actual work, exceptions, failures,
-  and skipped schedules against the current SOW.
-- End-of-week SOW retrospective: Parent, child, and customer review outcomes,
+- Work agreement health review: Parent Aphelion compares actual work, exceptions, failures,
+  and skipped schedules against the current work agreement.
+- End-of-week work agreement retrospective: Parent, child, and customer review outcomes,
   recurring exceptions, proposed amendments, and autonomy level.
 
 ## Exceptions And Renegotiation
 
-- Exception approval: The child asks for one unplanned action outside the SOW;
+- Exception approval: The child asks for one unplanned action outside the work agreement;
   Aphelion requests a narrow one-time approval from the correct principal.
 - Repeated exception pattern: Aphelion notices repeated approvals of the same
-  shape and suggests a formal SOW amendment.
+  shape and suggests a formal work agreement amendment.
 - Child-proposed amendment: The child proposes an amendment as review evidence
   with a structured risk delta, not as authority.
 - Customer-proposed amendment: The customer asks for broader work; Aphelion
   drafts an amendment and routes any authority widening to the admin.
-- Approve SOW amendment: Admin signs a new SOW version; future leases bind to
+- Approve work agreement amendment: Admin signs a new work agreement version; future leases bind to
   that version.
-- Reject SOW amendment: Admin rejects the proposal; the active SOW and current
+- Reject work agreement amendment: Admin rejects the proposal; the active work agreement and current
   lease materialization rules remain unchanged.
 - Emergency narrowing: Admin revokes or narrows a grant and future leases stop
   materializing immediately.
@@ -92,7 +92,7 @@ reviewer route, typed blocker, or accepted result.
 - Child wake lease missing: A child has grant coverage but no current
   `child_wake` lease, so Aphelion asks for the exact wake lease instead of
   looping.
-- Old lease replay denied: A runtime tries to reuse a lease from an older SOW
+- Old lease replay denied: A runtime tries to reuse a lease from an older work agreement
   version and Aphelion blocks it.
 - Unknown sender handling: A gateway receives an unknown sender and routes
   pairing/review instead of admitting memory or authority.
@@ -104,7 +104,7 @@ reviewer route, typed blocker, or accepted result.
 - Terms boundary warning: Enabling a channel, provider, or hosted service
   surfaces external terms and credential requirements before activation.
 - Reviewer unavailable: Customer review is pending too long; Aphelion follows
-  the SOW fallback policy to wait, skip, or escalate.
+  the work agreement fallback policy to wait, skip, or escalate.
 - Multi-customer tenant boundary: A leased child cannot leak memory,
   credentials, channel state, or review authority across customers.
 - Leased agent offboarding: Customer ends the lease; Aphelion parks the child,
