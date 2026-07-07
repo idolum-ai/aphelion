@@ -273,7 +273,8 @@ other channel presence through Hermes/OpenClaw gateways.
 
 Starting a gateway is a larger authority crossing than a oneshot wake. It gives
 the child a standing external ingress and possibly outbound delivery. It should
-require an explicit `gateway_presence` grant that names:
+require an explicit `gateway_presence` grant and a current materialized
+start/restart lease that names:
 
 - runtime kind,
 - channel or account,
@@ -376,7 +377,7 @@ channel presence. The parent should name the smallest active network class:
 | `none` | No network. | Runtime/task default. |
 | `provider_egress` | Model/provider calls using child-scoped credentials. | Child bootstrap or conditional grant. |
 | `runtime_control_local` | Loopback socket/WebSocket to a child-owned local gateway. | Runtime spec plus verified adapter status. |
-| `public_channel_presence` | Standing external ingress and outbound channel delivery. | Explicit `gateway_presence` grant. |
+| `public_channel_presence` | Standing external ingress and outbound channel delivery. | Explicit `gateway_presence` grant plus materialized start/send lease. |
 | `webhook_egress` | Exact approved outbound webhook calls. | Conditional grant with endpoint/method/payload constraints. |
 | `public_web` | Arbitrary web fetch/browse/search behavior. | Separate public-web/tool capability. |
 
@@ -566,7 +567,7 @@ or action.
       "conditional_grants_added": ["grant_whatsapp_send_named_audience"],
       "conditional_grants_removed": [],
       "review_policy": {
-        "from": "send_requires_parent_review",
+        "from": "send_requires_review_principal",
         "to": "autonomous_send_to_named_audience"
       }
     },
@@ -628,7 +629,7 @@ leases.
 ```json
 {
   "operation": "wake",
-  "agent_id": "research-child",
+  "agent_id": "audience-child",
   "runtime_kind": "openclaw",
   "runtime_mode": "oneshot",
   "spec_hash": "sha256:...",
@@ -653,15 +654,15 @@ Minimum operations:
 ```json
 {
   "schema": "aphelion.child_task_packet.v1",
-  "agent_id": "research-child",
+  "agent_id": "audience-child",
   "parent_agent_id": "house",
   "wake_id": "wake_01J...",
-  "session_id": "agent:research-child:wake:...",
-  "charter": "Review the repository and report blockers.",
+  "session_id": "agent:audience-child:wake:...",
+  "charter": "Prepare the daily audience update.",
   "guidance": [
     {
       "id": "parent_msg_123",
-      "text": "Check whether the release notes capture the durable runtime value."
+      "text": "Use the daily email review SOW and draft the WhatsApp update."
     }
   ],
   "authority": {
@@ -702,7 +703,7 @@ Minimum operations:
 ```json
 {
   "schema": "aphelion.child_task_result.v1",
-  "agent_id": "research-child",
+  "agent_id": "audience-child",
   "wake_id": "wake_01J...",
   "task_packet_id": "packet_01J...",
   "attempt_id": "attempt_01J...",
@@ -713,12 +714,12 @@ Minimum operations:
   "status": "completed",
   "started_at": "2026-07-06T19:40:00Z",
   "completed_at": "2026-07-06T19:42:11Z",
-  "summary": "The release notes miss the external runtime roadmap.",
+  "summary": "Drafted the daily WhatsApp update from the approved email read.",
   "acknowledged_parent_message_ids": ["parent_msg_123"],
   "artifacts": [
     {
       "kind": "review",
-      "ref": "artifact:durable-child/research-child/review-01J..."
+      "ref": "artifact:durable-child/audience-child/review-01J..."
     }
   ],
   "blocker": null,
@@ -726,12 +727,12 @@ Minimum operations:
   "protocol_completion": "completed",
   "artifact_manifest_hash": "sha256:...",
   "truncated": false,
-  "stdout_ref": "artifact:durable-child/research-child/stdout-01J...",
-  "stderr_ref": "artifact:durable-child/research-child/stderr-01J...",
+  "stdout_ref": "artifact:durable-child/audience-child/stdout-01J...",
+  "stderr_ref": "artifact:durable-child/audience-child/stderr-01J...",
   "runtime": {
     "kind": "openclaw",
     "source_ref": "c7295e417d5daec76c18fb452d117f7b8eadc4d6",
-    "state_root": "/var/lib/aphelion/children/research/openclaw"
+    "state_root": "/var/lib/aphelion/children/audience/openclaw"
   }
 }
 ```
@@ -761,26 +762,26 @@ do not acknowledge parent conversation messages.
   "gateway_presence": {
     "runtime_kind": "hermes",
     "channel": "whatsapp",
-    "account": "support-line",
+    "account": "audience-line",
     "standing_work_order_id": "swo_daily_audience_update",
     "conditional_grant_id": "grant_whatsapp_draft",
     "inbound_mode": "paired_contacts_only",
-    "outbound_mode": "reply_with_parent_review",
+    "outbound_mode": "draft_with_review_principal",
     "allowed_sender_ids": ["+15551234567"],
     "pairing_policy": "required_for_unknown_senders",
     "unknown_sender_behavior": "pairing_only_no_memory",
-    "memory_admission": "after_parent_review",
+    "memory_admission": "after_review_principal",
     "inbound_event_evidence": {
       "transport_message_id": "wamid.HBg...",
       "sender_id": "+15551234567",
-      "channel_id": "whatsapp:support-line",
+      "channel_id": "whatsapp:audience-line",
       "adapter_timestamp": "2026-07-06T19:30:00Z",
       "raw_payload_hash": "sha256:..."
     },
-    "outbound_delivery_policy": "review_first",
-    "credential_scope": "secret_scope:child:research-child:whatsapp",
-    "state_root": "/var/lib/aphelion/children/research/hermes",
-    "review_target_chat_id": 123456789,
+    "outbound_delivery_policy": "review_principal_first",
+    "credential_scope": "secret_scope:child:audience-child:whatsapp",
+    "state_root": "/var/lib/aphelion/children/audience/hermes",
+    "review_target_principal": "customer:acme:comms-owner",
     "stop_on_revoke": true
   }
 }
@@ -811,7 +812,8 @@ Hermes exposes:
 Preferred Aphelion mapping:
 
 - Use `hermes-acp` or another non-interactive entrypoint for oneshot wake mode.
-- Use `hermes gateway` only after a `gateway_presence` grant exists.
+- Use `hermes gateway` only after a `gateway_presence` grant and current
+  materialized start lease exist.
 - Set `HERMES_HOME` to the child state root.
 - Keep provider/channel credentials under child secret scopes.
 
@@ -841,7 +843,8 @@ Preferred Aphelion mapping:
 - Set `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` to child-local paths.
 - Treat OpenClaw pairing/allowlist mechanisms as child-side defense-in-depth,
   not as parent authority.
-- Use `openclaw gateway` only under explicit gateway-presence grants.
+- Use `openclaw gateway` only under explicit gateway-presence grants and current
+  materialized start leases.
 
 ## State And Truth Classes
 
@@ -854,7 +857,7 @@ Preferred Aphelion mapping:
 | Which future actions may become leases? | Active conditional grants under that work order |
 | May the child wake now? | Active Aphelion continuation lease and policy |
 | What authority is in this task packet? | Lease materialization for the current wake/action |
-| May the runtime start a public gateway? | Active Aphelion capability grant |
+| May the runtime start a public gateway? | Active `gateway_presence` grant plus current start/restart lease |
 | What did the child claim happened? | Child task result projection |
 | What did Aphelion accept as durable evidence? | TES/session evidence and review artifacts |
 | What is the child runtime's local memory? | Child runtime state root |
@@ -1099,7 +1102,7 @@ reviewer route, typed blocker, or accepted result.
 | Result acceptance | Projection cannot grant authority; accepted result records typed status, artifact hashes, fencing fields, and artifacts. |
 | Parent conversation | Messages acknowledged only by parent-computed intersection after successful adapter consumption under current attempt/fencing token. |
 | Runtime failures | Missing executable, timeout, stale source, failed preflight, repeated same blocker/backoff, late result after timeout, duplicate result after retry. |
-| Gateway presence | Start requires explicit grant; revoked grant stops runtime and prevents restart; unknown senders follow grant-defined pairing/memory admission. |
+| Gateway presence | Start requires explicit grant and materialized start lease; revoked grant stops runtime and prevents restart; unknown senders follow grant-defined pairing/memory admission. |
 | Secret isolation | Parent Telegram/GitHub/provider tokens are not inherited unless named in child scope. |
 | Hermes profile | Child-local `HERMES_HOME`, pinned source, ACP/oneshot preflight, gateway gated. |
 | OpenClaw profile | Ephemeral loopback gateway per oneshot wake, child-local `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`, token not exposed in argv, public channels disabled, long-lived gateway gated. |
