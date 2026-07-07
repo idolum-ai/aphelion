@@ -207,6 +207,7 @@ The first source set should be small and source-owned:
 | Thread | Side thread is open and has recent activity or explicit recall value |
 | Child update | Child task reported an unresolved blocker, update, or result needing attention |
 | Next action | Typed `next_action_record` remains unresolved and actionable |
+| Effect attempt | Side-effecting `effect_attempt` is retry-blocking, uncertain, or linked to an actionable discovered-effect recovery contract |
 | Memory pressure | Recurring interior signal has enough intensity, freshness, and evidence |
 | Goal projection | Predictive interception says a goal stalled, moved, satisfied criteria, or needs a boundary decision |
 
@@ -220,6 +221,10 @@ Examples:
   the latest operator message explicitly selects that operation.
 - Next-action witness: unresolved row, matching session/scope, non-terminal
   handoff, and no superseding row for the same subject.
+- Effect-attempt witness: unresolved side-effect attempt, matching
+  session/work scope, retry-blocking status, and either current effect evidence
+  or a stored discovered-effect continuation recovery contract still bound to
+  the same command/effect identity.
 - Thread witness: open thread plus last activity or explicit operator recall.
 - Child-update witness: child task result still has an unresolved task-packet
   next action or a recent review event.
@@ -272,6 +277,8 @@ Selecting a recommendation compiles a typed work token:
 - `inspect_next_action(track_id, next_action_record_id)`
 - `review_child_update(track_id, task_packet_id)`
 - `reopen_thread(track_id, chat_id, thread_id)`
+- `inspect_effect_attempt(track_id, effect_attempt_id)`
+- `review_discovered_effect(track_id, contract_id)`
 - `inspect_memory_pressure(track_id, signal_id)`
 - `continue_goal_pursuit(track_id, goal_id)`
 
@@ -326,8 +333,16 @@ The current tree already has pieces that should be leveraged:
 - `runtime/recovery_candidate_arbitration.go` already contains stale-vs-current
   suppression logic for recoverable work.
 - `next_action_records` already represent typed unresolved work.
+- `effect_attempts` and discovered-effect continuation recovery contracts
+  already preserve side-effect evidence, command/effect identity, and exact
+  retry handoffs.
 - The identification ledger from `identification-game.md` provides the local
   pattern for entry plus observation provenance.
+- Authority-discovery menu joins already distinguish learned shape from exact
+  live authority, which is the same split radar needs between track liveness and
+  selectable work.
+- Authority bundle carrier prompts are now constrained, which gives radar a
+  safer batch-approval substrate when a selected track needs grouped authority.
 - `/frontier` provides a precedent for a compact operator inspection panel.
 - Supersession and stale-callback handling already exist in nearby approval and
   child-wake surfaces.
@@ -411,7 +426,8 @@ record or projection that carries it.
 
 ```text
 source stores
-  operation / plan / mission / thread / child task / next action / memory signal
+  operation / plan / mission / thread / child task / next action /
+  effect attempt / memory signal
         |
         v
 source-owned liveness witnesses
@@ -481,7 +497,8 @@ reload track + current liveness witness
         v
 compile typed work token
   resume_operation | inspect_next_action | review_child_update |
-  reopen_thread | inspect_memory_pressure | continue_goal_pursuit
+  reopen_thread | inspect_effect_attempt | review_discovered_effect |
+  inspect_memory_pressure | continue_goal_pursuit
         |
         v
 ordinary Aphelion boundary
@@ -542,6 +559,9 @@ Journey tests:
   a fresh return and can be recommended.
 - **Next-action freshness:** unresolved next action ranks while current; a
   terminal or superseded next action fades.
+- **Discovered-effect recovery:** retry-blocking effect attempt with an exact
+  discovered-effect recovery contract creates a live track; verified, rejected,
+  or superseded effect attempts become ghost-classified details.
 - **Child update:** a child task update creates a live track; resolving or
   superseding the task cools it.
 - **Ignore dampening:** repeated ignores suppress the same track hash without
@@ -586,6 +606,14 @@ Current surfaces to leverage:
 - `session/identification_ledger_*`: model for entry + observation provenance.
 - `runtime/authority_discovery_menu.go`: model for projection over typed
   discovery state and live witnesses.
+- `runtime/effect_attempt_runtime.go`: side-effect attempt correlation,
+  unresolved/retry-blocking status, and work evidence joins.
+- `tool/discovered_effect_recovery.go`: exact discovered-effect continuation
+  recovery contract publication for blocked external effects.
+- `session/types_effect_attempt.go`: effect-attempt identity, status, and
+  command/effect metadata.
+- `session/types_continuation_recovery.go`: discovered-effect recovery contract
+  subject and validation.
 - `core/status.go` and `/frontier`: model for typed operator inspection panels.
 
 Implementation files:
