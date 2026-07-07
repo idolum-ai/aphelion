@@ -32,8 +32,10 @@ Every child setup should leave the same trail:
 5. For each standing work order, define conditional grants, credential scopes,
    review gates, revocation behavior, and the exact leases Aphelion may
    materialize later.
-6. Activate or provision.
-7. Validate with:
+6. Name the review routes: who approves platform/security authority, who
+   reviews customer/domain outputs, and who owns resource consent.
+7. Activate or provision.
+8. Validate with:
 
 ```bash
 ./bin/aphelion durable-agent list --config ~/.aphelion/aphelion.toml
@@ -51,6 +53,11 @@ Use a standing work order when creating the child should also define future work
 the admin is willing to pre-authorize under conditions. The work order is the
 signed operating mandate; the child still receives only the short-lived leases
 Aphelion materializes for a matching wake or action.
+
+For leased agents, keep approval routes separate. The Aphelion admin usually
+approves platform/security authority, while the customer reviews content and
+domain decisions after trial graduation. Resource owners still approve access to
+private data, audience membership, or externally owned accounts.
 
 Common shapes:
 
@@ -71,6 +78,10 @@ a renegotiation signal. The child may propose an amendment, but the proposal is
 review evidence only. Admin approval creates a new SOW version; rejected
 amendments leave the current SOW unchanged, and old leases cannot be reused
 under a newer version.
+
+Daily or weekly standups should show the same routing: what the child did, what
+is blocked, which customer reviews are pending, which authority decisions belong
+to admin, and whether the SOW needs amendment.
 
 ## Daily Review Recipe
 

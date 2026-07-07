@@ -184,6 +184,19 @@ A standing work order is an operating mandate, not a daemon privilege. It can
 authorize future leases, but it must not directly expose provider credentials,
 channel tokens, browser sessions, webhooks, or public-send rights to the child.
 
+Review routing is part of the SOW:
+
+| Principal | Responsibility |
+| --- | --- |
+| `authority_principal` | Approves platform/security authority such as runtime install, credential scopes, network classes, channel presence, and SOW widening. |
+| `review_principal` | Approves domain/content outputs such as customer-facing drafts, audience updates, and routine business decisions. |
+| `resource_owner_principal` | Gives consent for private data, audience membership, third-party resource access, or externally owned accounts. |
+
+For leased agents, the Aphelion admin is usually the `authority_principal`,
+while the customer becomes the `review_principal` after setup or trial
+graduation. Customer review must not imply authority to widen the platform
+envelope.
+
 Examples:
 
 - Daily audience update: every morning, read email through `gog` using a
@@ -442,6 +455,11 @@ Allowed `kind` values should start narrow:
     "title": "Daily email review and WhatsApp draft",
     "runtime_kind": "openclaw",
     "policy_ceiling_ref": "durable_agent:audience-child:policy",
+    "principals": {
+      "authority_principal": "aphelion_admin:ops",
+      "review_principal": "customer:acme:comms-owner",
+      "resource_owner_principals": ["customer:acme:gmail-owner"]
+    },
     "schedule": {
       "kind": "cron",
       "expression": "0 13 * * *",
@@ -449,7 +467,8 @@ Allowed `kind` values should start narrow:
     },
     "review_policy": {
       "default_outbound": "draft_only",
-      "send_requires": "parent_review"
+      "send_requires": "review_principal",
+      "trial_mode": "authority_principal_reviews_first_3_runs"
     },
     "conditional_grant_ids": [
       "grant_gmail_read",
@@ -485,7 +504,8 @@ Allowed `kind` values should start narrow:
     },
     "materializes": {
       "lease_kind": "tool_invocation",
-      "ttl_seconds": 900
+      "ttl_seconds": 900,
+      "review_route": "resource_owner_principal"
     }
   }
 }
@@ -518,7 +538,8 @@ Allowed `kind` values should start narrow:
     },
     "materializes": {
       "lease_kind": "runtime_task",
-      "ttl_seconds": 21600
+      "ttl_seconds": 21600,
+      "review_route": "review_principal"
     }
   }
 }
@@ -951,6 +972,114 @@ Add adapter contract tests with fake runtimes before live Hermes/OpenClaw tests.
 Live smoke should validate installation/preflight and one bounded wake under a
 temporary child state root, not public gateway delivery by default.
 
+## Conversation Flow Baselines
+
+These flows are UX baselines for mockups, not literal transcript fixtures. They
+should be reconstructed from typed tests, logs, and operational incidents where
+possible, then polished only enough to show the intended conversation design.
+Each mock should distinguish what the user sees from the authority truth
+underneath: active SOW version, matched condition, materialized leases,
+reviewer route, typed blocker, or accepted result.
+
+### Setup And Trial
+
+- Create a child SOW: Admin defines the child's charter, customer, runtime,
+  schedule, credentials, review routes, and policy ceiling.
+- Approve initial SOW: Aphelion summarizes the proposed SOW and asks the
+  authority principal to sign, revise, or reject it.
+- Trial run with admin review: The child completes routine work in supervised
+  mode while the Aphelion admin validates safety and usefulness.
+- Trial graduation: After successful trial runs, Aphelion proposes moving
+  routine content/domain approval from admin to the customer review principal.
+- Customer reviewer onboarding: The customer is added as review principal for
+  drafts, audience updates, and routine domain decisions without receiving
+  platform authority.
+- Split approval routing: Aphelion routes platform changes to the authority
+  principal, content review to the customer, and private-resource consent to the
+  resource owner.
+
+### Routine Work
+
+- Scheduled email review: A daily trigger materializes Gmail read and WhatsApp
+  draft leases for this wake only.
+- Customer email draft approval: The child drafts an update and the customer
+  approves content, recipients, and timing.
+- Draft before send: The child may draft through Hermes/OpenClaw, but delivery
+  waits for the configured review route.
+- Autonomous named-audience send: A signed SOW version permits sending only to
+  named audiences under explicit outbound policy.
+- Friday browser watch: A scheduled browser task runs for a bounded duration
+  against named domains.
+- IFTTT alert dispatch: The child calls only the allowlisted endpoint, method,
+  and payload schema named by the materialized lease.
+- Public channel draft review: A child prepares a public-channel reply, but
+  outbound delivery waits for customer or admin review according to the SOW.
+
+### Operating Rhythm
+
+- Daily parent-child standup: Parent Aphelion asks the child what it did, what
+  is blocked, what the next scheduled wake is, and whether the SOW still fits.
+- Daily customer digest: Parent Aphelion sends the customer a concise summary
+  of completed work, pending reviews, blocked items, and upcoming scheduled
+  work.
+- Child blocker standup: The child reports missing credentials, stale runtime
+  status, or review delays as typed blockers instead of retrying silently.
+- SOW health review: Parent Aphelion compares actual work, exceptions, failures,
+  and skipped schedules against the current SOW.
+- End-of-week SOW retrospective: Parent, child, and customer review outcomes,
+  recurring exceptions, proposed amendments, and autonomy level.
+
+### Exceptions And Renegotiation
+
+- Exception approval: The child asks for one unplanned action outside the SOW;
+  Aphelion requests a narrow one-time approval from the correct principal.
+- Repeated exception pattern: Aphelion notices repeated approvals of the same
+  shape and suggests a formal SOW amendment.
+- Child-proposed amendment: The child proposes an amendment as review evidence
+  with a structured risk delta, not as authority.
+- Customer-proposed amendment: The customer asks for broader work; Aphelion
+  drafts an amendment and routes any authority widening to the admin.
+- Approve SOW amendment: Admin signs a new SOW version; future leases bind to
+  that version.
+- Reject SOW amendment: Admin rejects the proposal; the active SOW and current
+  lease materialization rules remain unchanged.
+- Emergency narrowing: Admin revokes or narrows a grant and future leases stop
+  materializing immediately.
+
+### Boundaries And Failures
+
+- Missing credential blocker: A scheduled wake matches, but Aphelion blocks
+  before adapter invocation because a child credential is missing, expired, or
+  stale.
+- Runtime preflight failure: Hermes/OpenClaw install, source, env, dependency,
+  or drift checks fail before child execution.
+- Child wake lease missing: A child has grant coverage but no current
+  `child_wake` lease, so Aphelion asks for the exact wake lease instead of
+  looping.
+- Old lease replay denied: A runtime tries to reuse a lease from an older SOW
+  version and Aphelion blocks it.
+- Unknown sender handling: A gateway receives an unknown sender and routes
+  pairing/review instead of admitting memory or authority.
+- Terms boundary warning: Enabling a channel, provider, or hosted service
+  surfaces external terms and credential requirements before activation.
+- Reviewer unavailable: Customer review is pending too long; Aphelion follows
+  the SOW fallback policy to wait, skip, or escalate.
+- Multi-customer tenant boundary: A leased child cannot leak memory,
+  credentials, channel state, or review authority across customers.
+- Leased agent offboarding: Customer ends the lease; Aphelion parks the child,
+  revokes credentials, stops schedules/gateways, and preserves audit evidence.
+
+### Before And After Regression Flows
+
+- Approval loop before/after: The old flow loops on unclear approval; the new
+  flow names the missing grant or lease and presents one bounded action.
+- Context shedding before/after: The old flow repeats stale context; the new
+  flow summarizes typed blockers, retrieves relevant evidence, and asks for the
+  next bounded approval or amendment.
+- Admin bottleneck before/after: The old flow sends every content decision to
+  Aphelion admin; the new flow routes customer-domain review to the customer
+  while reserving platform authority for admin.
+
 ## Test Matrix
 
 | Area | Required scenarios |
@@ -959,6 +1088,8 @@ temporary child state root, not public gateway delivery by default.
 | Standing work order | No lease before schedule/trigger match; matching schedule materializes only named grants; revoked or expired work order prevents future leases. |
 | SOW renegotiation | Child amendment proposal creates no authority; admin-approved amendment creates a new active version; rejected amendment leaves current SOW unchanged. |
 | SOW lease fencing | Old lease cannot be replayed under a newer SOW; widened amendment requires approval and preflight when needed; narrowed/revoked grant blocks future leases. |
+| Reviewer routing | Platform/security changes route to `authority_principal`; content/domain approvals route to `review_principal`; private-resource consent routes to `resource_owner_principal`. |
+| Conversation baselines | Mock flows expose SOW version, matched condition, lease materialization, reviewer route, typed blocker, and accepted result without treating prose as authority. |
 | Conditional grants | Daily `gog` email read grants search/read only; WhatsApp draft does not imply send; autonomous send requires named audience and outbound policy. |
 | Browser and webhook work | Browser monitoring is domain/time bounded; IFTTT calls require exact endpoint, method, payload schema, credential scope, and `webhook_egress`. |
 | Wake authority | Missing `child_wake` lease blocks before adapter invocation; active lease invokes exactly once. |
@@ -983,6 +1114,10 @@ temporary child state root, not public gateway delivery by default.
   compile into bounded leases at wake/action time.
 - Do not collapse email read, browser monitoring, webhook calls, channel draft,
   and channel send into one broad external-access grant.
+- Do not route customer content approval to the Aphelion admin once the SOW names
+  a customer review principal.
+- Do not let a customer reviewer approve platform/security authority unless the
+  SOW explicitly names that principal as authority principal too.
 - Do not treat an upstream runtime license as permission to use third-party
   channels, hosted services, model providers, trademarks, or parent credentials.
 - Do not let child gateways acknowledge parent conversation messages by mere
