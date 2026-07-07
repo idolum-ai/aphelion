@@ -6,9 +6,6 @@
 > persistence, runtime-side tool bridging, and live Hermes/OpenClaw adapters are
 > future phases.
 
-_Status: architecture proposal with typed contract helpers; not implemented
-runtime behavior._
-
 This document describes how Aphelion can promote an existing thread into a
 durable child whose executor is not another in-process Aphelion turn, but a
 supervised Hermes or OpenClaw runtime. The design keeps the current durable
@@ -1222,8 +1219,9 @@ typed blocker that can become a capability/delegation request.
 Add a wake path that evaluates active work agreements, materializes
 matching conditional grants into narrow leases, builds a `ChildTaskPacket`,
 invokes the selected adapter once, records a `ChildTaskResult`, and
-acknowledges parent conversation messages only when the result says they were
-consumed.
+acknowledges parent conversation messages only after Aphelion computes an
+accepted intersection of packet-provided message IDs, child-claimed consumption,
+current attempt/fencing state, and the committed result.
 
 This executor should dispatch by adapter registry contract only. Runtime-specific
 process choreography, such as OpenClaw's ephemeral loopback gateway or Hermes'
