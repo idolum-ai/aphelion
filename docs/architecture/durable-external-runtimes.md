@@ -124,6 +124,36 @@ closed before adapter invocation.
 This keeps runtime installation from becoming a weaker parallel path beside
 the existing external-tool install/probe/drift vocabulary.
 
+### License And External Terms Boundary
+
+The intended integration target is self-hosted execution of upstream
+MIT-licensed Hermes/OpenClaw runtime code. A runtime adapter grant is not a
+license grant, a trademark grant, a hosted-service grant, or permission to
+bypass third-party platform terms.
+
+Adapter implementations MUST preserve the upstream copyright, license, and
+third-party notice material when they copy, vendor, package, distribute, or
+install substantial runtime material:
+
+- Hermes Agent: pinned source plus upstream
+  [MIT license](https://github.com/NousResearch/hermes-agent/blob/830165473e0920c2baf8c2a6863976edb0c52943/LICENSE).
+- OpenClaw: pinned source plus upstream
+  [MIT license](https://github.com/openclaw/openclaw/blob/c7295e417d5daec76c18fb452d117f7b8eadc4d6/LICENSE)
+  and
+  [third-party notices](https://github.com/openclaw/openclaw/blob/c7295e417d5daec76c18fb452d117f7b8eadc4d6/THIRD_PARTY_NOTICES.md).
+
+External services remain separate authority boundaries. WhatsApp, Telegram,
+Discord, Slack, Signal, model providers, hosted gateways, OAuth subscriptions,
+and API accounts are governed by their own terms and must enter the child only
+through explicit child-scoped credentials and grants. The adapter must not
+inherit parent provider credentials, channel tokens, hosted-service sessions,
+or operator API keys merely because the upstream runtime can use them.
+
+Aphelion-facing docs and UI should describe these as Aphelion adapter profiles
+for self-hosted Hermes/OpenClaw runtimes unless an upstream relationship
+explicitly authorizes stronger wording. Runtime names identify compatibility
+targets; they are not evidence of endorsement.
+
 ## Runtime Modes
 
 ### Oneshot Wake Mode
@@ -605,6 +635,7 @@ temporary child state root, not public gateway delivery by default.
 | Wake authority | Missing `child_wake` lease blocks before adapter invocation; active lease invokes exactly once. |
 | Process environment | Fake runtime sees explicit cwd/home/state roots and does not see parent `HOME`, cwd, `.env`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `GITHUB_TOKEN`, or shell profile env unless granted. |
 | Install/probe/drift | Runtime is not wake-eligible until install/provision, audit, probe, verify, fingerprint, and dependency baseline anchors match the runtime spec hash; drift blocks before invocation. |
+| License and external terms | Install/package paths preserve upstream license and notice material; provider/channel credentials require explicit child-scoped grants; docs/UI do not imply upstream endorsement. |
 | Result acceptance | Projection cannot grant authority; accepted result records typed status, artifact hashes, fencing fields, and artifacts. |
 | Parent conversation | Messages acknowledged only by parent-computed intersection after successful adapter consumption under current attempt/fencing token. |
 | Runtime failures | Missing executable, timeout, stale source, failed preflight, repeated same blocker/backoff, late result after timeout, duplicate result after retry. |
@@ -619,6 +650,8 @@ temporary child state root, not public gateway delivery by default.
   Protocol residue belongs under adapter state.
 - Do not use runtime kind as authority. `runtime_kind=openclaw` does not imply
   WhatsApp access, network access, file access, or public reply authority.
+- Do not treat an upstream runtime license as permission to use third-party
+  channels, hosted services, model providers, trademarks, or parent credentials.
 - Do not let child gateways acknowledge parent conversation messages by mere
   process start. Acknowledgement belongs to the wake/result contract.
 - Do not trust child-claimed acknowledgements directly. Parent acknowledgement
