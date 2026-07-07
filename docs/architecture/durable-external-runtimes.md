@@ -440,6 +440,57 @@ channel presence. The parent should name the smallest active network class:
 Provider egress, local runtime control, public channel presence, webhook egress,
 and public web must remain independently grantable and independently revocable.
 
+## Contract Surfaces And Transformation
+
+The architecture should use a small canonical contract spine with dynamic
+discovered-effect contracts for provider/tool specifics. The spine names
+governance boundaries; discovered contracts describe the concrete action under
+that boundary.
+
+Canonical types should expand only when Aphelion needs a new stable surface for
+authority, routing, evidence, replay, revocation, review ownership, or memory
+admission. They should not expand for every provider action, channel quirk,
+endpoint shape, or runtime-specific operation.
+
+The expected transformation is:
+
+```text
+transport message
+-> gateway event
+-> admitted child dialogue
+-> optional effect request
+-> standing grant or discovered-effect contract
+-> approval / lease materialization
+-> brokered invocation
+-> typed result evidence
+-> optional review, parent-memory, or state update
+```
+
+| Surface | Contract shape | Purpose |
+| --- | --- | --- |
+| Child creation | `StandingWorkOrder`, `ConditionalGrant`, principals | Define expected future work, policy ceiling, credential scope, and review routes. |
+| Gateway start | `GatewayPresenceContract` | Allow direct child dialogue for admitted senders under channel, identity, memory, and revocation constraints. |
+| Inbound chat | `GatewayEvent` and `DialogueTurn` | Record sender/channel/message evidence and admission decision without treating chat as parent authority. |
+| Persona reply | `SameConversationReply` | Allow ordinary replies in the admitted conversation when the gateway contract permits it. |
+| Effect request | `EffectRequest` | Let the runtime ask for work outside direct dialogue. |
+| Authority compile | `ConditionalGrant` or `DiscoveredEffectContract` | Match known future work or compile an unknown effect into a reviewable, leaseable contract. |
+| Execution | `LeaseMaterialization` and brokered invocation | Give the runtime only current, narrow executable authority. |
+| Result | `EffectResult`, `ChildTaskResult`, review artifact | Commit typed evidence, blockers, summaries, artifact refs, and optional review output. |
+| Parent memory | `ParentMemoryAdmission` | Promote child-local dialogue or result summaries into parent memory only after a governed admission event. |
+
+Dynamic discovered-effect contracts should carry provider-specific action,
+arguments, constraints, and evidence, for example `provider="gog"`,
+`action="gmail.search"`, account selectors, maximum message counts, endpoint
+templates, payload schemas, or runtime adapter details. The canonical envelope
+is stable; the provider-specific body remains data.
+
+This avoids schema bloat while preserving fail-closed behavior. Unknown effects
+can still be safely expanded in a live session by compiling them into
+structured discovered-effect contracts with exact constraints, review route,
+lease materialization rules, and result evidence. If Aphelion cannot compile an
+effect into such a contract, it blocks with a typed capability/request-review
+surface rather than inventing ambient authority.
+
 ## Proposed Schemas
 
 These schemas are documented contracts, not implemented storage fields in the
@@ -682,6 +733,72 @@ leases.
   }
 }
 ```
+
+### EffectRequest
+
+```json
+{
+  "effect_request": {
+    "id": "effect_req_01J...",
+    "agent_id": "audience-child",
+    "source": "gateway_dialogue",
+    "dialogue_turn_id": "dialogue_turn_01J...",
+    "requested_by": "sender:+15551234567",
+    "action": "gmail.search",
+    "provider": "gog",
+    "purpose": "Find messages relevant to today's audience update.",
+    "constraints": {
+      "accounts": ["updates@example.com"],
+      "query": "newer_than:1d",
+      "max_messages": 50,
+      "forbidden_actions": ["gmail.send", "gmail.delete", "gmail.modify_labels"]
+    }
+  }
+}
+```
+
+An effect request is not authority. It is the runtime's structured claim that
+direct dialogue needs an external effect. Aphelion may match it against an
+active conditional grant, compile it into a discovered-effect approval contract,
+or reject it with a typed blocker.
+
+### DiscoveredEffectContract
+
+```json
+{
+  "discovered_effect_contract": {
+    "id": "effect_contract_01J...",
+    "agent_id": "audience-child",
+    "source_effect_request_id": "effect_req_01J...",
+    "contract_kind": "external_effect",
+    "provider": "gog",
+    "action": "gmail.search",
+    "review_route": "resource_owner_principal",
+    "constraints": {
+      "accounts": ["updates@example.com"],
+      "query": "newer_than:1d",
+      "max_messages": 50,
+      "forbidden_actions": ["gmail.send", "gmail.delete", "gmail.modify_labels"]
+    },
+    "materializes": {
+      "lease_kind": "tool_invocation",
+      "ttl_seconds": 900,
+      "single_use": true
+    },
+    "expected_result": {
+      "kind": "effect_result",
+      "artifact_policy": "bounded_redacted_summary"
+    }
+  }
+}
+```
+
+The discovered-effect contract is the generic extension mechanism. It should
+cover exact provider/tool constraints without adding new parent-core canonical
+types such as `gmail_read_v1`, `ifttt_webhook_v1`, or
+`whatsapp_named_audience_send_v1` for every concrete integration. A concrete
+integration becomes canonical only when it proves to be a stable governance
+boundary rather than a provider-specific action.
 
 ### ChildRuntimeAdapter Operations
 
@@ -1061,6 +1178,8 @@ They are UX baselines for future mockups, not implemented transcript fixtures.
 | SOW lease fencing | Old lease cannot be replayed under a newer SOW; widened amendment requires approval and preflight when needed; narrowed/revoked grant blocks future leases. |
 | Reviewer routing | Platform/security changes route to `authority_principal`; content/domain approvals route to `review_principal`; private-resource consent routes to `resource_owner_principal`. |
 | Conversation baselines | Mock flows expose SOW version, matched condition, lease materialization, reviewer route, typed blocker, and accepted result without treating prose as authority. |
+| Contract transformation | Gateway events become dialogue turns; dialogue turns may produce effect requests; effect requests compile into known grants or discovered-effect contracts; only leases become executable authority. |
+| Canonical/dynamic split | New canonical types are added only for authority, routing, evidence, replay, revocation, review ownership, or memory-admission boundaries; provider-specific actions stay inside discovered-effect contract data. |
 | Conditional grants | Daily `gog` email read grants search/read only; WhatsApp draft does not imply send; autonomous send requires named audience and outbound policy. |
 | Browser and webhook work | Browser monitoring is domain/time bounded; IFTTT calls require exact endpoint, method, payload schema, credential scope, and `webhook_egress`. |
 | Wake authority | Missing `child_wake` lease blocks before adapter invocation; active lease invokes exactly once. |
@@ -1087,6 +1206,10 @@ They are UX baselines for future mockups, not implemented transcript fixtures.
   compile into bounded leases at wake/action time.
 - Do not collapse email read, browser monitoring, webhook calls, channel draft,
   and channel send into one broad external-access grant.
+- Do not add a parent-core canonical type for every provider action, channel
+  quirk, endpoint shape, or runtime-specific operation. Use discovered-effect
+  contracts for dynamic specifics unless the shape becomes a stable governance
+  boundary.
 - Do not route customer content approval to the Aphelion admin once the SOW names
   a customer review principal.
 - Do not let a customer reviewer approve platform/security authority unless the
