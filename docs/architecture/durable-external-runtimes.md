@@ -1,6 +1,7 @@
 # Durable External Runtimes
 
-_Status: architecture proposal; not implemented runtime behavior._
+_Status: architecture proposal with typed contract helpers; not implemented
+runtime behavior._
 
 This document describes how Aphelion can promote an existing thread into a
 durable child whose executor is not another in-process Aphelion turn, but a
@@ -447,6 +448,15 @@ discovered-effect contracts for provider/tool specifics. The spine names
 governance boundaries; discovered contracts describe the concrete action under
 that boundary.
 
+Code anchors:
+
+- [`core/durable_external_runtime_contracts.go`](../../core/durable_external_runtime_contracts.go)
+  defines the typed contract spine, normalization, validation, stable hashes,
+  and pure gateway/dialogue/effect/lease/adapter-operation transformations.
+- [`session/external_runtime_contract_bridge.go`](../../session/external_runtime_contract_bridge.go)
+  adapts exact discovered-effect contracts into the existing continuation
+  recovery contract path.
+
 Canonical types should expand only when Aphelion needs a new stable surface for
 authority, routing, evidence, replay, revocation, review ownership, or memory
 admission. They should not expand for every provider action, channel quirk,
@@ -493,8 +503,10 @@ surface rather than inventing ambient authority.
 
 ## Proposed Schemas
 
-These schemas are documented contracts, not implemented storage fields in the
-current codebase.
+These schemas are code-backed helper contracts, not implemented storage fields
+in the current codebase. Existing generic carriers remain the persistence
+surface for this slice: capability contract JSON, child task packet/result JSON,
+and continuation recovery contracts.
 
 ### DurableAgentRuntimeSpec
 
