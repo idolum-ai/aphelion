@@ -19,6 +19,9 @@ work orders is documented in
 path is not implemented runtime behavior yet. When implemented, it stays
 governed as a durable child: runtime presence is not authority, and public
 gateway mode requires explicit grants and materialized leases.
+The proposed gateway mode can still allow admitted users to talk directly with
+the child persona; Aphelion governs the effect boundary rather than reviewing
+every ordinary chat turn.
 
 ## Shared Setup Shape
 
@@ -66,6 +69,9 @@ Common shapes:
   credential, summarize them, and draft a WhatsApp update. Sending remains
   parent-reviewed unless the work order names an autonomous-send audience and
   policy.
+- Direct customer dialogue: admit named customer senders to talk with the child
+  persona directly, while routing tools, secrets, cross-conversation sends,
+  parent memory writes, and SOW changes through Aphelion.
 - Friday browser watch: monitor named domains for a bounded duration, then call
   only an allowlisted IFTTT endpoint with the approved method and payload
   schema.

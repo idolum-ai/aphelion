@@ -31,6 +31,13 @@ reviewer route, typed blocker, or accepted result.
 
 - Scheduled email review: A daily trigger materializes Gmail read and WhatsApp
   draft leases for this wake only.
+- Direct customer chat with child: An admitted customer talks directly with the
+  OpenClaw/Hermes-backed child persona, and the child replies in the same
+  conversation without parent review for every turn.
+- Direct chat asks for an effect: The customer asks the child to read Gmail,
+  send to a list, open a browser, call a webhook, or change its SOW; the adapter
+  routes the effect request through Aphelion for a lease, review, blocker, or
+  amendment proposal.
 - Customer email draft approval: The child drafts an update and the customer
   approves content, recipients, and timing.
 - Draft before send: The child may draft through Hermes/OpenClaw, but delivery
@@ -89,6 +96,11 @@ reviewer route, typed blocker, or accepted result.
   version and Aphelion blocks it.
 - Unknown sender handling: A gateway receives an unknown sender and routes
   pairing/review instead of admitting memory or authority.
+- Ambient native tool denied: Direct chat continues, but an upstream
+  Hermes/OpenClaw native tool call is blocked unless the adapter can route it
+  through an Aphelion-brokered lease.
+- Parent memory admission denied: A child-local conversation summary remains
+  child memory until Aphelion accepts a governed parent-memory admission event.
 - Terms boundary warning: Enabling a channel, provider, or hosted service
   surfaces external terms and credential requirements before activation.
 - Reviewer unavailable: Customer review is pending too long; Aphelion follows

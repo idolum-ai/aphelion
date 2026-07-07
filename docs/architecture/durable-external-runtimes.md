@@ -99,6 +99,38 @@ durable child a narrow Telegram bot process, but token presence is not
 authority. Hermes and OpenClaw should generalize that shape to richer runtimes,
 not weaken it.
 
+### Direct Child Dialogue Boundary
+
+Gateway presence may let admitted users talk directly with a Hermes/OpenClaw
+child persona. That dialogue is child-local persona operation, not parent
+conversation and not executable authority by itself. Aphelion should not proxy
+or review every conversational token merely because the user is talking to the
+child through WhatsApp, Telegram, or another admitted channel.
+
+The gateway contract may allow the child to reply in the same admitted
+conversation without per-turn parent approval. It may also allow child-local
+memory admission for that conversation when the grant names the sender,
+pairing policy, memory policy, and revocation behavior. Parent memory admission
+remains a separate governed event.
+
+Aphelion injects itself at the effect boundary. The child must cross back
+through Aphelion for tools, secrets, external resources, standing-work-order
+changes, cross-conversation sends, broadcasts, webhooks, browser sessions,
+Gmail reads, parent memory writes, or any action outside the gateway dialogue
+grant. Free talking with the persona must not imply ambient OpenClaw/Hermes
+tool authority.
+
+Adapter preflight must disable, wrap, or constrain upstream native tools so
+direct dialogue exposes only child-local no-authority operations unless a
+current Aphelion lease is present. If the runtime needs a tool, the adapter
+should route it through an Aphelion-brokered tool bridge or stop with a typed
+blocker/capability request.
+
+Gateway evidence should be bounded. The parent may record transport IDs,
+sender/channel IDs, raw payload hashes, admission decisions, result summaries,
+review artifact refs, blockers, and health status without ingesting every raw
+message into parent conversation memory by default.
+
 ### Process Environment Boundary
 
 Runtime adapters MUST launch external child runtimes with a sterile, allowlisted
@@ -300,6 +332,13 @@ The gateway may receive messages directly, but Aphelion still owns whether those
 messages become durable parent-observed events, review artifacts, or accepted
 child outputs.
 
+For admitted senders, gateway presence can allow direct child-persona dialogue
+and same-conversation replies without parent approval on every turn. Broader
+effects still require separate leases or review: reading email, opening a
+browser, calling a webhook, broadcasting, sending outside the current
+conversation, changing the SOW, or writing parent memory must cross Aphelion's
+effect boundary.
+
 ### Remote Service Mode
 
 `remote_service` is a reserved mode for a child runtime hosted outside the
@@ -367,14 +406,20 @@ parent process host. It must fail closed until the implementation defines:
 1. A durable child requests gateway presence for a concrete surface such as a
    WhatsApp account or Telegram bot token.
 2. Aphelion records a capability request with proposed runtime, channel,
-   credential scope, and outbound policy.
+   credential scope, dialogue policy, and outbound effect policy.
 3. Admin approves and grants the capability after credential provisioning and
    runtime preflight.
 4. Adapter starts the Hermes/OpenClaw gateway as a child service with child-local
    state and secrets only.
-5. Incoming channel events are handled through the child runtime and reported
-   upward as bounded results, review artifacts, or typed blockers.
-6. Revocation stops the gateway, marks authority inactive, and prevents future
+5. Admitted users can talk directly with the child persona, and the child can
+   reply in that same conversation when the gateway contract allows it.
+6. If the child needs a tool, secret, external send, parent memory write, SOW
+   amendment, or other effect, the adapter routes that request through Aphelion
+   authority and records the resulting lease, review, or blocker.
+7. Incoming channel events are reported upward as bounded evidence, review
+   artifacts, summaries, or typed blockers; raw transcript ingestion into parent
+   memory is not automatic.
+8. Revocation stops the gateway, marks authority inactive, and prevents future
    restarts until a fresh grant exists.
 
 ## Network Classes
@@ -388,7 +433,7 @@ channel presence. The parent should name the smallest active network class:
 | `none` | No network. | Runtime/task default. |
 | `provider_egress` | Model/provider calls using child-scoped credentials. | Child bootstrap or conditional grant. |
 | `runtime_control_local` | Loopback socket/WebSocket to a child-owned local gateway. | Runtime spec plus verified adapter status. |
-| `public_channel_presence` | Standing external ingress and outbound channel delivery. | Explicit `gateway_presence` grant plus materialized start/send lease. |
+| `public_channel_presence` | Standing external ingress, admitted direct dialogue, and same-conversation replies when the gateway grant allows them; broader outbound delivery still needs a start/send lease or review policy. | Explicit `gateway_presence` grant plus materialized start/send lease. |
 | `webhook_egress` | Exact approved outbound webhook calls. | Conditional grant with endpoint/method/payload constraints. |
 | `public_web` | Arbitrary web fetch/browse/search behavior. | Separate public-web/tool capability. |
 
@@ -780,6 +825,9 @@ do not acknowledge parent conversation messages.
     "standing_work_order_id": "swo_daily_audience_update",
     "conditional_grant_id": "grant_whatsapp_draft",
     "inbound_mode": "paired_contacts_only",
+    "dialogue_mode": "direct_child_persona",
+    "same_conversation_reply_policy": "allow_admitted_sender",
+    "effect_boundary": "aphelion_brokered",
     "outbound_mode": "draft_with_review_principal",
     "allowed_sender_ids": ["+15551234567"],
     "pairing_policy": "required_for_unknown_senders",
@@ -802,6 +850,12 @@ Gateway contracts must encode sender identity and memory admission explicitly.
 Adapter-local pairing or allowlist defaults are defense-in-depth, not the
 parent authority contract. Unknown senders must not become child-memory
 contaminants unless the grant permits that memory admission path.
+
+`same_conversation_reply_policy` covers ordinary persona replies in the admitted
+conversation. `outbound_delivery_policy` covers broader delivery such as
+customer-facing drafts, named-audience sends, cross-conversation messages, or
+broadcasts. The first may be free dialogue under the gateway grant; the second
+is an effect boundary and must follow the SOW, lease, or review route.
 
 Per-message evidence belongs in event records, not in the standing gateway
 contract. A gateway event should carry fields such as transport message ID,
@@ -1017,6 +1071,8 @@ They are UX baselines for future mockups, not implemented transcript fixtures.
 | Parent conversation | Messages acknowledged only by parent-computed intersection after successful adapter consumption under current attempt/fencing token. |
 | Runtime failures | Missing executable, timeout, stale source, failed preflight, repeated same blocker/backoff, late result after timeout, duplicate result after retry. |
 | Gateway presence | Start requires explicit grant and materialized start lease; revoked grant stops runtime and prevents restart; unknown senders follow grant-defined pairing/memory admission. |
+| Direct child dialogue | Admitted sender can chat directly with the child and receive same-conversation replies under the gateway contract; raw chat does not become parent conversation memory by default. |
+| Gateway effect boundary | Direct dialogue cannot use OpenClaw/Hermes native tools, secrets, browser, email, webhooks, cross-conversation sends, broadcasts, SOW amendments, or parent memory writes without an Aphelion lease/review path. |
 | Secret isolation | Parent Telegram/GitHub/provider tokens are not inherited unless named in child scope. |
 | Hermes profile | Child-local `HERMES_HOME`, pinned source, ACP/oneshot preflight, gateway gated. |
 | OpenClaw profile | Ephemeral loopback gateway per oneshot wake, child-local `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH`, token not exposed in argv, public channels disabled, long-lived gateway gated. |
@@ -1043,6 +1099,12 @@ They are UX baselines for future mockups, not implemented transcript fixtures.
   is computed from accepted task/result evidence and current fencing data.
 - Do not treat child runtime local memory as parent memory. Promotion into
   parent memory remains a separate governed event.
+- Do not treat direct gateway dialogue as parent conversation or executable
+  authority. It is child-local persona operation until an effect, review,
+  memory-admission, or parent-state boundary is crossed.
+- Do not expose upstream OpenClaw/Hermes native tools as ambient chat affordances
+  in gateway mode. Tools must be disabled, child-local/no-authority, or routed
+  through Aphelion-brokered leases.
 - Do not make the parent a Hermes/OpenClaw configuration editor. The parent
   should provision bounded runtime contracts and record evidence.
 - Do not move Hermes/OpenClaw lifecycle details into the generic wake executor.

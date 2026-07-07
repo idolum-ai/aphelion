@@ -78,6 +78,11 @@ Code anchors:
   domain review. The Aphelion admin may remain the authority principal while a
   customer becomes the review principal for content/domain decisions and
   resource owners retain consent over private data or externally owned accounts.
+- Proposed external-runtime gateway presence can allow admitted users to talk
+  directly with the child persona. That direct dialogue is child-local
+  operation, not parent conversation or tool authority; tools, secrets, parent
+  memory admission, cross-conversation sends, and SOW changes still cross the
+  parent authority boundary.
 - Durable children ask upward through parent conversation, review artifacts, and capability/delegation proposals when they need system changes. The parent can grant or materialize generic capabilities, but should not become specialized application code for one child.
 - Parent guidance and child wake are separate authority events. Appending a
   parent conversation message records guidance only; waking a named child once
