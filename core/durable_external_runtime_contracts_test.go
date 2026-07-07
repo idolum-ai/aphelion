@@ -18,6 +18,11 @@ func TestDurableExternalRuntimeSpecValidationAndHashStable(t *testing.T) {
 		InstallRoot:   "/var/lib/aphelion/children/a/openclaw",
 		StateRoot:     "/var/lib/aphelion/children/a/state",
 		WorkspaceRoot: "/var/lib/aphelion/children/a/work",
+		DependencyRoots: []DependencyRoot{
+			{Kind: "node_modules", Path: "/var/lib/aphelion/children/a/deps/node_modules", Writable: true},
+			{Kind: "binary_dir", Path: "/var/lib/aphelion/children/a/deps/bin", Writable: true},
+		},
+		SharedCachePolicy: SharedCachePolicy{Mode: ExternalRuntimeSharedCacheReadonlyCAS, FingerprintRequired: true},
 		Source: RuntimeSourceRef{
 			Kind: "git",
 			Repo: "https://github.com/openclaw/openclaw",
@@ -49,6 +54,26 @@ func TestDurableExternalRuntimeSpecValidationAndHashStable(t *testing.T) {
 	}
 	if leftHash != rightHash {
 		t.Fatalf("hash mismatch for equivalent specs: left=%s right=%s", leftHash, rightHash)
+	}
+	missingDeps := left
+	missingDeps.DependencyRoots = nil
+	if err := ValidateDurableExternalRuntimeSpec(missingDeps); err == nil || !strings.Contains(err.Error(), "dependency_roots") {
+		t.Fatalf("ValidateDurableExternalRuntimeSpec(missing deps) err = %v, want dependency_roots rejection", err)
+	}
+	mutableSharedCache := left
+	mutableSharedCache.SharedCachePolicy = SharedCachePolicy{Mode: "shared_writable"}
+	if err := ValidateDurableExternalRuntimeSpec(mutableSharedCache); err == nil || !strings.Contains(err.Error(), "shared_cache_policy") {
+		t.Fatalf("ValidateDurableExternalRuntimeSpec(mutable cache) err = %v, want shared_cache_policy rejection", err)
+	}
+	unfingerprintedSharedCache := left
+	unfingerprintedSharedCache.SharedCachePolicy = SharedCachePolicy{Mode: ExternalRuntimeSharedCacheReadonlyCAS}
+	if err := ValidateDurableExternalRuntimeSpec(unfingerprintedSharedCache); err == nil || !strings.Contains(err.Error(), "requires fingerprints") {
+		t.Fatalf("ValidateDurableExternalRuntimeSpec(unfingerprinted cache) err = %v, want fingerprint rejection", err)
+	}
+	incompleteRoot := left
+	incompleteRoot.DependencyRoots = []DependencyRoot{{Kind: "node_modules"}}
+	if err := ValidateDurableExternalRuntimeSpec(incompleteRoot); err == nil || !strings.Contains(err.Error(), "kind and path") {
+		t.Fatalf("ValidateDurableExternalRuntimeSpec(incomplete root) err = %v, want incomplete dependency root rejection", err)
 	}
 }
 
@@ -344,6 +369,9 @@ func TestChildRuntimeAdapterWakeOperationFromTaskPacketBindsRuntimeSpec(t *testi
 		Kind:      "openclaw",
 		Mode:      ExternalRuntimeModeOneshot,
 		StateRoot: "/var/lib/aphelion/children/audience/openclaw",
+		DependencyRoots: []DependencyRoot{
+			{Kind: "node_modules", Path: "/var/lib/aphelion/children/audience/openclaw/deps/node_modules", Writable: true},
+		},
 		Source: RuntimeSourceRef{
 			Kind: "git",
 			Repo: "https://github.com/openclaw/openclaw",

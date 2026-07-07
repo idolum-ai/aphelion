@@ -57,7 +57,7 @@ The parent should not learn Hermes or OpenClaw internals. It should know only
 that a child runtime has:
 
 - a source identity,
-- an install and state root,
+- install, state, workspace, and dependency roots,
 - lifecycle checks,
 - a wake operation,
 - bounded output and artifact contracts,
@@ -162,6 +162,31 @@ and document that constraints outside the brokered path are enforced by adapter
 preflight, runtime config, and post-run evidence rather than by the raw secret
 itself.
 
+### Dependency State Boundary
+
+Runtime dependencies are child-local execution material. A durable child runtime
+MUST NOT share mutable dependency state with the parent, other children, or the
+operator environment.
+
+Every external runtime adapter MUST set explicit dependency roots for the child,
+such as virtualenvs, `node_modules`, package-manager stores, generated binaries,
+native dependency dirs, plugin dirs, and language-specific build caches. Parent
+and operator dependency locations are not inherited by default: global npm/pnpm
+stores, Python user/site packages, Cargo targets, Go module/build caches, shell
+tool shims, and writable extension/plugin directories are outside the child
+unless materialized under the child runtime spec.
+
+A shared dependency cache is allowed only when it is content-addressed,
+read-only to child runtimes, fingerprinted, and used as a source for
+child-local materialization rather than as mutable executable authority. Mutable
+cross-child caches are forbidden. Dependency drift blocks only the affected
+child and must not require mutating parent or sibling dependency state.
+
+Runtime verification must include dependency provenance and isolation evidence:
+lockfiles when available, package-manager install result, dependency tree/SBOM
+or equivalent fingerprint, native/system dependency baseline, generated
+executables, install scripts, and audit/license findings where feasible.
+
 ### Install, Probe, And Drift Boundary
 
 Durable external runtimes should reuse the external-tool lifecycle shape even
@@ -172,8 +197,8 @@ when they are not exposed as ordinary tools:
 Wake eligibility requires install/provision evidence, adapter audit, adapter
 probe, executable/source fingerprinting, dependency/runtime baseline capture,
 and a verified status whose anchors match the normalized runtime spec hash. Any
-source, executable, dependency, entrypoint, config, or service drift fails
-closed before adapter invocation.
+source, executable, dependency root, dependency baseline, entrypoint, config, or
+service drift fails closed before adapter invocation.
 
 This keeps runtime installation from becoming a weaker parallel path beside
 the existing external-tool install/probe/drift vocabulary.
@@ -535,6 +560,22 @@ and continuation recovery contracts.
     "install_root": "/var/lib/aphelion/children/research/hermes-agent",
     "state_root": "/var/lib/aphelion/children/research/hermes",
     "workspace_root": "/var/lib/aphelion/children/research/workspace",
+    "dependency_roots": [
+      {
+        "kind": "python_venv",
+        "path": "/var/lib/aphelion/children/research/deps/python",
+        "writable": true
+      },
+      {
+        "kind": "binary_dir",
+        "path": "/var/lib/aphelion/children/research/deps/bin",
+        "writable": true
+      }
+    ],
+    "shared_cache_policy": {
+      "mode": "readonly_content_addressed",
+      "fingerprint_required": true
+    },
     "entrypoint": {
       "kind": "acp_stdio",
       "command": ["hermes-acp"]
@@ -554,6 +595,11 @@ Required fields:
 - `state_root`: child-owned persistent state root.
 - `workspace_root`: child-owned workspace root when the runtime can perform
   workspace work.
+- `dependency_roots`: child-owned dependency install/build roots. Git-sourced
+  runtimes must declare at least one root; adapters should map package-manager
+  state into these roots instead of parent/global locations.
+- `shared_cache_policy`: `child_local_only` by default, or
+  `readonly_content_addressed` only when fingerprints are required.
 - `entrypoint`: adapter-resolved command or protocol mode.
 
 ### RuntimeSourceRef
@@ -1117,8 +1163,8 @@ conditional-grant versions that produced it.
 Define durable runtime spec normalization, validation, status projection, and
 operator display without naming Hermes or OpenClaw in core logic. The contract
 should be able to describe a local executable, source reference, child state
-root, workspace root, entrypoint kind, mode, process environment allowlist, and
-network classes.
+root, workspace root, dependency roots, shared-cache policy, entrypoint kind,
+mode, process environment allowlist, and network classes.
 
 ### 4. Adapter Registry
 
@@ -1147,8 +1193,8 @@ pattern. Reuse current loop-shedding and recovery-contract behavior so repeated
 runtime failures stop with actionable blockers.
 
 Runtime status must include verified install/probe anchors, dependency baseline,
-entrypoint fingerprint, runtime spec hash, and stale reason when any anchor
-drifts.
+dependency-root fingerprints, entrypoint fingerprint, runtime spec hash, and
+stale reason when any anchor drifts.
 
 ### 7. Hermes Adapter
 
@@ -1208,7 +1254,8 @@ They are UX baselines for future mockups, not implemented transcript fixtures.
 | Browser and webhook work | Browser monitoring is domain/time bounded; IFTTT calls require exact endpoint, method, payload schema, credential scope, and `webhook_egress`. |
 | Wake authority | Missing `child_wake` lease blocks before adapter invocation; active lease invokes exactly once. |
 | Process environment | Fake runtime sees explicit cwd/home/state roots and does not see parent `HOME`, cwd, `.env`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `GITHUB_TOKEN`, or shell profile env unless granted. |
-| Install/probe/drift | Runtime is not wake-eligible until install/provision, audit, probe, verify, fingerprint, and dependency baseline anchors match the runtime spec hash; drift blocks before invocation. |
+| Dependency isolation | Git-sourced runtimes require child-local dependency roots; parent/global package dirs and mutable cross-child caches are rejected; read-only content-addressed caches require fingerprints. |
+| Install/probe/drift | Runtime is not wake-eligible until install/provision, audit, probe, verify, fingerprint, dependency-root isolation, and dependency baseline anchors match the runtime spec hash; drift blocks before invocation. |
 | License and external terms | Install/package paths preserve upstream license and notice material; provider/channel credentials require explicit child-scoped grants; docs/UI do not imply upstream endorsement. |
 | Result acceptance | Projection cannot grant authority; accepted result records typed status, artifact hashes, fencing fields, and artifacts. |
 | Parent conversation | Messages acknowledged only by parent-computed intersection after successful adapter consumption under current attempt/fencing token. |

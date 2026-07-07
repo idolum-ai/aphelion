@@ -31,6 +31,8 @@ const (
 	ExternalRuntimeTaskPacketSchemaV1           = "aphelion.child_task_packet.v1"
 	ExternalRuntimeTaskResultSchemaV1           = "aphelion.child_task_result.v1"
 	ExternalRuntimeMemoryAdmissionStatusPending = "pending"
+	ExternalRuntimeSharedCacheChildLocalOnly    = "child_local_only"
+	ExternalRuntimeSharedCacheReadonlyCAS       = "readonly_content_addressed"
 
 	ChildRuntimeAdapterOperationPreflight        = "preflight"
 	ChildRuntimeAdapterOperationInstallStatus    = "install_status"
@@ -44,15 +46,17 @@ const (
 // DurableExternalRuntimeSpec describes a proposed child-local external runtime.
 // It is configuration material, not authority to run the runtime by itself.
 type DurableExternalRuntimeSpec struct {
-	Kind           string            `json:"kind,omitempty"`
-	Mode           string            `json:"mode,omitempty"`
-	Source         RuntimeSourceRef  `json:"source,omitempty"`
-	InstallRoot    string            `json:"install_root,omitempty"`
-	StateRoot      string            `json:"state_root,omitempty"`
-	WorkspaceRoot  string            `json:"workspace_root,omitempty"`
-	Entrypoint     RuntimeEntrypoint `json:"entrypoint,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
-	NetworkClasses []string          `json:"network_classes,omitempty"`
+	Kind              string            `json:"kind,omitempty"`
+	Mode              string            `json:"mode,omitempty"`
+	Source            RuntimeSourceRef  `json:"source,omitempty"`
+	InstallRoot       string            `json:"install_root,omitempty"`
+	StateRoot         string            `json:"state_root,omitempty"`
+	WorkspaceRoot     string            `json:"workspace_root,omitempty"`
+	DependencyRoots   []DependencyRoot  `json:"dependency_roots,omitempty"`
+	SharedCachePolicy SharedCachePolicy `json:"shared_cache_policy,omitempty"`
+	Entrypoint        RuntimeEntrypoint `json:"entrypoint,omitempty"`
+	Env               map[string]string `json:"env,omitempty"`
+	NetworkClasses    []string          `json:"network_classes,omitempty"`
 }
 
 type RuntimeSourceRef struct {
@@ -66,6 +70,17 @@ type RuntimeSourceRef struct {
 type RuntimeEntrypoint struct {
 	Kind    string   `json:"kind,omitempty"`
 	Command []string `json:"command,omitempty"`
+}
+
+type DependencyRoot struct {
+	Kind     string `json:"kind,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Writable bool   `json:"writable,omitempty"`
+}
+
+type SharedCachePolicy struct {
+	Mode                string `json:"mode,omitempty"`
+	FingerprintRequired bool   `json:"fingerprint_required,omitempty"`
 }
 
 type WorkAgreement struct {
@@ -350,6 +365,8 @@ func NormalizeDurableExternalRuntimeSpec(spec DurableExternalRuntimeSpec) Durabl
 	spec.InstallRoot = strings.TrimSpace(spec.InstallRoot)
 	spec.StateRoot = strings.TrimSpace(spec.StateRoot)
 	spec.WorkspaceRoot = strings.TrimSpace(spec.WorkspaceRoot)
+	spec.DependencyRoots = normalizeDependencyRoots(spec.DependencyRoots)
+	spec.SharedCachePolicy = NormalizeSharedCachePolicy(spec.SharedCachePolicy)
 	spec.Entrypoint.Kind = normalizeExternalRuntimeToken(spec.Entrypoint.Kind)
 	spec.Entrypoint.Command = normalizeUniqueStrings(spec.Entrypoint.Command)
 	spec.Env = normalizeExternalRuntimeStringMap(spec.Env)
@@ -364,6 +381,20 @@ func NormalizeRuntimeSourceRef(ref RuntimeSourceRef) RuntimeSourceRef {
 	ref.Digest = strings.TrimSpace(ref.Digest)
 	ref.Integrity = normalizeExternalRuntimeStringMap(ref.Integrity)
 	return ref
+}
+
+func NormalizeDependencyRoot(root DependencyRoot) DependencyRoot {
+	root.Kind = normalizeExternalRuntimeToken(root.Kind)
+	root.Path = strings.TrimSpace(root.Path)
+	return root
+}
+
+func NormalizeSharedCachePolicy(policy SharedCachePolicy) SharedCachePolicy {
+	policy.Mode = normalizeExternalRuntimeToken(policy.Mode)
+	if policy.Mode == "" {
+		policy.Mode = ExternalRuntimeSharedCacheChildLocalOnly
+	}
+	return policy
 }
 
 func ValidateDurableExternalRuntimeSpec(spec DurableExternalRuntimeSpec) error {
@@ -384,6 +415,9 @@ func ValidateDurableExternalRuntimeSpec(spec DurableExternalRuntimeSpec) error {
 		if spec.Source.Repo == "" || spec.Source.Ref == "" {
 			return fmt.Errorf("git runtime source requires repo and ref")
 		}
+		if len(spec.DependencyRoots) == 0 {
+			return fmt.Errorf("git runtime source requires child-local dependency_roots")
+		}
 	case "binary", "container_image":
 		if spec.Source.Ref == "" && spec.Source.Digest == "" {
 			return fmt.Errorf("%s runtime source requires ref or digest", spec.Source.Kind)
@@ -400,7 +434,40 @@ func ValidateDurableExternalRuntimeSpec(spec DurableExternalRuntimeSpec) error {
 	if spec.WorkspaceRoot != "" && !filepath.IsAbs(spec.WorkspaceRoot) {
 		return fmt.Errorf("external runtime workspace_root must be absolute")
 	}
+	if err := ValidateDependencyRoots(spec.DependencyRoots); err != nil {
+		return err
+	}
+	if err := ValidateSharedCachePolicy(spec.SharedCachePolicy); err != nil {
+		return err
+	}
 	return nil
+}
+
+func ValidateDependencyRoots(roots []DependencyRoot) error {
+	for _, root := range normalizeDependencyRoots(roots) {
+		if root.Kind == "" || root.Path == "" {
+			return fmt.Errorf("dependency root requires kind and path")
+		}
+		if !filepath.IsAbs(root.Path) {
+			return fmt.Errorf("dependency root path must be absolute: %s", root.Path)
+		}
+	}
+	return nil
+}
+
+func ValidateSharedCachePolicy(policy SharedCachePolicy) error {
+	policy = NormalizeSharedCachePolicy(policy)
+	switch policy.Mode {
+	case ExternalRuntimeSharedCacheChildLocalOnly:
+		return nil
+	case ExternalRuntimeSharedCacheReadonlyCAS:
+		if !policy.FingerprintRequired {
+			return fmt.Errorf("readonly shared dependency cache requires fingerprints")
+		}
+		return nil
+	default:
+		return fmt.Errorf("external runtime shared_cache_policy has unsupported mode %q", policy.Mode)
+	}
 }
 
 func NormalizeWorkAgreement(agreement WorkAgreement) WorkAgreement {
@@ -1287,6 +1354,24 @@ func normalizeExternalRuntimeTokens(values []string) []string {
 			continue
 		}
 		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func normalizeDependencyRoots(values []DependencyRoot) []DependencyRoot {
+	out := make([]DependencyRoot, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = NormalizeDependencyRoot(value)
+		if value.Kind == "" && value.Path == "" {
+			continue
+		}
+		key := value.Kind + "\x00" + value.Path
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		out = append(out, value)
 	}
 	return out
