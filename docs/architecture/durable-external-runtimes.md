@@ -1,5 +1,11 @@
 # Durable External Runtimes
 
+> **Status:** Architecture proposal + typed contract helpers. Runtime execution
+> is not implemented here. This markdown document remains the canonical design
+> surface; Go helpers may type the contract spine, but wake execution,
+> persistence, runtime-side tool bridging, and live Hermes/OpenClaw adapters are
+> future phases.
+
 _Status: architecture proposal with typed contract helpers; not implemented
 runtime behavior._
 
@@ -21,6 +27,44 @@ at creation.
 The implementation order is generic first. Hermes and OpenClaw should be
 adapter profiles over a common child-runtime contract, not bespoke parent-core
 special cases.
+
+
+## Contract Packet
+
+The durable external runtime proposal is best read as a packet of bounded
+instruments rather than a single permission flag. Each layer narrows what the
+child, adapter, parent, and operator may rely on. No layer silently inherits
+authority from dialogue, runtime reachability, channel configuration, or
+continuity state.
+
+| Instrument | Role | Status in this branch |
+|---|---|---|
+| Policy ceiling | Names the maximum runtime, channel, memory, network, and tool posture a child may ever request. | Specified as architecture surface and typed helper input. |
+| Work agreement | Describes a bounded objective, cadence, surfaces, stop conditions, and expected evidence for a child/runtime lane. | Typed contract helper spine present. |
+| Conditional grant | Narrows a work agreement into specific allowed actions and resources. | Typed contract helper spine present. |
+| Approved runtime window | Materializes a short-lived lease for a wake, gateway dialogue, or remote-service interval. | Architecture specified; runtime choreography not implemented. |
+| Exception approval | Captures discovered effects or out-of-envelope actions before they can execute. | Discovered-effect bridge shape present. |
+| Evidence lane | Records what was requested, approved, attempted, observed, and reported. | Architecture specified; persistence integration remains future work. |
+| Dependency fence | Separates child-owned dependency state from parent runtime dependencies and host authority. | Architecture specified; typed dependency isolation contracts present. |
+| Runtime adapter | Translates Hermes/OpenClaw/native process affordances into Aphelion-governed contracts. | Future phase; live adapters not implemented here. |
+
+The packet is intentionally redundant. A direct conversation, native runtime tool,
+installed adapter, or reachable process is never enough by itself. Authority must
+be carried by a current Aphelion-brokered contract and bounded evidence lane.
+
+## Implementation Status
+
+| Surface | Status | Notes |
+|---|---|---|
+| Markdown architecture spec | Canonical | This document is the review surface for the proposal. |
+| Typed contract helpers | Present / draft | Local Go helpers type the work-agreement and runtime-contract spine. |
+| Session bridge | Present / draft | Local bridge code maps discovered effects into continuation/recovery shapes. |
+| Dependency isolation contracts | Present / draft | Child dependency state is separated from parent runtime dependencies. |
+| Wake executor | Not implemented | No live child wake execution is introduced by this branch. |
+| Persistence layer | Not implemented | Durable storage integration remains future work. |
+| Runtime-side tool bridge | Not implemented | Native runtime tools must remain disabled/wrapped until separately approved. |
+| Hermes/OpenClaw adapters | Not implemented | Runtime kind is compatibility metadata, not permission. |
+| Live runtime choreography | Not implemented | No gateway/remote-service process orchestration is shipped here. |
 
 ## Reference Set
 
