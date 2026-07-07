@@ -249,6 +249,14 @@ This is the replacement target for natural-language, phrase-heavy child or
 durable-agent routing heuristics. The model can interpret messy user intent, but
 authority affordances should come from the compiled menu.
 
+Authority discovery is only one frontier. Attention Radar applies the same
+discipline to recommendation liveness: a suggested next step should be a
+projection of fresh attention tracks, not a new opinion over stale nearby state.
+Predictive Interception applies it again to goals: a selected track can become
+goal pursuit only after the goal reference itself is typed, evidenced, and
+governed. The shared rule is that models may rank and explain typed frontiers;
+they do not mint liveness, authority, or success.
+
 ## Role Separation
 
 The menu exists to keep the user-facing persona out of kitchen grammar.

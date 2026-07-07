@@ -156,6 +156,22 @@ non-response should be stamped as `expired_unreviewed` provenance rather than
 lost as silence. Menu tokens become executable only through live witnesses
 produced by point-of-use authority validation.
 
+Recommendations should follow the same projection discipline. A recommendation
+is a live attention track, not a fresh opinion over whatever durable state is
+nearby. Operation state, mission rows, side threads, child updates, memory
+pressure, and next-action records may seed tracks, but a track is recommendable
+only when a source-specific liveness witness says it is still current. A stale
+durable row without a fresh return is a ghost track: inspectable as evidence,
+but not a current next step. Model ranking may order typed tracks; it must not
+invent tracks, liveness, or selection semantics.
+
+Goal pursuit should preserve the same hierarchy. A selected attention track may
+start a goal-seeking controller, but the goal must be represented as a
+versioned acceptance contract grounded in evidence. The plan is disposable; the
+goal reference is governed. Re-aiming may change what Aphelion proposes and
+when it proposes it, but not whether authority is required, whether evidence is
+needed, or whether the operator owns final acceptance.
+
 Unknown edge cases are expected. The answer is not to pretend every phrase can
 be exhaustively matched; the answer is to preserve enough structure, evidence,
 fallbacks, and emergency protocols that the system can stop, ask, recover, or
@@ -234,6 +250,12 @@ ledger: discovered authority shapes are labeled by collision, static analysis,
 lookahead, or operator review, then projected as a current menu over live grant
 state. The operator sees cards and buttons; the runtime consumes ledger-backed
 contracts.
+
+Repeated stale or ignored recommendations should likewise become cumulative
+knowledge. Re-entry should not keep rediscovering the same ghost track from
+nearby state. Recommendation surfaces should record shown, selected, ignored,
+stale, superseded, expired-unreviewed, and reacquired states with enough
+provenance that the next sweep can distinguish a live track from old pressure.
 
 ### Persona and governor are collaborators
 

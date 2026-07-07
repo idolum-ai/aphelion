@@ -4,6 +4,11 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+if ! command -v rg >/dev/null 2>&1; then
+  echo "check-architecture-docs requires rg (ripgrep)" >&2
+  exit 1
+fi
+
 required_docs=(
   "docs/architecture/README.md"
   "docs/architecture/agency-evaluation-methodology.md"
@@ -12,6 +17,8 @@ required_docs=(
   "docs/architecture/turn-lifecycle.md"
   "docs/architecture/constitution-and-delivery.md"
   "docs/architecture/durable-children.md"
+  "docs/architecture/attention-radar.md"
+  "docs/architecture/predictive-interception.md"
   "docs/architecture/state-surfaces.md"
   "docs/architecture/structural-hygiene.md"
   "docs/architecture/diagrams/README.md"

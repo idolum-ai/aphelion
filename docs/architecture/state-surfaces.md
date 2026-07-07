@@ -40,6 +40,14 @@ Aphelion state is intentionally multi-surface.
 - Typed Telegram decision-resume rows (`pending_busy_decisions` and
   `pending_artifact_retention`) for prompts whose original turn may have been
   interrupted before callback resolution: operational current-state stores.
+- Re-entry recommendations (`reentry_recommendations`) are current projection
+  records for recommendation cards. They are not canonical for whether the
+  recommended work surface is still live.
+- Attention Radar is the implementation target replacement liveness surface. Its
+  track ledger becomes canonical for recommendation liveness and provenance in
+  the implementation change that introduces concrete schema and runtime writers.
+  Until that change lands, no non-existent ledger is classified as a current
+  state surface.
 
 Code anchors:
 
@@ -86,6 +94,7 @@ Classifications below use the shared truth classes defined in
 | `telegram_threads` | operational current-state store | Which per-chat side threads are open or absorbed, and what outcome note closed them? |
 | `sessions.continuation_state_json` | operational current-state store | What continuation state, embedded `ActionProposal`, and embedded `ContinuationLease` are currently declared? |
 | `mission_ledger` candidate rows projected as pending items | projection | Which durable candidate missions should be visible for operator review now? |
+| `reentry_recommendations` | projection | Which recommendation card was rendered or selected from a candidate set? |
 | `session.review_events (status='pending')` | operational current-state store | Which review artifacts are queued for governance delivery? |
 | `/status` | projection | How should system/chat state be rendered for operators now? |
 | `/health trace` | projection | How should execution evidence be rendered for diagnosis now? |
