@@ -146,6 +146,97 @@ func TestDurableExternalRuntimeDraftApprovalAndLeaseMaterialization(t *testing.T
 	}
 }
 
+func TestInsertDurableChildLeaseMaterializationRejectsUnfencedGrantVersion(t *testing.T) {
+	store := newTestSQLiteStore(t)
+	now := time.Date(2026, 7, 7, 17, 0, 0, 0, time.UTC)
+	spec, agreement, grants := durableExternalRuntimeFixture(now, 3)
+	draft, err := store.CreateDurableExternalRuntimeWorkAgreementDraft(DurableExternalRuntimeWorkAgreementDraftInput{
+		RuntimeSpec:       spec,
+		WorkAgreement:     agreement,
+		ConditionalGrants: grants,
+		SourceRequestID:   "cap-wa-direct-insert",
+		CreatedAt:         now,
+	})
+	if err != nil {
+		t.Fatalf("CreateDurableExternalRuntimeWorkAgreementDraft() err = %v", err)
+	}
+	if err := store.UpdateDurableChildWorkAgreementStatusForRequest("cap-wa-direct-insert", CapabilityReviewStatusApproved); err != nil {
+		t.Fatalf("activate work agreement err = %v", err)
+	}
+	activeAgreement := agreement
+	activeAgreement.Status = "active"
+	materialization, err := core.BuildCandidateWorkAgreementLeases(activeAgreement, grants, "schedule:"+agreement.ID, draft.RuntimeSpec.SpecHash, now.Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("BuildCandidateWorkAgreementLeases() err = %v", err)
+	}
+	wrongVersion := cloneLeaseMaterializationForTest(materialization)
+	wrongVersion.IssuedLeases[0].ConditionalGrantAgreementVersion = 2
+	if _, err := store.InsertDurableChildLeaseMaterialization(wrongVersion); err == nil || !strings.Contains(err.Error(), "grant version fence mismatch") {
+		t.Fatalf("InsertDurableChildLeaseMaterialization(wrong version) err = %v, want fence rejection", err)
+	}
+	missingGrant := cloneLeaseMaterializationForTest(materialization)
+	missingGrant.IssuedLeases[0].LeaseID = "lease_missing_grant"
+	missingGrant.IssuedLeases[0].ConditionalGrantID = "grant_missing"
+	if _, err := store.InsertDurableChildLeaseMaterialization(missingGrant); err == nil || !strings.Contains(err.Error(), "missing conditional grant") {
+		t.Fatalf("InsertDurableChildLeaseMaterialization(missing grant) err = %v, want missing grant rejection", err)
+	}
+	inserted, err := store.InsertDurableChildLeaseMaterialization(materialization)
+	if err != nil {
+		t.Fatalf("InsertDurableChildLeaseMaterialization(valid) err = %v", err)
+	}
+	if len(inserted) != 1 || inserted[0].ConditionalGrantAgreementVersion != agreement.Version {
+		t.Fatalf("inserted = %#v, want version-fenced lease", inserted)
+	}
+}
+
+func TestRevokeWorkAgreementVersionCascadesActiveLeases(t *testing.T) {
+	store := newTestSQLiteStore(t)
+	now := time.Date(2026, 7, 7, 17, 0, 0, 0, time.UTC)
+	spec, agreement, grants := durableExternalRuntimeFixture(now, 3)
+	draft, err := store.CreateDurableExternalRuntimeWorkAgreementDraft(DurableExternalRuntimeWorkAgreementDraftInput{
+		RuntimeSpec:       spec,
+		WorkAgreement:     agreement,
+		ConditionalGrants: grants,
+		SourceRequestID:   "cap-wa-revoke",
+		CreatedAt:         now,
+	})
+	if err != nil {
+		t.Fatalf("CreateDurableExternalRuntimeWorkAgreementDraft() err = %v", err)
+	}
+	if err := store.UpdateDurableChildWorkAgreementStatusForRequest("cap-wa-revoke", CapabilityReviewStatusApproved); err != nil {
+		t.Fatalf("activate work agreement err = %v", err)
+	}
+	verifyDurableRuntimeSpec(t, store, draft.RuntimeSpec, now.Add(time.Minute))
+	materialized, err := store.MaterializeActiveWorkAgreementLeases(agreement.AgentID, agreement.ID, "schedule:"+agreement.ID, draft.RuntimeSpec.SpecHash, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("MaterializeActiveWorkAgreementLeases() err = %v", err)
+	}
+	revoked, changed, revokedLeases, err := store.RevokeDurableChildWorkAgreementVersion(agreement.AgentID, agreement.ID, agreement.Version, now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("RevokeDurableChildWorkAgreementVersion() err = %v", err)
+	}
+	if !changed || revokedLeases != 1 || revoked.Status != DurableChildWorkAgreementVersionStatusRevoked || revoked.RevokedAt.IsZero() {
+		t.Fatalf("revoked = %#v changed=%t revokedLeases=%d, want revoked agreement and one active lease cascade", revoked, changed, revokedLeases)
+	}
+	lease, ok, err := store.DurableChildLeaseMaterialization(materialized[0].LeaseID)
+	if err != nil || !ok {
+		t.Fatalf("DurableChildLeaseMaterialization() ok=%t err=%v", ok, err)
+	}
+	if lease.Status != DurableChildLeaseMaterializationStatusRevoked || lease.RevokedAt.IsZero() {
+		t.Fatalf("lease = %#v, want revoked by agreement cascade", lease)
+	}
+	if _, ok, err := store.ActiveDurableChildWorkAgreementVersion(agreement.AgentID, agreement.ID); err != nil || ok {
+		t.Fatalf("ActiveDurableChildWorkAgreementVersion() ok=%t err=%v, want no active version after revoke", ok, err)
+	}
+	revokedAgain, changed, revokedLeases, err := store.RevokeDurableChildWorkAgreementVersion(agreement.AgentID, agreement.ID, agreement.Version, now.Add(4*time.Minute))
+	if err != nil {
+		t.Fatalf("RevokeDurableChildWorkAgreementVersion(replay) err = %v", err)
+	}
+	if changed || revokedLeases != 0 || revokedAgain.Status != DurableChildWorkAgreementVersionStatusRevoked {
+		t.Fatalf("revoked replay = %#v changed=%t revokedLeases=%d, want idempotent no-op", revokedAgain, changed, revokedLeases)
+	}
+}
+
 func TestWorkAgreementAmendmentApprovalActivatesNewVersionAndFencesOldLease(t *testing.T) {
 	store := newTestSQLiteStore(t)
 	now := time.Date(2026, 7, 7, 17, 0, 0, 0, time.UTC)
@@ -269,6 +360,11 @@ func durableExternalRuntimeFixture(now time.Time, version int) (core.DurableExte
 	}
 	_ = now
 	return spec, agreement, []core.ConditionalGrant{grant}
+}
+
+func cloneLeaseMaterializationForTest(materialization core.LeaseMaterialization) core.LeaseMaterialization {
+	materialization.IssuedLeases = append([]core.MaterializedLease(nil), materialization.IssuedLeases...)
+	return materialization
 }
 
 func verifyDurableRuntimeSpec(t *testing.T, store *SQLiteStore, record DurableChildRuntimeSpecRecord, at time.Time) DurableChildRuntimeSpecRecord {

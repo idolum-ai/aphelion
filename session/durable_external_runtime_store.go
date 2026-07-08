@@ -406,6 +406,10 @@ func (s *SQLiteStore) InsertDurableChildLeaseMaterialization(materialization cor
 	defer func() { _ = tx.Rollback() }()
 	records := make([]DurableChildLeaseMaterializationRecord, 0, len(materialization.IssuedLeases))
 	for _, lease := range materialization.IssuedLeases {
+		agreementRecord, grantRecord, err := validateLeaseMaterializationFenceForInsertTx(tx, materialization, lease)
+		if err != nil {
+			return nil, err
+		}
 		record := DurableChildLeaseMaterializationRecord{
 			LeaseID:                          lease.LeaseID,
 			MaterializationID:                materialization.ID,
@@ -439,6 +443,12 @@ func (s *SQLiteStore) InsertDurableChildLeaseMaterialization(materialization cor
 			}
 			records = append(records, existing)
 			continue
+		}
+		if agreementRecord.Status != DurableChildWorkAgreementVersionStatusActive {
+			return nil, fmt.Errorf("lease materialization agreement %s/%d is not active", materialization.WorkAgreementID, materialization.WorkAgreementVersion)
+		}
+		if grantRecord.Status != "" && grantRecord.Status != "active" {
+			return nil, fmt.Errorf("lease materialization conditional grant %s/%d/%s is not active", grantRecord.AgreementID, grantRecord.AgreementVersion, grantRecord.GrantID)
 		}
 		if _, err := tx.Exec(`
 			INSERT INTO durable_child_lease_materializations(
@@ -490,6 +500,28 @@ func (s *SQLiteStore) ConsumeDurableChildLease(leaseID string, at time.Time) (Du
 
 func (s *SQLiteStore) RevokeDurableChildLease(leaseID string, at time.Time) (DurableChildLeaseMaterializationRecord, bool, error) {
 	return s.transitionDurableChildLease(leaseID, DurableChildLeaseMaterializationStatusRevoked, at)
+}
+
+func (s *SQLiteStore) RevokeDurableChildWorkAgreementVersion(agentID string, agreementID string, version int, at time.Time) (DurableChildWorkAgreementVersionRecord, bool, int64, error) {
+	agentID = strings.TrimSpace(agentID)
+	agreementID = strings.TrimSpace(agreementID)
+	if agentID == "" || agreementID == "" || version <= 0 {
+		return DurableChildWorkAgreementVersionRecord{}, false, 0, sql.ErrNoRows
+	}
+	at = nonZeroTimeOrNow(at, time.Now().UTC()).UTC()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return DurableChildWorkAgreementVersionRecord{}, false, 0, fmt.Errorf("begin work agreement revocation tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	record, changed, revokedLeases, err := revokeDurableChildWorkAgreementVersionTx(tx, agentID, agreementID, version, at)
+	if err != nil {
+		return DurableChildWorkAgreementVersionRecord{}, false, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return DurableChildWorkAgreementVersionRecord{}, false, 0, fmt.Errorf("commit work agreement revocation tx: %w", err)
+	}
+	return record, changed, revokedLeases, nil
 }
 
 func (s *SQLiteStore) UpsertDurableChildWorkAgreementAmendment(record DurableChildWorkAgreementAmendmentRecord) (DurableChildWorkAgreementAmendmentRecord, error) {
@@ -981,6 +1013,45 @@ func validateRuntimeSpecReadyForWorkAgreement(spec DurableChildRuntimeSpecRecord
 	}
 }
 
+func validateLeaseMaterializationFenceForInsertTx(tx *sql.Tx, materialization core.LeaseMaterialization, lease core.MaterializedLease) (DurableChildWorkAgreementVersionRecord, DurableChildConditionalGrantRecord, error) {
+	if lease.ConditionalGrantAgreementVersion != materialization.WorkAgreementVersion {
+		return DurableChildWorkAgreementVersionRecord{}, DurableChildConditionalGrantRecord{}, fmt.Errorf("lease materialization grant version fence mismatch: agreement_version=%d conditional_grant_agreement_version=%d", materialization.WorkAgreementVersion, lease.ConditionalGrantAgreementVersion)
+	}
+	agreement, err := durableChildWorkAgreementVersionSQL(tx, materialization.WorkAgreementID, materialization.WorkAgreementVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DurableChildWorkAgreementVersionRecord{}, DurableChildConditionalGrantRecord{}, fmt.Errorf("lease materialization references missing work agreement %s/%d", materialization.WorkAgreementID, materialization.WorkAgreementVersion)
+	}
+	if err != nil {
+		return DurableChildWorkAgreementVersionRecord{}, DurableChildConditionalGrantRecord{}, err
+	}
+	if agreement.AgentID != materialization.AgentID {
+		return DurableChildWorkAgreementVersionRecord{}, DurableChildConditionalGrantRecord{}, fmt.Errorf("lease materialization agent %q does not match work agreement agent %q", materialization.AgentID, agreement.AgentID)
+	}
+	grant, err := durableChildConditionalGrantSQL(tx, materialization.WorkAgreementID, lease.ConditionalGrantAgreementVersion, lease.ConditionalGrantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DurableChildWorkAgreementVersionRecord{}, DurableChildConditionalGrantRecord{}, fmt.Errorf("lease materialization references missing conditional grant %s/%d/%s", materialization.WorkAgreementID, lease.ConditionalGrantAgreementVersion, lease.ConditionalGrantID)
+	}
+	if err != nil {
+		return DurableChildWorkAgreementVersionRecord{}, DurableChildConditionalGrantRecord{}, err
+	}
+	if grant.AgentID != materialization.AgentID {
+		return DurableChildWorkAgreementVersionRecord{}, DurableChildConditionalGrantRecord{}, fmt.Errorf("lease materialization agent %q does not match conditional grant agent %q", materialization.AgentID, grant.AgentID)
+	}
+	if grant.Capability != lease.Capability {
+		return DurableChildWorkAgreementVersionRecord{}, DurableChildConditionalGrantRecord{}, fmt.Errorf("lease materialization capability %q does not match conditional grant capability %q", lease.Capability, grant.Capability)
+	}
+	if grant.Grant.Materializes.LeaseKind != lease.LeaseKind {
+		return DurableChildWorkAgreementVersionRecord{}, DurableChildConditionalGrantRecord{}, fmt.Errorf("lease materialization kind %q does not match conditional grant lease kind %q", lease.LeaseKind, grant.Grant.Materializes.LeaseKind)
+	}
+	if grant.Grant.Materializes.ReviewRoute != lease.ReviewRoute {
+		return DurableChildWorkAgreementVersionRecord{}, DurableChildConditionalGrantRecord{}, fmt.Errorf("lease materialization review_route %q does not match conditional grant review_route %q", lease.ReviewRoute, grant.Grant.Materializes.ReviewRoute)
+	}
+	if grant.Grant.Materializes.SingleUse != lease.SingleUse {
+		return DurableChildWorkAgreementVersionRecord{}, DurableChildConditionalGrantRecord{}, fmt.Errorf("lease materialization single_use=%t does not match conditional grant single_use=%t", lease.SingleUse, grant.Grant.Materializes.SingleUse)
+	}
+	return agreement, grant, nil
+}
+
 func updateWorkAgreementAmendmentStatusForRequestTx(tx *sql.Tx, requestID string, next DurableChildWorkAgreementAmendmentStatus, now time.Time) error {
 	switch next {
 	case DurableChildWorkAgreementAmendmentStatusProposed:
@@ -1141,6 +1212,54 @@ func activateWorkAgreementVersionTx(tx *sql.Tx, agreementID string, version int,
 		return fmt.Errorf("activate work agreement version %s/%d: no proposed row changed", agreementID, version)
 	}
 	return nil
+}
+
+func revokeDurableChildWorkAgreementVersionTx(tx *sql.Tx, agentID string, agreementID string, version int, at time.Time) (DurableChildWorkAgreementVersionRecord, bool, int64, error) {
+	var currentStatusRaw string
+	err := tx.QueryRow(`
+		SELECT status
+		FROM durable_child_work_agreement_versions
+		WHERE agent_id = ? AND agreement_id = ? AND version = ?
+	`, agentID, agreementID, version).Scan(&currentStatusRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DurableChildWorkAgreementVersionRecord{}, false, 0, sql.ErrNoRows
+	}
+	if err != nil {
+		return DurableChildWorkAgreementVersionRecord{}, false, 0, fmt.Errorf("load work agreement version for revocation: %w", err)
+	}
+	changed := DurableChildWorkAgreementVersionStatus(currentStatusRaw) != DurableChildWorkAgreementVersionStatusRevoked
+	if changed {
+		result, err := tx.Exec(`
+			UPDATE durable_child_work_agreement_versions
+			SET status = 'revoked', updated_at = ?, revoked_at = COALESCE(revoked_at, ?)
+			WHERE agent_id = ? AND agreement_id = ? AND version = ? AND status != 'revoked'
+		`, formatSQLiteTime(at), formatSQLiteTime(at), agentID, agreementID, version)
+		if err != nil {
+			return DurableChildWorkAgreementVersionRecord{}, false, 0, fmt.Errorf("revoke work agreement version: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return DurableChildWorkAgreementVersionRecord{}, false, 0, fmt.Errorf("inspect work agreement revocation: %w", err)
+		}
+		changed = affected == 1
+	}
+	leaseResult, err := tx.Exec(`
+		UPDATE durable_child_lease_materializations
+		SET status = 'revoked', revoked_at = COALESCE(revoked_at, ?)
+		WHERE agent_id = ? AND agreement_id = ? AND agreement_version = ? AND status = 'active'
+	`, formatSQLiteTime(at), agentID, agreementID, version)
+	if err != nil {
+		return DurableChildWorkAgreementVersionRecord{}, false, 0, fmt.Errorf("revoke work agreement active leases: %w", err)
+	}
+	revokedLeases, err := leaseResult.RowsAffected()
+	if err != nil {
+		return DurableChildWorkAgreementVersionRecord{}, false, 0, fmt.Errorf("inspect revoked work agreement leases: %w", err)
+	}
+	record, err := durableChildWorkAgreementVersionSQL(tx, agreementID, version)
+	if err != nil {
+		return DurableChildWorkAgreementVersionRecord{}, false, 0, err
+	}
+	return record, changed, revokedLeases, nil
 }
 
 func (s *SQLiteStore) transitionDurableChildLease(leaseID string, next DurableChildLeaseMaterializationStatus, at time.Time) (DurableChildLeaseMaterializationRecord, bool, error) {
