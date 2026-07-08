@@ -107,25 +107,25 @@ type DurableChildConditionalGrantRecord struct {
 }
 
 type DurableChildLeaseMaterializationRecord struct {
-	LeaseID                 string
-	MaterializationID       string
-	AgentID                 string
-	AgreementID             string
-	AgreementVersion        int
-	ConditionalGrantID      string
-	ConditionalGrantVersion int
-	Capability              string
-	LeaseKind               string
-	ReviewRoute             string
-	RuntimeSpecHash         string
-	Trigger                 string
-	SingleUse               bool
-	Status                  DurableChildLeaseMaterializationStatus
-	Materialization         core.LeaseMaterialization
-	CreatedAt               time.Time
-	ExpiresAt               time.Time
-	ConsumedAt              time.Time
-	RevokedAt               time.Time
+	LeaseID                          string
+	MaterializationID                string
+	AgentID                          string
+	AgreementID                      string
+	AgreementVersion                 int
+	ConditionalGrantID               string
+	ConditionalGrantAgreementVersion int
+	Capability                       string
+	LeaseKind                        string
+	ReviewRoute                      string
+	RuntimeSpecHash                  string
+	Trigger                          string
+	SingleUse                        bool
+	Status                           DurableChildLeaseMaterializationStatus
+	Materialization                  core.LeaseMaterialization
+	CreatedAt                        time.Time
+	ExpiresAt                        time.Time
+	ConsumedAt                       time.Time
+	RevokedAt                        time.Time
 }
 
 type DurableChildWorkAgreementAmendmentRecord struct {
@@ -160,36 +160,15 @@ type DurableExternalRuntimeWorkAgreementDraft struct {
 	ConditionalGrants []DurableChildConditionalGrantRecord
 }
 
+type durableExternalRuntimeSQL interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 func (s *SQLiteStore) UpsertDurableChildRuntimeSpec(record DurableChildRuntimeSpecRecord) (DurableChildRuntimeSpecRecord, error) {
-	normalized, specJSON, err := normalizeDurableChildRuntimeSpecRecord(record)
+	normalized, err := upsertDurableChildRuntimeSpecSQL(s.db, record)
 	if err != nil {
 		return DurableChildRuntimeSpecRecord{}, err
-	}
-	if _, err := s.db.Exec(`
-		INSERT INTO durable_child_runtime_specs(
-			spec_id, agent_id, spec_hash, runtime_kind, runtime_mode, source_ref, spec_json,
-			install_status, probe_status, drift_status, source_request_id, source_review_event_id,
-			created_at, updated_at, verified_at, stale_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(spec_id) DO UPDATE SET
-			agent_id = excluded.agent_id,
-			spec_hash = excluded.spec_hash,
-			runtime_kind = excluded.runtime_kind,
-			runtime_mode = excluded.runtime_mode,
-			source_ref = excluded.source_ref,
-			spec_json = excluded.spec_json,
-			install_status = excluded.install_status,
-			probe_status = excluded.probe_status,
-			drift_status = excluded.drift_status,
-			source_request_id = excluded.source_request_id,
-			source_review_event_id = excluded.source_review_event_id,
-			updated_at = excluded.updated_at,
-			verified_at = excluded.verified_at,
-			stale_at = excluded.stale_at
-	`, normalized.SpecID, normalized.AgentID, normalized.SpecHash, normalized.RuntimeKind, normalized.RuntimeMode, normalized.SourceRef, specJSON,
-		string(normalized.InstallStatus), normalized.ProbeStatus, normalized.DriftStatus, normalized.SourceRequestID, normalized.SourceReviewEventID,
-		formatSQLiteTime(normalized.CreatedAt), formatSQLiteTime(normalized.UpdatedAt), nullableSQLiteTime(normalized.VerifiedAt), nullableSQLiteTime(normalized.StaleAt)); err != nil {
-		return DurableChildRuntimeSpecRecord{}, fmt.Errorf("upsert durable child runtime spec: %w", err)
 	}
 	stored, ok, err := s.DurableChildRuntimeSpec(normalized.SpecID)
 	if err != nil {
@@ -201,12 +180,62 @@ func (s *SQLiteStore) UpsertDurableChildRuntimeSpec(record DurableChildRuntimeSp
 	return stored, nil
 }
 
+func upsertDurableChildRuntimeSpecSQL(db durableExternalRuntimeSQL, record DurableChildRuntimeSpecRecord) (DurableChildRuntimeSpecRecord, error) {
+	normalized, specJSON, err := normalizeDurableChildRuntimeSpecRecord(record)
+	if err != nil {
+		return DurableChildRuntimeSpecRecord{}, err
+	}
+	if err := ensureDurableChildRuntimeSpecContentUnchanged(db, normalized.SpecID, normalized.SpecHash, specJSON); err != nil {
+		return DurableChildRuntimeSpecRecord{}, err
+	}
+	if _, err := db.Exec(`
+		INSERT INTO durable_child_runtime_specs(
+			spec_id, agent_id, spec_hash, runtime_kind, runtime_mode, source_ref, spec_json,
+			install_status, probe_status, drift_status, source_request_id, source_review_event_id,
+			created_at, updated_at, verified_at, stale_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(spec_id) DO UPDATE SET
+			install_status = CASE
+				WHEN excluded.install_status = 'pending' THEN durable_child_runtime_specs.install_status
+				ELSE excluded.install_status
+			END,
+			probe_status = CASE
+				WHEN excluded.install_status = 'pending' THEN durable_child_runtime_specs.probe_status
+				ELSE excluded.probe_status
+			END,
+			drift_status = CASE
+				WHEN excluded.install_status = 'pending' THEN durable_child_runtime_specs.drift_status
+				ELSE excluded.drift_status
+			END,
+			source_request_id = excluded.source_request_id,
+			source_review_event_id = excluded.source_review_event_id,
+			updated_at = excluded.updated_at,
+			verified_at = CASE
+				WHEN excluded.install_status = 'pending' THEN durable_child_runtime_specs.verified_at
+				ELSE excluded.verified_at
+			END,
+			stale_at = CASE
+				WHEN excluded.install_status = 'pending' THEN durable_child_runtime_specs.stale_at
+				ELSE excluded.stale_at
+			END
+	`, normalized.SpecID, normalized.AgentID, normalized.SpecHash, normalized.RuntimeKind, normalized.RuntimeMode, normalized.SourceRef, specJSON,
+		string(normalized.InstallStatus), normalized.ProbeStatus, normalized.DriftStatus, normalized.SourceRequestID, normalized.SourceReviewEventID,
+		formatSQLiteTime(normalized.CreatedAt), formatSQLiteTime(normalized.UpdatedAt), nullableSQLiteTime(normalized.VerifiedAt), nullableSQLiteTime(normalized.StaleAt)); err != nil {
+		return DurableChildRuntimeSpecRecord{}, fmt.Errorf("upsert durable child runtime spec: %w", err)
+	}
+	return normalized, nil
+}
+
 func (s *SQLiteStore) DurableChildRuntimeSpec(specID string) (DurableChildRuntimeSpecRecord, bool, error) {
+	return durableChildRuntimeSpecSQL(s.db, specID)
+}
+
+func durableChildRuntimeSpecSQL(db durableExternalRuntimeSQL, specID string) (DurableChildRuntimeSpecRecord, bool, error) {
 	specID = strings.TrimSpace(specID)
 	if specID == "" {
 		return DurableChildRuntimeSpecRecord{}, false, nil
 	}
-	row := s.db.QueryRow(durableChildRuntimeSpecSelect()+` WHERE spec_id = ?`, specID)
+	row := db.QueryRow(durableChildRuntimeSpecSelect()+` WHERE spec_id = ?`, specID)
 	record, err := scanDurableChildRuntimeSpec(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DurableChildRuntimeSpecRecord{}, false, nil
@@ -235,44 +264,47 @@ func (s *SQLiteStore) DurableChildRuntimeSpecByHash(agentID string, specHash str
 }
 
 func (s *SQLiteStore) UpsertDurableChildWorkAgreementVersion(record DurableChildWorkAgreementVersionRecord) (DurableChildWorkAgreementVersionRecord, error) {
+	normalized, err := upsertDurableChildWorkAgreementVersionSQL(s.db, record)
+	if err != nil {
+		return DurableChildWorkAgreementVersionRecord{}, err
+	}
+	return s.DurableChildWorkAgreementVersion(normalized.AgreementID, normalized.Version)
+}
+
+func upsertDurableChildWorkAgreementVersionSQL(db durableExternalRuntimeSQL, record DurableChildWorkAgreementVersionRecord) (DurableChildWorkAgreementVersionRecord, error) {
 	normalized, agreementJSON, err := normalizeDurableChildWorkAgreementVersionRecord(record)
 	if err != nil {
 		return DurableChildWorkAgreementVersionRecord{}, err
 	}
-	if _, err := s.db.Exec(`
+	if err := ensureDurableChildWorkAgreementContentUnchanged(db, normalized.AgreementID, normalized.Version, normalized.AgreementHash, agreementJSON); err != nil {
+		return DurableChildWorkAgreementVersionRecord{}, err
+	}
+	if _, err := db.Exec(`
 		INSERT INTO durable_child_work_agreement_versions(
 			agreement_id, version, agent_id, status, authority_principal, review_principal,
 			runtime_kind, agreement_hash, agreement_json, source_request_id, source_review_event_id,
 			created_at, updated_at, activated_at, superseded_at, revoked_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(agreement_id, version) DO UPDATE SET
-			agent_id = excluded.agent_id,
-			status = excluded.status,
-			authority_principal = excluded.authority_principal,
-			review_principal = excluded.review_principal,
-			runtime_kind = excluded.runtime_kind,
-			agreement_hash = excluded.agreement_hash,
-			agreement_json = excluded.agreement_json,
-			source_request_id = excluded.source_request_id,
-			source_review_event_id = excluded.source_review_event_id,
-			updated_at = excluded.updated_at,
-			activated_at = excluded.activated_at,
-			superseded_at = excluded.superseded_at,
-			revoked_at = excluded.revoked_at
+			updated_at = excluded.updated_at
 	`, normalized.AgreementID, normalized.Version, normalized.AgentID, string(normalized.Status), normalized.AuthorityPrincipal, normalized.ReviewPrincipal,
 		normalized.RuntimeKind, normalized.AgreementHash, agreementJSON, normalized.SourceRequestID, normalized.SourceReviewEventID,
 		formatSQLiteTime(normalized.CreatedAt), formatSQLiteTime(normalized.UpdatedAt), nullableSQLiteTime(normalized.ActivatedAt), nullableSQLiteTime(normalized.SupersededAt), nullableSQLiteTime(normalized.RevokedAt)); err != nil {
 		return DurableChildWorkAgreementVersionRecord{}, fmt.Errorf("upsert durable child work agreement version: %w", err)
 	}
-	return s.DurableChildWorkAgreementVersion(normalized.AgreementID, normalized.Version)
+	return normalized, nil
 }
 
 func (s *SQLiteStore) DurableChildWorkAgreementVersion(agreementID string, version int) (DurableChildWorkAgreementVersionRecord, error) {
+	return durableChildWorkAgreementVersionSQL(s.db, agreementID, version)
+}
+
+func durableChildWorkAgreementVersionSQL(db durableExternalRuntimeSQL, agreementID string, version int) (DurableChildWorkAgreementVersionRecord, error) {
 	agreementID = strings.TrimSpace(agreementID)
 	if agreementID == "" || version <= 0 {
 		return DurableChildWorkAgreementVersionRecord{}, sql.ErrNoRows
 	}
-	return scanDurableChildWorkAgreementVersion(s.db.QueryRow(durableChildWorkAgreementVersionSelect()+` WHERE agreement_id = ? AND version = ?`, agreementID, version))
+	return scanDurableChildWorkAgreementVersion(db.QueryRow(durableChildWorkAgreementVersionSelect()+` WHERE agreement_id = ? AND version = ?`, agreementID, version))
 }
 
 func (s *SQLiteStore) ActiveDurableChildWorkAgreementVersion(agentID string, agreementID string) (DurableChildWorkAgreementVersionRecord, bool, error) {
@@ -296,39 +328,47 @@ func (s *SQLiteStore) ActiveDurableChildWorkAgreementVersion(agentID string, agr
 }
 
 func (s *SQLiteStore) UpsertDurableChildConditionalGrant(record DurableChildConditionalGrantRecord) (DurableChildConditionalGrantRecord, error) {
+	normalized, err := upsertDurableChildConditionalGrantSQL(s.db, record)
+	if err != nil {
+		return DurableChildConditionalGrantRecord{}, err
+	}
+	return s.DurableChildConditionalGrant(normalized.AgreementID, normalized.AgreementVersion, normalized.GrantID)
+}
+
+func upsertDurableChildConditionalGrantSQL(db durableExternalRuntimeSQL, record DurableChildConditionalGrantRecord) (DurableChildConditionalGrantRecord, error) {
 	normalized, grantJSON, actionsJSON, triggersJSON, err := normalizeDurableChildConditionalGrantRecord(record)
 	if err != nil {
 		return DurableChildConditionalGrantRecord{}, err
 	}
-	if _, err := s.db.Exec(`
+	if err := ensureDurableChildConditionalGrantContentUnchanged(db, normalized.AgreementID, normalized.AgreementVersion, normalized.GrantID, grantJSON); err != nil {
+		return DurableChildConditionalGrantRecord{}, err
+	}
+	if _, err := db.Exec(`
 		INSERT INTO durable_child_conditional_grants(
 			agreement_id, agreement_version, grant_id, agent_id, status, capability, tool,
 			actions_json, triggers_json, credential_scope, grant_json, created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(agreement_id, agreement_version, grant_id) DO UPDATE SET
-			agent_id = excluded.agent_id,
 			status = excluded.status,
-			capability = excluded.capability,
-			tool = excluded.tool,
-			actions_json = excluded.actions_json,
-			triggers_json = excluded.triggers_json,
-			credential_scope = excluded.credential_scope,
-			grant_json = excluded.grant_json,
 			updated_at = excluded.updated_at
 	`, normalized.AgreementID, normalized.AgreementVersion, normalized.GrantID, normalized.AgentID, normalized.Status, normalized.Capability, normalized.Tool,
 		actionsJSON, triggersJSON, normalized.CredentialScope, grantJSON, formatSQLiteTime(normalized.CreatedAt), formatSQLiteTime(normalized.UpdatedAt)); err != nil {
 		return DurableChildConditionalGrantRecord{}, fmt.Errorf("upsert durable child conditional grant: %w", err)
 	}
-	return s.DurableChildConditionalGrant(normalized.AgreementID, normalized.AgreementVersion, normalized.GrantID)
+	return normalized, nil
 }
 
 func (s *SQLiteStore) DurableChildConditionalGrant(agreementID string, version int, grantID string) (DurableChildConditionalGrantRecord, error) {
+	return durableChildConditionalGrantSQL(s.db, agreementID, version, grantID)
+}
+
+func durableChildConditionalGrantSQL(db durableExternalRuntimeSQL, agreementID string, version int, grantID string) (DurableChildConditionalGrantRecord, error) {
 	agreementID = strings.TrimSpace(agreementID)
 	grantID = strings.TrimSpace(grantID)
 	if agreementID == "" || version <= 0 || grantID == "" {
 		return DurableChildConditionalGrantRecord{}, sql.ErrNoRows
 	}
-	return scanDurableChildConditionalGrant(s.db.QueryRow(durableChildConditionalGrantSelect()+`
+	return scanDurableChildConditionalGrant(db.QueryRow(durableChildConditionalGrantSelect()+`
 		WHERE agreement_id = ? AND agreement_version = ? AND grant_id = ?
 	`, agreementID, version, grantID))
 }
@@ -367,33 +407,48 @@ func (s *SQLiteStore) InsertDurableChildLeaseMaterialization(materialization cor
 	records := make([]DurableChildLeaseMaterializationRecord, 0, len(materialization.IssuedLeases))
 	for _, lease := range materialization.IssuedLeases {
 		record := DurableChildLeaseMaterializationRecord{
-			LeaseID:                 lease.LeaseID,
-			MaterializationID:       materialization.ID,
-			AgentID:                 materialization.AgentID,
-			AgreementID:             materialization.WorkAgreementID,
-			AgreementVersion:        materialization.WorkAgreementVersion,
-			ConditionalGrantID:      lease.ConditionalGrantID,
-			ConditionalGrantVersion: lease.ConditionalGrantVersion,
-			Capability:              lease.Capability,
-			LeaseKind:               lease.LeaseKind,
-			ReviewRoute:             lease.ReviewRoute,
-			RuntimeSpecHash:         materialization.RuntimeSpecHash,
-			Trigger:                 materialization.MatchedConditions.Trigger,
-			SingleUse:               lease.SingleUse,
-			Status:                  DurableChildLeaseMaterializationStatusActive,
-			Materialization:         materialization,
-			CreatedAt:               now,
-			ExpiresAt:               lease.ExpiresAt,
+			LeaseID:                          lease.LeaseID,
+			MaterializationID:                materialization.ID,
+			AgentID:                          materialization.AgentID,
+			AgreementID:                      materialization.WorkAgreementID,
+			AgreementVersion:                 materialization.WorkAgreementVersion,
+			ConditionalGrantID:               lease.ConditionalGrantID,
+			ConditionalGrantAgreementVersion: lease.ConditionalGrantAgreementVersion,
+			Capability:                       lease.Capability,
+			LeaseKind:                        lease.LeaseKind,
+			ReviewRoute:                      lease.ReviewRoute,
+			RuntimeSpecHash:                  materialization.RuntimeSpecHash,
+			Trigger:                          materialization.MatchedConditions.Trigger,
+			SingleUse:                        lease.SingleUse,
+			Status:                           DurableChildLeaseMaterializationStatusActive,
+			Materialization:                  materialization,
+			CreatedAt:                        now,
+			ExpiresAt:                        lease.ExpiresAt,
+		}
+		existing, ok, err := durableChildLeaseMaterializationSQL(tx, record.LeaseID)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			existingJSON, err := marshalExternalRuntimeJSON(core.NormalizeLeaseMaterialization(existing.Materialization))
+			if err != nil {
+				return nil, err
+			}
+			if existingJSON != materializationJSON {
+				return nil, fmt.Errorf("durable child lease materialization %q already exists with different contract", record.LeaseID)
+			}
+			records = append(records, existing)
+			continue
 		}
 		if _, err := tx.Exec(`
 			INSERT INTO durable_child_lease_materializations(
 				lease_id, materialization_id, agent_id, agreement_id, agreement_version,
-				conditional_grant_id, conditional_grant_version, capability, lease_kind,
+				conditional_grant_id, conditional_grant_agreement_version, capability, lease_kind,
 				review_route, runtime_spec_hash, trigger, single_use, status,
 				materialization_json, created_at, expires_at, consumed_at, revoked_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, record.LeaseID, record.MaterializationID, record.AgentID, record.AgreementID, record.AgreementVersion,
-			record.ConditionalGrantID, record.ConditionalGrantVersion, record.Capability, record.LeaseKind,
+			record.ConditionalGrantID, record.ConditionalGrantAgreementVersion, record.Capability, record.LeaseKind,
 			record.ReviewRoute, record.RuntimeSpecHash, record.Trigger, boolInt(record.SingleUse), string(record.Status),
 			materializationJSON, formatSQLiteTime(record.CreatedAt), nullableSQLiteTime(record.ExpiresAt), nil, nil); err != nil {
 			return nil, fmt.Errorf("insert durable child lease materialization: %w", err)
@@ -411,7 +466,15 @@ func (s *SQLiteStore) DurableChildLeaseMaterialization(leaseID string) (DurableC
 	if leaseID == "" {
 		return DurableChildLeaseMaterializationRecord{}, false, nil
 	}
-	record, err := scanDurableChildLeaseMaterialization(s.db.QueryRow(durableChildLeaseMaterializationSelect()+` WHERE lease_id = ?`, leaseID))
+	return durableChildLeaseMaterializationSQL(s.db, leaseID)
+}
+
+func durableChildLeaseMaterializationSQL(db durableExternalRuntimeSQL, leaseID string) (DurableChildLeaseMaterializationRecord, bool, error) {
+	leaseID = strings.TrimSpace(leaseID)
+	if leaseID == "" {
+		return DurableChildLeaseMaterializationRecord{}, false, nil
+	}
+	record, err := scanDurableChildLeaseMaterialization(db.QueryRow(durableChildLeaseMaterializationSelect()+` WHERE lease_id = ?`, leaseID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return DurableChildLeaseMaterializationRecord{}, false, nil
 	}
@@ -510,21 +573,44 @@ func (s *SQLiteStore) CreateDurableExternalRuntimeWorkAgreementDraft(input Durab
 		}
 		grantInputs = append(grantInputs, grantInput)
 	}
-	runtimeSpec, err := s.UpsertDurableChildRuntimeSpec(runtimeInput)
+	if err := validateDraftGrantSet(agreementInput, grantInputs); err != nil {
+		return DurableExternalRuntimeWorkAgreementDraft{}, err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return DurableExternalRuntimeWorkAgreementDraft{}, fmt.Errorf("begin durable external runtime draft tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := upsertDurableChildRuntimeSpecSQL(tx, runtimeInput); err != nil {
+		return DurableExternalRuntimeWorkAgreementDraft{}, err
+	}
+	runtimeSpec, ok, err := durableChildRuntimeSpecSQL(tx, runtimeInput.SpecID)
 	if err != nil {
 		return DurableExternalRuntimeWorkAgreementDraft{}, err
 	}
-	agreement, err := s.UpsertDurableChildWorkAgreementVersion(agreementInput)
+	if !ok {
+		return DurableExternalRuntimeWorkAgreementDraft{}, fmt.Errorf("durable child runtime spec %q not found after draft upsert", runtimeInput.SpecID)
+	}
+	if _, err := upsertDurableChildWorkAgreementVersionSQL(tx, agreementInput); err != nil {
+		return DurableExternalRuntimeWorkAgreementDraft{}, err
+	}
+	agreement, err := durableChildWorkAgreementVersionSQL(tx, agreementInput.AgreementID, agreementInput.Version)
 	if err != nil {
 		return DurableExternalRuntimeWorkAgreementDraft{}, err
 	}
 	grants := make([]DurableChildConditionalGrantRecord, 0, len(grantInputs))
 	for _, grantInput := range grantInputs {
-		stored, err := s.UpsertDurableChildConditionalGrant(grantInput)
+		if _, err := upsertDurableChildConditionalGrantSQL(tx, grantInput); err != nil {
+			return DurableExternalRuntimeWorkAgreementDraft{}, err
+		}
+		stored, err := durableChildConditionalGrantSQL(tx, grantInput.AgreementID, grantInput.AgreementVersion, grantInput.GrantID)
 		if err != nil {
 			return DurableExternalRuntimeWorkAgreementDraft{}, err
 		}
 		grants = append(grants, stored)
+	}
+	if err := tx.Commit(); err != nil {
+		return DurableExternalRuntimeWorkAgreementDraft{}, fmt.Errorf("commit durable external runtime draft tx: %w", err)
 	}
 	return DurableExternalRuntimeWorkAgreementDraft{RuntimeSpec: runtimeSpec, WorkAgreement: agreement, ConditionalGrants: grants}, nil
 }
@@ -537,6 +623,16 @@ func (s *SQLiteStore) MaterializeActiveWorkAgreementLeases(agentID string, agree
 	if !ok {
 		return nil, fmt.Errorf("active work agreement %q for agent %q not found", agreementID, agentID)
 	}
+	runtimeSpec, ok, err := s.DurableChildRuntimeSpecByHash(agentID, runtimeSpecHash)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("runtime spec %q for agent %q not found", runtimeSpecHash, agentID)
+	}
+	if err := validateRuntimeSpecReadyForWorkAgreement(runtimeSpec, agreement); err != nil {
+		return nil, err
+	}
 	grantRecords, err := s.DurableChildConditionalGrantsForWorkAgreement(agreement.AgreementID, agreement.Version)
 	if err != nil {
 		return nil, err
@@ -545,7 +641,7 @@ func (s *SQLiteStore) MaterializeActiveWorkAgreementLeases(agentID string, agree
 	for _, record := range grantRecords {
 		grants = append(grants, record.Grant)
 	}
-	materialization, err := core.MaterializeWorkAgreementLeases(agreement.AgreementForMaterialization(), grants, trigger, runtimeSpecHash, now)
+	materialization, err := core.BuildCandidateWorkAgreementLeases(agreement.AgreementForMaterialization(), grants, trigger, runtimeSpecHash, now)
 	if err != nil {
 		return nil, err
 	}
@@ -585,45 +681,8 @@ func (s *SQLiteStore) UpdateDurableChildWorkAgreementAmendmentStatusForRequest(r
 		return fmt.Errorf("begin work agreement amendment transition tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.Query(`
-		SELECT agreement_id, proposed_version
-		FROM durable_child_work_agreement_amendments
-		WHERE source_request_id = ?
-	`, requestID)
-	if err != nil {
-		return fmt.Errorf("query work agreement amendments for request: %w", err)
-	}
-	var toActivate []struct {
-		agreementID string
-		version     int
-	}
-	for rows.Next() {
-		var item struct {
-			agreementID string
-			version     int
-		}
-		if err := rows.Scan(&item.agreementID, &item.version); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan work agreement amendment transition: %w", err)
-		}
-		toActivate = append(toActivate, item)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close work agreement amendment transition rows: %w", err)
-	}
-	if _, err := tx.Exec(`
-		UPDATE durable_child_work_agreement_amendments
-		SET status = ?, updated_at = ?, resolved_at = ?
-		WHERE source_request_id = ?
-	`, string(next), formatSQLiteTime(now), formatSQLiteTime(now), requestID); err != nil {
-		return fmt.Errorf("update work agreement amendment status: %w", err)
-	}
-	if next == DurableChildWorkAgreementAmendmentStatusApproved {
-		for _, item := range toActivate {
-			if err := activateWorkAgreementVersionTx(tx, item.agreementID, item.version, now); err != nil {
-				return err
-			}
-		}
+	if err := updateWorkAgreementAmendmentStatusForRequestTx(tx, requestID, next, now); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit work agreement amendment transition tx: %w", err)
@@ -822,28 +881,204 @@ func NormalizeDurableChildWorkAgreementAmendmentStatus(status DurableChildWorkAg
 	}
 }
 
+func ensureDurableChildRuntimeSpecContentUnchanged(db durableExternalRuntimeSQL, specID string, specHash string, specJSON string) error {
+	var existingHash, existingJSON string
+	err := db.QueryRow(`SELECT spec_hash, spec_json FROM durable_child_runtime_specs WHERE spec_id = ?`, specID).Scan(&existingHash, &existingJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load durable child runtime spec content: %w", err)
+	}
+	if existingHash != specHash || existingJSON != specJSON {
+		return fmt.Errorf("durable child runtime spec %q content is immutable", specID)
+	}
+	return nil
+}
+
+func ensureDurableChildWorkAgreementContentUnchanged(db durableExternalRuntimeSQL, agreementID string, version int, agreementHash string, agreementJSON string) error {
+	var existingHash, existingJSON string
+	err := db.QueryRow(`
+		SELECT agreement_hash, agreement_json
+		FROM durable_child_work_agreement_versions
+		WHERE agreement_id = ? AND version = ?
+	`, agreementID, version).Scan(&existingHash, &existingJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load durable child work agreement content: %w", err)
+	}
+	if existingHash != agreementHash || existingJSON != agreementJSON {
+		return fmt.Errorf("durable child work agreement %s/%d content is immutable", agreementID, version)
+	}
+	return nil
+}
+
+func ensureDurableChildConditionalGrantContentUnchanged(db durableExternalRuntimeSQL, agreementID string, version int, grantID string, grantJSON string) error {
+	var existingJSON string
+	err := db.QueryRow(`
+		SELECT grant_json
+		FROM durable_child_conditional_grants
+		WHERE agreement_id = ? AND agreement_version = ? AND grant_id = ?
+	`, agreementID, version, grantID).Scan(&existingJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load durable child conditional grant content: %w", err)
+	}
+	if existingJSON != grantJSON {
+		return fmt.Errorf("durable child conditional grant %s/%d/%s content is immutable", agreementID, version, grantID)
+	}
+	return nil
+}
+
+func validateDraftGrantSet(agreement DurableChildWorkAgreementVersionRecord, grants []DurableChildConditionalGrantRecord) error {
+	required := make(map[string]struct{}, len(agreement.Agreement.ConditionalGrantIDs))
+	for _, grantID := range agreement.Agreement.ConditionalGrantIDs {
+		required[grantID] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(grants))
+	for _, grant := range grants {
+		if grant.AgentID != agreement.AgentID || grant.AgreementID != agreement.AgreementID || grant.AgreementVersion != agreement.Version {
+			return fmt.Errorf("conditional grant %q does not match work agreement %s/%d", grant.GrantID, agreement.AgreementID, agreement.Version)
+		}
+		if _, ok := required[grant.GrantID]; !ok {
+			return fmt.Errorf("conditional grant %q is not referenced by work agreement %s/%d", grant.GrantID, agreement.AgreementID, agreement.Version)
+		}
+		if _, ok := seen[grant.GrantID]; ok {
+			return fmt.Errorf("conditional grant %q is duplicated in work agreement draft", grant.GrantID)
+		}
+		seen[grant.GrantID] = struct{}{}
+	}
+	for grantID := range required {
+		if _, ok := seen[grantID]; !ok {
+			return fmt.Errorf("work agreement %s/%d missing conditional grant %q", agreement.AgreementID, agreement.Version, grantID)
+		}
+	}
+	return nil
+}
+
+func validateRuntimeSpecReadyForWorkAgreement(spec DurableChildRuntimeSpecRecord, agreement DurableChildWorkAgreementVersionRecord) error {
+	if spec.AgentID != agreement.AgentID {
+		return fmt.Errorf("runtime spec agent %q does not match work agreement agent %q", spec.AgentID, agreement.AgentID)
+	}
+	if spec.RuntimeKind != agreement.RuntimeKind {
+		return fmt.Errorf("runtime spec kind %q does not match work agreement runtime_kind %q", spec.RuntimeKind, agreement.RuntimeKind)
+	}
+	if spec.InstallStatus != DurableChildRuntimeSpecStatusVerified {
+		return fmt.Errorf("runtime spec %q is not verified", spec.SpecID)
+	}
+	if strings.TrimSpace(spec.ProbeStatus) != "passed" {
+		return fmt.Errorf("runtime spec %q probe_status is not passed", spec.SpecID)
+	}
+	switch strings.TrimSpace(spec.DriftStatus) {
+	case "", "clean", "fresh":
+		return nil
+	default:
+		return fmt.Errorf("runtime spec %q drift_status %q is not clean", spec.SpecID, spec.DriftStatus)
+	}
+}
+
+func updateWorkAgreementAmendmentStatusForRequestTx(tx *sql.Tx, requestID string, next DurableChildWorkAgreementAmendmentStatus, now time.Time) error {
+	switch next {
+	case DurableChildWorkAgreementAmendmentStatusProposed:
+		return nil
+	case DurableChildWorkAgreementAmendmentStatusRejected:
+		if _, err := tx.Exec(`
+			UPDATE durable_child_work_agreement_amendments
+			SET status = 'rejected', updated_at = ?, resolved_at = ?
+			WHERE source_request_id = ? AND status = 'proposed'
+		`, formatSQLiteTime(now), formatSQLiteTime(now), requestID); err != nil {
+			return fmt.Errorf("reject proposed work agreement amendment: %w", err)
+		}
+		return nil
+	case DurableChildWorkAgreementAmendmentStatusApproved:
+	default:
+		return nil
+	}
+	rows, err := tx.Query(`
+		SELECT amendment_id, agreement_id, from_version, proposed_version
+		FROM durable_child_work_agreement_amendments
+		WHERE source_request_id = ? AND status = 'proposed'
+	`, requestID)
+	if err != nil {
+		return fmt.Errorf("query proposed work agreement amendments for request: %w", err)
+	}
+	var amendments []DurableChildWorkAgreementAmendmentRecord
+	for rows.Next() {
+		var amendment DurableChildWorkAgreementAmendmentRecord
+		if err := rows.Scan(&amendment.AmendmentID, &amendment.AgreementID, &amendment.FromVersion, &amendment.ProposedVersion); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan proposed work agreement amendment: %w", err)
+		}
+		amendments = append(amendments, amendment)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close proposed work agreement amendment rows: %w", err)
+	}
+	for _, amendment := range amendments {
+		if err := validateAmendmentBaseActiveTx(tx, amendment.AgreementID, amendment.FromVersion); err != nil {
+			return err
+		}
+		if err := activateWorkAgreementVersionTx(tx, amendment.AgreementID, amendment.ProposedVersion, now); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`
+			UPDATE durable_child_work_agreement_amendments
+			SET status = 'approved', updated_at = ?, resolved_at = ?
+			WHERE amendment_id = ? AND status = 'proposed'
+		`, formatSQLiteTime(now), formatSQLiteTime(now), amendment.AmendmentID); err != nil {
+			return fmt.Errorf("approve work agreement amendment: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateAmendmentBaseActiveTx(tx *sql.Tx, agreementID string, fromVersion int) error {
+	var statusRaw string
+	err := tx.QueryRow(`
+		SELECT status
+		FROM durable_child_work_agreement_versions
+		WHERE agreement_id = ? AND version = ?
+	`, agreementID, fromVersion).Scan(&statusRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("work agreement amendment base %s/%d not found", agreementID, fromVersion)
+	}
+	if err != nil {
+		return fmt.Errorf("load work agreement amendment base: %w", err)
+	}
+	if DurableChildWorkAgreementVersionStatus(statusRaw) != DurableChildWorkAgreementVersionStatusActive {
+		return fmt.Errorf("work agreement amendment base %s/%d is not active", agreementID, fromVersion)
+	}
+	return nil
+}
+
 func updateWorkAgreementStatusForRequestTx(tx *sql.Tx, requestID string, next DurableChildWorkAgreementVersionStatus, now time.Time) error {
-	activatedAt := any(nil)
-	if next == DurableChildWorkAgreementVersionStatusActive {
-		activatedAt = formatSQLiteTime(now)
-	}
-	if _, err := tx.Exec(`
-		UPDATE durable_child_work_agreement_versions
-		SET status = ?, updated_at = ?, activated_at = COALESCE(?, activated_at)
-		WHERE source_request_id = ?
-	`, string(next), formatSQLiteTime(now), activatedAt, requestID); err != nil {
-		return fmt.Errorf("update work agreement status for request: %w", err)
-	}
-	if next != DurableChildWorkAgreementVersionStatusActive {
+	switch next {
+	case DurableChildWorkAgreementVersionStatusProposed:
+		return nil
+	case DurableChildWorkAgreementVersionStatusRejected:
+		if _, err := tx.Exec(`
+			UPDATE durable_child_work_agreement_versions
+			SET status = 'rejected', updated_at = ?
+			WHERE source_request_id = ? AND status = 'proposed'
+		`, formatSQLiteTime(now), requestID); err != nil {
+			return fmt.Errorf("reject proposed work agreement version: %w", err)
+		}
+		return nil
+	case DurableChildWorkAgreementVersionStatusActive:
+	default:
 		return nil
 	}
 	rows, err := tx.Query(`
 		SELECT agreement_id, version
 		FROM durable_child_work_agreement_versions
-		WHERE source_request_id = ? AND status = 'active'
+		WHERE source_request_id = ? AND status IN ('proposed', 'active')
 	`, requestID)
 	if err != nil {
-		return fmt.Errorf("query activated work agreements: %w", err)
+		return fmt.Errorf("query approvable work agreements: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -852,12 +1087,8 @@ func updateWorkAgreementStatusForRequestTx(tx *sql.Tx, requestID string, next Du
 		if err := rows.Scan(&agreementID, &version); err != nil {
 			return fmt.Errorf("scan activated work agreement: %w", err)
 		}
-		if _, err := tx.Exec(`
-			UPDATE durable_child_work_agreement_versions
-			SET status = 'superseded', updated_at = ?, superseded_at = ?
-			WHERE agreement_id = ? AND version != ? AND status = 'active'
-		`, formatSQLiteTime(now), formatSQLiteTime(now), agreementID, version); err != nil {
-			return fmt.Errorf("supersede older active work agreement versions: %w", err)
+		if err := activateWorkAgreementVersionTx(tx, agreementID, version, now); err != nil {
+			return err
 		}
 	}
 	return rows.Err()
@@ -867,19 +1098,47 @@ func activateWorkAgreementVersionTx(tx *sql.Tx, agreementID string, version int,
 	if agreementID == "" || version <= 0 {
 		return nil
 	}
-	if _, err := tx.Exec(`
-		UPDATE durable_child_work_agreement_versions
-		SET status = 'active', updated_at = ?, activated_at = COALESCE(activated_at, ?)
-		WHERE agreement_id = ? AND version = ? AND status = 'proposed'
-	`, formatSQLiteTime(now), formatSQLiteTime(now), agreementID, version); err != nil {
-		return fmt.Errorf("activate work agreement version: %w", err)
+	var agentID string
+	var statusRaw string
+	err := tx.QueryRow(`
+		SELECT agent_id, status
+		FROM durable_child_work_agreement_versions
+		WHERE agreement_id = ? AND version = ?
+	`, agreementID, version).Scan(&agentID, &statusRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("activate work agreement version %s/%d: not found", agreementID, version)
+	}
+	if err != nil {
+		return fmt.Errorf("load work agreement version for activation: %w", err)
+	}
+	status := DurableChildWorkAgreementVersionStatus(statusRaw)
+	if status == DurableChildWorkAgreementVersionStatusActive {
+		return nil
+	}
+	if status != DurableChildWorkAgreementVersionStatusProposed {
+		return fmt.Errorf("activate work agreement version %s/%d: status %q is not proposed", agreementID, version, status)
 	}
 	if _, err := tx.Exec(`
 		UPDATE durable_child_work_agreement_versions
 		SET status = 'superseded', updated_at = ?, superseded_at = ?
-		WHERE agreement_id = ? AND version != ? AND status = 'active'
-	`, formatSQLiteTime(now), formatSQLiteTime(now), agreementID, version); err != nil {
+		WHERE agent_id = ? AND agreement_id = ? AND version != ? AND status = 'active'
+	`, formatSQLiteTime(now), formatSQLiteTime(now), agentID, agreementID, version); err != nil {
 		return fmt.Errorf("supersede previous work agreement version: %w", err)
+	}
+	result, err := tx.Exec(`
+		UPDATE durable_child_work_agreement_versions
+		SET status = 'active', updated_at = ?, activated_at = COALESCE(activated_at, ?)
+		WHERE agreement_id = ? AND version = ? AND status = 'proposed'
+	`, formatSQLiteTime(now), formatSQLiteTime(now), agreementID, version)
+	if err != nil {
+		return fmt.Errorf("activate work agreement version: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect work agreement activation: %w", err)
+	}
+	if affected != 1 {
+		return fmt.Errorf("activate work agreement version %s/%d: no proposed row changed", agreementID, version)
 	}
 	return nil
 }
@@ -935,7 +1194,7 @@ func durableChildConditionalGrantSelect() string {
 
 func durableChildLeaseMaterializationSelect() string {
 	return `SELECT lease_id, materialization_id, agent_id, agreement_id, agreement_version,
-		conditional_grant_id, conditional_grant_version, capability, lease_kind, review_route,
+		conditional_grant_id, conditional_grant_agreement_version, capability, lease_kind, review_route,
 		runtime_spec_hash, trigger, single_use, status, materialization_json,
 		created_at, expires_at, consumed_at, revoked_at
 		FROM durable_child_lease_materializations`
@@ -1056,7 +1315,7 @@ func scanDurableChildLeaseMaterialization(scanner durableExternalRuntimeScanner)
 	var singleUse int
 	var expiresRaw, consumedRaw, revokedRaw sql.NullString
 	if err := scanner.Scan(&record.LeaseID, &record.MaterializationID, &record.AgentID, &record.AgreementID, &record.AgreementVersion,
-		&record.ConditionalGrantID, &record.ConditionalGrantVersion, &record.Capability, &record.LeaseKind, &record.ReviewRoute,
+		&record.ConditionalGrantID, &record.ConditionalGrantAgreementVersion, &record.Capability, &record.LeaseKind, &record.ReviewRoute,
 		&record.RuntimeSpecHash, &record.Trigger, &singleUse, &statusRaw, &materializationJSON,
 		&createdRaw, &expiresRaw, &consumedRaw, &revokedRaw); err != nil {
 		return DurableChildLeaseMaterializationRecord{}, err

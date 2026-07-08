@@ -17,6 +17,7 @@ type WorkAgreementOperatorSummary struct {
 	Runtime            string   `json:"runtime,omitempty"`
 	Schedule           string   `json:"schedule,omitempty"`
 	AuthorizedWork     []string `json:"authorized_work,omitempty"`
+	IgnoredGrants      []string `json:"ignored_grants,omitempty"`
 	ExplicitExclusions []string `json:"explicit_exclusions,omitempty"`
 	Surfaces           []string `json:"surfaces,omitempty"`
 	ExpectedEvidence   []string `json:"expected_evidence,omitempty"`
@@ -66,10 +67,26 @@ func BuildWorkAgreementOperatorSummary(agreement WorkAgreement, grants []Conditi
 			"bounded result or review artifact",
 		},
 	}
+	referencedGrantIDs := make(map[string]struct{}, len(agreement.ConditionalGrantIDs))
+	for _, grantID := range agreement.ConditionalGrantIDs {
+		referencedGrantIDs[grantID] = struct{}{}
+	}
 	for _, grant := range grants {
 		grant = NormalizeConditionalGrant(grant)
 		if grant.WorkAgreementID != agreement.ID || grant.WorkAgreementVersion != agreement.Version {
+			summary.IgnoredGrants = append(summary.IgnoredGrants, grant.ID+": different agreement version")
 			continue
+		}
+		if _, ok := referencedGrantIDs[grant.ID]; !ok {
+			summary.IgnoredGrants = append(summary.IgnoredGrants, grant.ID+": not referenced by work agreement")
+			continue
+		}
+		if grant.Status != "" && grant.Status != "active" {
+			summary.IgnoredGrants = append(summary.IgnoredGrants, grant.ID+": status "+grant.Status)
+			continue
+		}
+		if err := ValidateConditionalGrant(grant); err != nil {
+			return WorkAgreementOperatorSummary{}, err
 		}
 		summary.AuthorizedWork = append(summary.AuthorizedWork, summarizeConditionalGrant(grant))
 		if grant.CredentialScope != "" {

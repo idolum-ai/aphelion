@@ -26,6 +26,7 @@ func TestBuildWorkAgreementOperatorSummaryNamesAuthorityAndExclusions(t *testing
 		Schedule:            ScheduleSpec{Kind: "cron", Expression: "0 13 * * *", Timezone: "America/New_York"},
 		ReviewPolicy:        ReviewPolicy{DefaultOutbound: "draft_only", SendRequires: "review_principal"},
 		ConditionalGrantIDs: []string{"grant_gmail_read"},
+		Revocation:          RevocationPolicy{StopFutureLeases: true},
 	}, []ConditionalGrant{{
 		ID:                   "grant_gmail_read",
 		WorkAgreementID:      "wa_daily_audience_update",
@@ -36,6 +37,36 @@ func TestBuildWorkAgreementOperatorSummaryNamesAuthorityAndExclusions(t *testing
 		CredentialScope:      "gmail:audience",
 		Conditions:           ConditionalGrantConditions{Triggers: []string{"schedule:wa_daily_audience_update"}},
 		Materializes:         GrantMaterialization{LeaseKind: ExternalRuntimeLeaseKindToolInvocation, TTLSeconds: 900, ReviewRoute: "review_principal", SingleUse: true},
+	}, {
+		ID:                   "grant_gmail_write",
+		WorkAgreementID:      "wa_daily_audience_update",
+		WorkAgreementVersion: 3,
+		Capability:           "gmail_write",
+		Tool:                 "gog",
+		Actions:              []string{"gmail.send"},
+		CredentialScope:      "gmail:audience",
+		Conditions:           ConditionalGrantConditions{Triggers: []string{"schedule:wa_daily_audience_update"}},
+		Materializes:         GrantMaterialization{LeaseKind: ExternalRuntimeLeaseKindToolInvocation, TTLSeconds: 900, ReviewRoute: "review_principal", SingleUse: true},
+	}, {
+		ID:                   "grant_old",
+		WorkAgreementID:      "wa_daily_audience_update",
+		WorkAgreementVersion: 2,
+		Status:               "active",
+		Capability:           "gmail_read",
+		Tool:                 "gog",
+		Actions:              []string{"gmail.read"},
+		CredentialScope:      "gmail:audience",
+		Conditions:           ConditionalGrantConditions{Triggers: []string{"schedule:wa_daily_audience_update"}},
+		Materializes:         GrantMaterialization{LeaseKind: ExternalRuntimeLeaseKindToolInvocation, TTLSeconds: 900, ReviewRoute: "review_principal", SingleUse: true},
+	}, {
+		ID:                   "grant_revoked",
+		WorkAgreementID:      "wa_daily_audience_update",
+		WorkAgreementVersion: 3,
+		Status:               "revoked",
+		Capability:           "channel_draft",
+		Actions:              []string{"channel.draft"},
+		Conditions:           ConditionalGrantConditions{Triggers: []string{"schedule:wa_daily_audience_update"}},
+		Materializes:         GrantMaterialization{LeaseKind: ExternalRuntimeLeaseKindRuntimeTask, TTLSeconds: 900, ReviewRoute: "review_principal", SingleUse: true},
 	}}, DurableExternalRuntimeSpec{
 		Kind:      "openclaw",
 		Mode:      ExternalRuntimeModeOneshot,
@@ -44,6 +75,7 @@ func TestBuildWorkAgreementOperatorSummaryNamesAuthorityAndExclusions(t *testing
 			{Kind: "node_modules", Path: "/var/lib/aphelion/children/audience/openclaw/deps/node_modules", Writable: true},
 		},
 		Source:         RuntimeSourceRef{Kind: "git", Repo: "https://github.com/openclaw/openclaw", Ref: "c7295e417d5daec76c18fb452d117f7b8eadc4d6"},
+		Entrypoint:     RuntimeEntrypoint{Kind: "stdio", Command: []string{"openclaw-acp"}},
 		NetworkClasses: []string{"provider_egress"},
 	})
 	if err != nil {
@@ -53,6 +85,10 @@ func TestBuildWorkAgreementOperatorSummaryNamesAuthorityAndExclusions(t *testing
 		t.Fatalf("summary principals = %#v", summary)
 	}
 	assertStringContains(t, summary.AuthorizedWork, "gmail_read")
+	assertStringNotContains(t, summary.AuthorizedWork, "gmail_write")
+	assertStringContains(t, summary.IgnoredGrants, "grant_gmail_write")
+	assertStringContains(t, summary.IgnoredGrants, "grant_old")
+	assertStringContains(t, summary.IgnoredGrants, "grant_revoked")
 	assertStringContains(t, summary.Surfaces, "credential:gmail:audience")
 	assertStringContains(t, summary.Surfaces, "dependency:node_modules")
 	assertStringContains(t, summary.ExplicitExclusions, "no ambient runtime authority")
@@ -89,4 +125,13 @@ func assertStringContains(t *testing.T, values []string, want string) {
 		}
 	}
 	t.Fatalf("values = %#v, want item containing %q", values, want)
+}
+
+func assertStringNotContains(t *testing.T, values []string, want string) {
+	t.Helper()
+	for _, value := range values {
+		if strings.Contains(value, want) {
+			t.Fatalf("values = %#v, want no item containing %q", values, want)
+		}
+	}
 }

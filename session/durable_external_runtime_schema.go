@@ -51,6 +51,7 @@ func durableExternalRuntimeSchemaStatements() []string {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_durable_child_work_agreements_agent_status ON durable_child_work_agreement_versions(agent_id, status, updated_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_durable_child_work_agreements_request ON durable_child_work_agreement_versions(source_request_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_child_work_agreements_one_active ON durable_child_work_agreement_versions(agent_id, agreement_id) WHERE status = 'active'`,
 		`CREATE TABLE IF NOT EXISTS durable_child_conditional_grants (
 			agreement_id TEXT NOT NULL,
 			agreement_version INTEGER NOT NULL,
@@ -76,7 +77,7 @@ func durableExternalRuntimeSchemaStatements() []string {
 			agreement_id TEXT NOT NULL DEFAULT '',
 			agreement_version INTEGER NOT NULL DEFAULT 0,
 			conditional_grant_id TEXT NOT NULL DEFAULT '',
-			conditional_grant_version INTEGER NOT NULL DEFAULT 0,
+			conditional_grant_agreement_version INTEGER NOT NULL DEFAULT 0,
 			capability TEXT NOT NULL DEFAULT '',
 			lease_kind TEXT NOT NULL DEFAULT '',
 			review_route TEXT NOT NULL DEFAULT '',
@@ -92,7 +93,7 @@ func durableExternalRuntimeSchemaStatements() []string {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_durable_child_lease_materializations_materialization ON durable_child_lease_materializations(materialization_id, lease_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_durable_child_lease_materializations_agent_status ON durable_child_lease_materializations(agent_id, status, expires_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_durable_child_lease_materializations_grant ON durable_child_lease_materializations(agreement_id, agreement_version, conditional_grant_id, conditional_grant_version)`,
+		`CREATE INDEX IF NOT EXISTS idx_durable_child_lease_materializations_grant ON durable_child_lease_materializations(agreement_id, agreement_version, conditional_grant_id, conditional_grant_agreement_version)`,
 		`CREATE TABLE IF NOT EXISTS durable_child_work_agreement_amendments (
 			amendment_id TEXT PRIMARY KEY,
 			agreement_id TEXT NOT NULL DEFAULT '',
