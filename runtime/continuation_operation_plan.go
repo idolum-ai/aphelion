@@ -571,6 +571,69 @@ func operationPhaseApprovalBlockedReason(phase session.OperationPhase) string {
 	return ""
 }
 
+func operationStateWithNonContinuableAdminExactExecTerminated(opState session.OperationState, now time.Time) (session.OperationState, bool) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	opState = session.NormalizeOperationState(opState)
+	if !operationStateHasNonContinuableAdminExactExec(opState) {
+		return opState, false
+	}
+	for i := range opState.PhasePlan.Phases {
+		if !operationPhaseIsNonContinuableAdminExactExec(opState.PhasePlan.Phases[i]) {
+			continue
+		}
+		opState.PhasePlan.Phases[i].Status = session.PlanStatusPending
+		opState.PhasePlan.Phases[i].LeaseID = ""
+		opState.PhasePlan.Phases[i].StaleAuthority = true
+		opState.PhasePlan.Phases[i].BlockedReasonCode = "admin_exact_exec_requires_exact_command_material"
+	}
+	if operationProposalIsNonContinuableAdminExactExec(opState.Proposal) {
+		opState.Proposal.Status = session.ProposalStatusSuperseded
+		opState.Proposal.UpdatedAt = now
+	}
+	opState.Status = session.OperationStatusFailed
+	opState.Stage = "non_continuable_exact_exec"
+	opState.Summary = "Exact admin shell command approval cannot be resumed from a provenance-only command hash; send the exact command through a fresh exec request."
+	opState.UpdatedAt = now
+	opState.PhasePlan.UpdatedAt = now
+	return session.NormalizeOperationState(opState), true
+}
+
+func operationStateHasNonContinuableAdminExactExec(opState session.OperationState) bool {
+	opState = session.NormalizeOperationState(opState)
+	currentID := strings.TrimSpace(opState.PhasePlan.CurrentPhaseID)
+	if currentID != "" {
+		for _, phase := range opState.PhasePlan.Phases {
+			phase = normalizeSingleOperationPhase(phase)
+			if strings.TrimSpace(phase.ID) != currentID {
+				continue
+			}
+			return operationPhaseIsNonContinuableAdminExactExec(phase) ||
+				(operationProposalIsNonContinuableAdminExactExec(opState.Proposal) &&
+					strings.TrimSpace(opState.Proposal.ID) == operationPhaseProposalID(opState, phase))
+		}
+	}
+	for _, phase := range opState.PhasePlan.Phases {
+		phase = normalizeSingleOperationPhase(phase)
+		if phase.Status != session.PlanStatusCompleted && operationPhaseIsNonContinuableAdminExactExec(phase) {
+			return true
+		}
+	}
+	return len(opState.PhasePlan.Phases) == 0 && operationProposalIsNonContinuableAdminExactExec(opState.Proposal)
+}
+
+func operationProposalIsNonContinuableAdminExactExec(proposal session.OperationProposal) bool {
+	proposal = session.NormalizeOperationState(session.OperationState{Proposal: proposal}).Proposal
+	return normalizeOperationPhaseReasonCode(proposal.Kind) == "admin_unbounded_exact_exec"
+}
+
+func operationPhaseIsNonContinuableAdminExactExec(phase session.OperationPhase) bool {
+	phase = normalizeSingleOperationPhase(phase)
+	return normalizeOperationPhaseReasonCode(phase.AuthorityClass) == "admin_unbounded_exact_exec"
+}
+
 func operationPhaseReasonCodeIsStaleAuthority(code string) bool {
 	switch normalizeOperationPhaseReasonCode(code) {
 	case "stale_authority", "superseded", "superseded_phase", "stale_phase", "old_authority", "old_lease":
