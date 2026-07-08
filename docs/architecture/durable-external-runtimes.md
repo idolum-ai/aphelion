@@ -57,8 +57,10 @@ be carried by a current Aphelion-brokered contract and bounded evidence lane.
 | Typed contract helpers | Present / draft | Local Go helpers type the work-agreement and runtime-contract spine. |
 | Session bridge | Present / draft | Local bridge code maps discovered effects into continuation/recovery shapes. |
 | Dependency isolation contracts | Present / draft | Child dependency state is separated from parent runtime dependencies. |
+| Work agreement storage | Present / draft | Session storage persists runtime specs, work agreement versions, conditional grants, lease materializations, and amendments. |
+| Operator summaries | Present / draft | Transport-neutral display helpers summarize authorization, exclusions, surfaces, evidence, and amendment review focus. |
 | Wake executor | Not implemented | No live child wake execution is introduced by this branch. |
-| Persistence layer | Not implemented | Durable storage integration remains future work. |
+| Persistence layer | Partial / draft | Contract storage exists; wake/runtime state persistence and adapter orchestration remain future work. |
 | Runtime-side tool bridge | Not implemented | Native runtime tools must remain disabled/wrapped until separately approved. |
 | Hermes/OpenClaw adapters | Not implemented | Runtime kind is compatibility metadata, not permission. |
 | Live runtime choreography | Not implemented | No gateway/remote-service process orchestration is shipped here. |
@@ -581,10 +583,11 @@ surface rather than inventing ambient authority.
 
 ## Proposed Schemas
 
-These schemas are code-backed helper contracts, not implemented storage fields
-in the current codebase. Existing generic carriers remain the persistence
-surface for this slice: capability contract JSON, child task packet/result JSON,
-and continuation recovery contracts.
+These schemas are code-backed helper contracts. Session storage now persists the
+work-agreement/runtime contract spine for drafts, approval transitions, lease
+materialization, and amendment review, while existing generic carriers remain
+the execution surface for this slice: capability contract JSON, child task
+packet/result JSON, and continuation recovery contracts.
 
 ### DurableAgentRuntimeSpec
 

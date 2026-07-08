@@ -187,6 +187,12 @@ func (s *SQLiteStore) AppendCapabilityReview(review CapabilityReview) (Capabilit
 			return CapabilityReview{}, err
 		}
 	}
+	if err := s.UpdateDurableChildWorkAgreementStatusForRequest(review.RequestID, review.Status); err != nil {
+		return CapabilityReview{}, err
+	}
+	if err := s.UpdateDurableChildWorkAgreementAmendmentStatusForRequest(review.RequestID, review.Status); err != nil {
+		return CapabilityReview{}, err
+	}
 	return CapabilityReview(review), nil
 }
 
@@ -268,6 +274,12 @@ func (s *SQLiteStore) ApplyCapabilityReviewTransition(input CapabilityReviewTran
 		if err := s.UpdateDurableChildAgreementStatusForRequest(review.RequestID, agreementStatus); err != nil {
 			return CapabilityReview{}, false, err
 		}
+	}
+	if err := s.UpdateDurableChildWorkAgreementStatusForRequest(review.RequestID, review.Status); err != nil {
+		return CapabilityReview{}, false, err
+	}
+	if err := s.UpdateDurableChildWorkAgreementAmendmentStatusForRequest(review.RequestID, review.Status); err != nil {
+		return CapabilityReview{}, false, err
 	}
 	review.CreatedAt = createdAt
 	return review, true, nil

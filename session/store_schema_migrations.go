@@ -737,6 +737,7 @@ func ensureCurrentSchemaShapeRepairColumns(tx *sql.Tx) error {
 		{name: "review event idempotency key", fn: ensureReviewEventIdempotencyKey},
 		{name: "continuation recovery contracts", fn: ensureContinuationRecoveryContractTables},
 		{name: "authority bundle contracts", fn: ensureAuthorityBundleTables},
+		{name: "durable external runtime contracts", fn: ensureDurableExternalRuntimeTables},
 	}
 	for _, repair := range repairs {
 		if err := repair.fn(tx); err != nil {
