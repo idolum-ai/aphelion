@@ -89,6 +89,48 @@ func TestCompileContinuationAuthorityContractAllowsDiscoveredEffectFetch(t *test
 	}
 }
 
+func TestCompileContinuationAuthorityContractRejectsAdminExactExecWithoutCommandMaterial(t *testing.T) {
+	t.Parallel()
+
+	compilation := CompileContinuationAuthorityContract(ContinuationState{
+		ActionProposal: ActionProposal{
+			Summary:       "Approve one exact admin shell command",
+			BoundedEffect: "Run exactly the displayed command once through bash -lc. command_hash=sha256:test is provenance only and does not approve variants or future commands.",
+			RiskClass:     "admin_unbounded_exact_exec",
+			AllowedActions: []string{
+				"execute_phase_once",
+				"use_existing_authority_only",
+				"report_evidence",
+			},
+			Status: ProposalStatusApproved,
+		},
+		ContinuationLease: ContinuationLease{
+			Status:         ContinuationLeaseStatusActive,
+			RemainingTurns: 1,
+			AllowedActions: []string{
+				"execute_phase_once",
+				"use_existing_authority_only",
+				"report_evidence",
+			},
+		},
+	})
+
+	if compilation.Valid() {
+		t.Fatalf("compilation = %#v, want invalid hash-only admin exact exec continuation", compilation)
+	}
+	if compilation.SuggestedRepair != "run_exec_tool_with_exact_command" {
+		t.Fatalf("suggested repair = %q, want exact exec repair", compilation.SuggestedRepair)
+	}
+	if len(compilation.Contradictions) != 1 {
+		t.Fatalf("contradictions = %#v, want one exact-command contradiction", compilation.Contradictions)
+	}
+	got := compilation.Contradictions[0]
+	if got.Reason != "admin_exact_exec_requires_exact_command_material" ||
+		got.ForbiddenAction != "provenance_only_command_hash" {
+		t.Fatalf("contradiction = %#v, want provenance-only exact-command rejection", got)
+	}
+}
+
 func TestCompileActionProposalAuthorityContractRejectsDeprecatedExternalReadWithWorkspaceWrite(t *testing.T) {
 	t.Parallel()
 

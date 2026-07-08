@@ -272,6 +272,209 @@ func TestContinuationBoundaryDoesNotOfferStalePhaseAfterCompletedOperation(t *te
 	}
 }
 
+func TestMaterializeDoesNotOfferHashOnlyAdminExactExecContinuation(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9053, UserID: 0, Scope: telegramDMScopeRef(9053)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "riemann-venue-pr-update",
+		Objective: "Update riemann-venue PR #1 title and description.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		Summary:   "Proposal approved: Approve one exact admin shell command",
+		Proposal: session.OperationProposal{
+			ID:            "phase-riemann-venue-pr-update-admin-exact-exec",
+			Kind:          "admin_unbounded_exact_exec",
+			Summary:       "Approve one exact admin shell command",
+			BoundedEffect: "Run exactly the displayed command once through bash -lc. command_hash=sha256:test is provenance only and does not approve variants or future commands.",
+			Status:        session.ProposalStatusApproved,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "mixed-stale-plan",
+			Goal:           "Update riemann-venue PR #1 title and description.",
+			CurrentPhaseID: "admin-exact-exec",
+			Phases: []session.OperationPhase{
+				{
+					ID:               "riemann-venue-pr-1-update-title-body-v1",
+					Summary:          "Edit PR #1 title/body to the Lean-first research workspace framing.",
+					Status:           session.PlanStatusCompleted,
+					AuthorityClass:   "external_account_auth_status",
+					RequiresApproval: true,
+					CompletedAt:      time.Now().UTC().Add(-time.Minute),
+				},
+				{
+					ID:               "admin-exact-exec",
+					Summary:          "Approve one exact admin shell command",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "admin_unbounded_exact_exec",
+					BoundedEffect:    "Run exactly the displayed command once through bash -lc. command_hash=sha256:test is provenance only and does not approve variants or future commands.",
+					AllowedActions:   []string{"execute_phase_once", "use_existing_authority_only", "report_evidence"},
+					ForbiddenActions: []string{"expand_authority_without_new_approval", "silent_continuation_past_report"},
+					RequiresApproval: true,
+				},
+				{
+					ID:               "old-pr-296-doc-phase",
+					Summary:          "Update old PR #296 docs.",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "workspace_write",
+					RequiresApproval: true,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+
+	materialized, err := rt.materializePendingOperationProposalApproval(context.Background(), key, core.InboundMessage{ChatID: key.ChatID, SenderID: 1001, Text: "continue", MessageID: 1}, "continue", nil)
+	if err != nil {
+		t.Fatalf("materializePendingOperationProposalApproval() err = %v", err)
+	}
+	if materialized {
+		t.Fatal("materialized = true, want no hash-only exact exec continuation prompt")
+	}
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no approval buttons", inlineCount)
+	}
+	got, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if got.Status != session.OperationStatusFailed || got.Stage != "non_continuable_exact_exec" {
+		t.Fatalf("operation status/stage = %q/%q, want failed non-continuable exact exec", got.Status, got.Stage)
+	}
+	if got.Proposal.Status != session.ProposalStatusSuperseded {
+		t.Fatalf("proposal status = %q, want superseded", got.Proposal.Status)
+	}
+	if got.PhasePlan.Phases[1].StaleAuthority != true ||
+		got.PhasePlan.Phases[1].BlockedReasonCode != "admin_exact_exec_requires_exact_command_material" ||
+		got.PhasePlan.Phases[1].LeaseID != "" {
+		t.Fatalf("exact exec phase = %#v, want stale authority without lease", got.PhasePlan.Phases[1])
+	}
+	events, err := store.ExecutionEventsBySession(key, 0, 100)
+	if err != nil {
+		t.Fatalf("ExecutionEventsBySession() err = %v", err)
+	}
+	var blocked bool
+	for _, event := range events {
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationOffered {
+			t.Fatalf("events = %#v, want no continuation.offered", events)
+		}
+		if strings.TrimSpace(event.EventType) == core.ExecutionEventContinuationBlocked && strings.TrimSpace(event.Status) == "non_continuable_exact_exec" {
+			blocked = true
+		}
+	}
+	if !blocked {
+		t.Fatalf("events = %#v, want non-continuable exact exec block", events)
+	}
+}
+
+func TestContinuationBoundaryDoesNotOfferHashOnlyAdminExactExecNextPhase(t *testing.T) {
+	t.Parallel()
+
+	cfg, store, provider, sender := buildRuntimeFixtures(t)
+	rt, err := New(cfg, store, provider, nil, sender)
+	if err != nil {
+		t.Fatalf("New() err = %v", err)
+	}
+	key := session.SessionKey{ChatID: 9054, UserID: 0, Scope: telegramDMScopeRef(9054)}
+	if err := store.UpdateOperationState(key, session.OperationState{
+		ID:        "riemann-venue-pr-update-boundary",
+		Objective: "Update riemann-venue PR #1 title and description.",
+		Status:    session.OperationStatusActive,
+		Stage:     "phase_approval",
+		Proposal: session.OperationProposal{
+			ID:            "phase-riemann-venue-boundary-admin-exact-exec",
+			Kind:          "admin_unbounded_exact_exec",
+			Summary:       "Approve one exact admin shell command",
+			BoundedEffect: "Run exactly the displayed command once through bash -lc. command_hash=sha256:test is provenance only and does not approve variants or future commands.",
+			Status:        session.ProposalStatusApproved,
+		},
+		PhasePlan: session.OperationPhasePlan{
+			ID:             "boundary-mixed-stale-plan",
+			Goal:           "Update riemann-venue PR #1 title and description.",
+			CurrentPhaseID: "admin-exact-exec",
+			Phases: []session.OperationPhase{
+				{
+					ID:               "riemann-venue-pr-1-update-title-body-v1",
+					Summary:          "Edit PR #1 title/body to the Lean-first research workspace framing.",
+					Status:           session.PlanStatusCompleted,
+					AuthorityClass:   "external_account_auth_status",
+					RequiresApproval: true,
+					CompletedAt:      time.Now().UTC().Add(-time.Minute),
+				},
+				{
+					ID:               "admin-exact-exec",
+					Summary:          "Approve one exact admin shell command",
+					Status:           session.PlanStatusPending,
+					AuthorityClass:   "admin_unbounded_exact_exec",
+					BoundedEffect:    "Run exactly the displayed command once through bash -lc. command_hash=sha256:test is provenance only and does not approve variants or future commands.",
+					AllowedActions:   []string{"execute_phase_once", "use_existing_authority_only", "report_evidence"},
+					ForbiddenActions: []string{"expand_authority_without_new_approval", "silent_continuation_past_report"},
+					RequiresApproval: true,
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOperationState() err = %v", err)
+	}
+	now := time.Now().UTC()
+	consumed := session.ContinuationState{
+		Kind:         session.TurnAuthorizationKindContinuation,
+		Status:       session.ContinuationStatusIdle,
+		Objective:    "Update riemann-venue PR #1 title and description.",
+		StageSummary: "Edit PR #1 title/body to the Lean-first research workspace framing.",
+		ActionProposal: session.ActionProposal{
+			ID:          "aprop-riemann-venue-pr-1-update-title-body-v1",
+			OperationID: "phase-riemann-venue-pr-update-boundary-riemann-venue-pr-1-update-title-body-v1",
+			Summary:     "Edit PR #1 title/body to the Lean-first research workspace framing.",
+			RiskClass:   "external_account_auth_status",
+			Status:      session.ProposalStatusApproved,
+		},
+		ContinuationLease: session.ContinuationLease{
+			ID:             "lease-riemann-pr-update",
+			ProposalID:     "aprop-riemann-venue-pr-1-update-title-body-v1",
+			Status:         session.ContinuationLeaseStatusConsumed,
+			MaxTurns:       1,
+			RemainingTurns: 0,
+			ConsumedAt:     now,
+			ExpiresAt:      now.Add(time.Minute),
+		},
+		UpdatedAt: now,
+	}
+
+	err = rt.maybeOfferNextOperationPhaseAfterContinuationBoundary(context.Background(), key, consumed, continuationLoopDecision{
+		Continue: false,
+		Reason:   "not_approved",
+		Boundary: "no active approved continuation remains",
+		Mission:  missionLoopAssessment{Status: "not_bound", Continue: true},
+	})
+	if err != nil {
+		t.Fatalf("maybeOfferNextOperationPhaseAfterContinuationBoundary() err = %v", err)
+	}
+
+	sender.mu.Lock()
+	inlineCount := len(sender.inline)
+	sender.mu.Unlock()
+	if inlineCount != 0 {
+		t.Fatalf("inline count = %d, want no hash-only exact exec approval buttons", inlineCount)
+	}
+	got, err := store.OperationState(key)
+	if err != nil {
+		t.Fatalf("OperationState() err = %v", err)
+	}
+	if got.Status != session.OperationStatusFailed || got.Stage != "non_continuable_exact_exec" {
+		t.Fatalf("operation status/stage = %q/%q, want failed non-continuable exact exec", got.Status, got.Stage)
+	}
+}
+
 func TestMaterializeSinglePhasePlanRecordsNarrowBundleSignal(t *testing.T) {
 	t.Parallel()
 

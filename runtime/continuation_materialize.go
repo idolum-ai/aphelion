@@ -233,6 +233,18 @@ func (r *Runtime) materializePendingOperationProposalApprovalLocked(ctx context.
 	if operationStatusIsTerminal(opState.Status) {
 		return false, nil
 	}
+	if terminatedState, terminated := operationStateWithNonContinuableAdminExactExecTerminated(opState, now); terminated {
+		opState = terminatedState
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return false, fmt.Errorf("persist non-continuable admin exact exec operation state: %w", err)
+		}
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "non_continuable_exact_exec", map[string]any{
+			"operation_id": strings.TrimSpace(opState.ID),
+			"reason":       "admin_exact_exec_requires_exact_command_material",
+			"next_action":  "send the exact command through a fresh exec request",
+		}, now)
+		return false, nil
+	}
 	if viability := r.operationContinuationCandidateViability(key, opState, now); !viability.Live {
 		r.recordSuppressedOperationContinuationCandidate(key, opState, viability, now)
 		return false, nil

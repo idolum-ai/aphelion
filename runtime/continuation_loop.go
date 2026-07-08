@@ -118,6 +118,18 @@ func (r *Runtime) maybeOfferNextOperationPhaseAfterContinuationBoundaryLocked(ct
 	if operationStatusIsTerminal(opState.Status) {
 		return nil
 	}
+	if terminatedState, terminated := operationStateWithNonContinuableAdminExactExecTerminated(opState, now); terminated {
+		opState = terminatedState
+		if err := r.store.UpdateOperationState(key, opState); err != nil {
+			return fmt.Errorf("persist non-continuable admin exact exec operation state: %w", err)
+		}
+		r.recordExecutionEvent(key, core.ExecutionEventContinuationBlocked, "continuation", "non_continuable_exact_exec", map[string]any{
+			"operation_id": strings.TrimSpace(opState.ID),
+			"reason":       "admin_exact_exec_requires_exact_command_material",
+			"next_action":  "send the exact command through a fresh exec request",
+		}, now)
+		return nil
+	}
 	if operationPhasePlanHasBlockingInProgress(opState.PhasePlan) {
 		return nil
 	}

@@ -107,6 +107,18 @@ func CompileContinuationAuthorityContract(state ContinuationState) AuthorityCont
 	if ContinuationConstraintsAreDiscoveredEffect(state.ContinuationLease.Constraints) {
 		return compileDiscoveredEffectContinuationAuthorityContract(state)
 	}
+	if continuationAuthorityIsAdminExactExec(state.ActionProposal) {
+		return normalizeAuthorityContractCompilation(AuthorityContractCompilation{
+			Status:          AuthorityContractCompilationStatusInvalid,
+			SuggestedRepair: "run_exec_tool_with_exact_command",
+			Contradictions: []AuthorityContradiction{{
+				AllowedAction:   "admin_unbounded_exact_exec",
+				ForbiddenAction: "provenance_only_command_hash",
+				Reason:          "admin_exact_exec_requires_exact_command_material",
+				Severity:        AuthorityContradictionSeverityInvalid,
+			}},
+		})
+	}
 	proposal := state.ActionProposal
 	proposal.AllowedActions = append(append([]string(nil), proposal.AllowedActions...), state.ContinuationLease.AllowedActions...)
 	proposal.ForbiddenActions = append(append([]string(nil), proposal.ForbiddenActions...), state.ContinuationLease.ForbiddenActions...)
@@ -118,6 +130,10 @@ func CompileContinuationAuthorityContract(state ContinuationState) AuthorityCont
 		}
 	}
 	return CompileActionProposalAuthorityContract(proposal)
+}
+
+func continuationAuthorityIsAdminExactExec(proposal ActionProposal) bool {
+	return normalizeEnumValue(proposal.RiskClass) == "admin_unbounded_exact_exec"
 }
 
 func compileDiscoveredEffectContinuationAuthorityContract(state ContinuationState) AuthorityContractCompilation {
