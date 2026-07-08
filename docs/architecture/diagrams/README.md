@@ -15,6 +15,10 @@ Use `svg` for docs embedding and canonical review. Regenerate raster exports
 only as temporary local artifacts when a downstream surface explicitly needs
 them.
 
+The durable external runtime proposal currently has only Mermaid source at
+`src/07-durable-external-runtimes.mmd` because `mmdc` was not available in the
+authoring environment.
+
 ## Sources
 
 Source policy and regeneration guidance are in [`src/`](src).

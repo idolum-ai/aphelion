@@ -1,0 +1,65 @@
+flowchart LR
+    Operator["Operator thread<br/>or /agents"]
+    Lease["Runtime leases<br/>materialized for wake/action"]
+
+    subgraph parent["Parent Aphelion"]
+        direction TB
+        Registry["Durable agent registry"]
+        RuntimeSpec["Durable runtime spec<br/>(proposed)"]
+        WorkAgreement["Work agreement<br/>conditional grants"]
+        Materializer["Lease materializer<br/>schedule / trigger / policy"]
+        Wake["Wake compiler<br/>ChildTaskPacket"]
+        Adapter["Runtime adapter registry"]
+        Evidence["TES / session evidence"]
+        Reviews["Review artifacts"]
+    end
+
+    subgraph adapter["Generic child runtime adapter"]
+        direction TB
+        Preflight["preflight / status"]
+        OneShot["wake oneshot"]
+        Gateway["gateway start / stop"]
+        Results["ChildTaskResult<br/>+ artifact refs"]
+    end
+
+    subgraph child["Child runtime process"]
+        direction TB
+        Hermes["Hermes<br/>hermes-acp or gateway"]
+        OpenClaw["OpenClaw<br/>agent/acp or gateway"]
+        State[("Child-local state<br/>HERMES_HOME / OPENCLAW_STATE_DIR")]
+        Secrets[("Child-scoped secrets")]
+        Channels["Optional public channel<br/>Telegram / WhatsApp / etc."]
+    end
+
+    Operator --> Registry
+    Registry --> RuntimeSpec
+    Registry --> WorkAgreement
+    RuntimeSpec --> Materializer
+    WorkAgreement --> Materializer
+    Materializer --> Lease
+    Lease --> Wake
+    RuntimeSpec --> Wake
+    Wake --> Adapter
+    Adapter --> Preflight
+    Adapter --> OneShot
+    Adapter --> Gateway
+
+    Preflight --> Hermes
+    Preflight --> OpenClaw
+    OneShot --> Hermes
+    OneShot --> OpenClaw
+    Gateway --> Hermes
+    Gateway --> OpenClaw
+    Hermes --> State
+    OpenClaw --> State
+    Hermes --> Secrets
+    OpenClaw --> Secrets
+    Hermes --> Channels
+    OpenClaw --> Channels
+
+    Hermes --> Results
+    OpenClaw --> Results
+    Results --> Evidence
+    Results --> Reviews
+
+    Channels -. "requires gateway_presence lease" .-> Lease

@@ -56,6 +56,7 @@ These invariants are normative for architecture and requirements alignment:
 - [transparent-execution-sequence.md](transparent-execution-sequence.md): canonical execution timeline and projection/fallback precedence.
 - [external-tools-pilot.md](external-tools-pilot.md): current external-tool lifecycle, execution-mode semantics, and bundled `browse_page` pilot.
 - [telegram-child-bot-runbook.md](telegram-child-bot-runbook.md): generic Telegram child-bot runner boundary and operational checks.
+- [durable-external-runtimes.md](durable-external-runtimes.md): proposed generic adapter contract for promoted durable children backed by Hermes, OpenClaw, or other supervised external runtimes.
 - [capability-delegation-lane.md](capability-delegation-lane.md): general request/review/grant lane for tools, devices, accounts, purchases, public web, and emergent permissions.
 - [structural-hygiene.md](structural-hygiene.md): large-file ledger and split discipline.
 - [diagrams/README.md](diagrams/README.md): canonical diagram assets.
@@ -68,6 +69,7 @@ These invariants are normative for architecture and requirements alignment:
 - [04-durable-topology.svg](diagrams/04-durable-topology.svg)
 - [05-state-surfaces.svg](diagrams/05-state-surfaces.svg)
 - [06-delivery-polymorphism.svg](diagrams/06-delivery-polymorphism.svg)
+- [07-durable-external-runtimes.mmd](diagrams/src/07-durable-external-runtimes.mmd)
 
 ## Update Rule
 

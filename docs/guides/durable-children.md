@@ -13,6 +13,16 @@ keeps governance and evidence; the child works inside the policy it was given.
 | External-channel child | Another local adapter should observe or report status without becoming a house principal. | Create an external-channel child and keep adapter state under child runtime state. |
 | Tailnet remote child | The child should run its own Aphelion service on a Linux Tailnet host. | Configure Tailnet, dry-run `durable-agent provision`, then apply over Tailscale SSH. |
 
+A proposed architecture for future Hermes/OpenClaw-backed children and work
+agreements is documented in
+[Durable External Runtimes](../architecture/durable-external-runtimes.md). That
+path is not implemented runtime behavior yet. When implemented, it stays
+governed as a durable child: runtime presence is not authority, and public
+gateway mode requires explicit grants and materialized leases.
+The proposed gateway mode can still allow admitted users to talk directly with
+the child persona; Aphelion governs the effect boundary rather than reviewing
+every ordinary chat turn.
+
 ## Shared Setup Shape
 
 Every child setup should leave the same trail:
@@ -23,7 +33,9 @@ Every child setup should leave the same trail:
 3. Set the bootstrap: child-local model or Codex home, storage roots, secret
    scopes, and network posture.
 4. Set the live policy: outbound mode, drift policy, capability envelope, and
-   any Tailnet declaration.
+   any Tailnet declaration. Work agreements, conditional grants, and
+   review-route setup are proposed in the external-runtime architecture but are
+   not current setup surfaces.
 5. Activate or provision.
 6. Validate with:
 
@@ -36,6 +48,47 @@ From Telegram, use `/agents`, `/status`, and `/health` to check the same parent
 ledger from the operator channel. `/agents` is the lifecycle board: inspect the
 child, request a bounded `Brief`, `Park` it, `Resume` it after activation checks,
 or confirm `Retire` when it should leave active use.
+
+## Proposed Work Agreements
+
+The proposed external-runtime architecture adds work agreements for cases
+where creating the child should also define future work the admin is willing to
+pre-authorize under conditions. The work agreement is the signed operating mandate;
+the child still receives only the short-lived leases Aphelion materializes for a
+matching wake or action.
+
+For leased agents, the proposed model keeps approval routes separate. The
+Aphelion admin usually approves platform/security authority, while the customer
+reviews content and domain decisions after trial graduation. Resource owners
+still approve access to private data, audience membership, or externally owned
+accounts.
+
+Common shapes:
+
+- Daily email review: read messages through a child-scoped `gog` Gmail read
+  credential, summarize them, and draft a WhatsApp update. Sending remains
+  parent-reviewed unless the work agreement names an autonomous-send audience and
+  policy.
+- Direct customer dialogue: admit named customer senders to talk with the child
+  persona directly, while routing tools, secrets, cross-conversation sends,
+  parent memory writes, and work agreement changes through Aphelion.
+- Friday browser watch: monitor named domains for a bounded duration, then call
+  only an allowlisted IFTTT endpoint with the approved method and payload
+  schema.
+
+Do not use a work agreement as a catch-all permission bucket. Email read,
+browser monitoring, webhook calls, channel draft, and channel send should be
+separate conditional grants that can expire or be revoked independently.
+
+When a future child with a work agreement repeatedly needs work outside the
+current work agreement, treat that as a renegotiation signal. The child may propose
+an amendment, but the proposal is review evidence only. Admin approval creates a
+new work agreement version; rejected amendments leave the current work agreement unchanged, and old
+leases cannot be reused under a newer version.
+
+Daily or weekly standups should show the same routing: what the child did, what
+is blocked, which customer reviews are pending, which authority decisions belong
+to admin, and whether the work agreement needs amendment.
 
 ## Daily Review Recipe
 
