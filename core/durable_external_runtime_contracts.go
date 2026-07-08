@@ -180,14 +180,14 @@ type MatchedConditions struct {
 }
 
 type MaterializedLease struct {
-	LeaseID                 string    `json:"lease_id,omitempty"`
-	ConditionalGrantID      string    `json:"conditional_grant_id,omitempty"`
-	ConditionalGrantVersion int       `json:"conditional_grant_version,omitempty"`
-	Capability              string    `json:"capability,omitempty"`
-	LeaseKind               string    `json:"lease_kind,omitempty"`
-	ReviewRoute             string    `json:"review_route,omitempty"`
-	SingleUse               bool      `json:"single_use,omitempty"`
-	ExpiresAt               time.Time `json:"expires_at,omitempty"`
+	LeaseID                          string    `json:"lease_id,omitempty"`
+	ConditionalGrantID               string    `json:"conditional_grant_id,omitempty"`
+	ConditionalGrantAgreementVersion int       `json:"conditional_grant_agreement_version,omitempty"`
+	Capability                       string    `json:"capability,omitempty"`
+	LeaseKind                        string    `json:"lease_kind,omitempty"`
+	ReviewRoute                      string    `json:"review_route,omitempty"`
+	SingleUse                        bool      `json:"single_use,omitempty"`
+	ExpiresAt                        time.Time `json:"expires_at,omitempty"`
 }
 
 type GatewayPresenceContract struct {
@@ -368,7 +368,7 @@ func NormalizeDurableExternalRuntimeSpec(spec DurableExternalRuntimeSpec) Durabl
 	spec.DependencyRoots = normalizeDependencyRoots(spec.DependencyRoots)
 	spec.SharedCachePolicy = NormalizeSharedCachePolicy(spec.SharedCachePolicy)
 	spec.Entrypoint.Kind = normalizeExternalRuntimeToken(spec.Entrypoint.Kind)
-	spec.Entrypoint.Command = normalizeUniqueStrings(spec.Entrypoint.Command)
+	spec.Entrypoint.Command = normalizeRuntimeEntrypointCommand(spec.Entrypoint.Command)
 	spec.Env = normalizeExternalRuntimeStringMap(spec.Env)
 	spec.NetworkClasses = normalizeExternalRuntimeTokens(spec.NetworkClasses)
 	return spec
@@ -403,7 +403,9 @@ func ValidateDurableExternalRuntimeSpec(spec DurableExternalRuntimeSpec) error {
 		return fmt.Errorf("external runtime spec requires kind")
 	}
 	switch spec.Mode {
-	case ExternalRuntimeModeOneshot, ExternalRuntimeModeGatewayPresence, ExternalRuntimeModeRemoteService:
+	case ExternalRuntimeModeOneshot, ExternalRuntimeModeGatewayPresence:
+	case ExternalRuntimeModeRemoteService:
+		return fmt.Errorf("external runtime mode %q is reserved and not activatable", spec.Mode)
 	default:
 		return fmt.Errorf("external runtime spec has unsupported mode %q", spec.Mode)
 	}
@@ -434,11 +436,72 @@ func ValidateDurableExternalRuntimeSpec(spec DurableExternalRuntimeSpec) error {
 	if spec.WorkspaceRoot != "" && !filepath.IsAbs(spec.WorkspaceRoot) {
 		return fmt.Errorf("external runtime workspace_root must be absolute")
 	}
-	if err := ValidateDependencyRoots(spec.DependencyRoots); err != nil {
+	if spec.Entrypoint.Kind == "" {
+		return fmt.Errorf("external runtime spec requires entrypoint kind")
+	}
+	if err := ValidateEntrypoint(spec.Entrypoint); err != nil {
+		return err
+	}
+	if err := ValidateExternalRuntimeEnv(spec.Env); err != nil {
+		return err
+	}
+	if err := ValidateDependencyRootsForSpec(spec); err != nil {
 		return err
 	}
 	if err := ValidateSharedCachePolicy(spec.SharedCachePolicy); err != nil {
 		return err
+	}
+	return nil
+}
+
+func ValidateEntrypoint(entry RuntimeEntrypoint) error {
+	entry.Kind = normalizeExternalRuntimeToken(entry.Kind)
+	command := normalizeRuntimeEntrypointCommand(entry.Command)
+	for _, arg := range command {
+		if arg == "" {
+			return fmt.Errorf("external runtime entrypoint command cannot contain empty argv elements")
+		}
+	}
+	if entry.Kind != "" && len(command) == 0 {
+		return fmt.Errorf("external runtime entrypoint kind requires command argv")
+	}
+	return nil
+}
+
+func ValidateExternalRuntimeEnv(env map[string]string) error {
+	for key := range normalizeExternalRuntimeStringMap(env) {
+		normalizedKey := strings.ToUpper(strings.TrimSpace(key))
+		switch normalizedKey {
+		case "HOME", "PWD", "OLDPWD", "SHELL", "BASH_ENV", "ENV",
+			"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "GH_TOKEN",
+			"TELEGRAM_BOT_TOKEN", "WHATSAPP_TOKEN":
+			return fmt.Errorf("external runtime env cannot include parent-sensitive variable %q", key)
+		}
+		if strings.Contains(normalizedKey, "TOKEN") ||
+			strings.Contains(normalizedKey, "SECRET") ||
+			strings.Contains(normalizedKey, "PASSWORD") ||
+			strings.Contains(normalizedKey, "API_KEY") ||
+			strings.Contains(normalizedKey, "CREDENTIAL") {
+			return fmt.Errorf("external runtime env cannot include credential-like variable %q", key)
+		}
+	}
+	return nil
+}
+
+func ValidateDependencyRootsForSpec(spec DurableExternalRuntimeSpec) error {
+	spec = NormalizeDurableExternalRuntimeSpec(spec)
+	if err := ValidateDependencyRoots(spec.DependencyRoots); err != nil {
+		return err
+	}
+	bases := normalizeDependencyBaseRoots(spec)
+	for _, root := range spec.DependencyRoots {
+		root = NormalizeDependencyRoot(root)
+		if isGlobalDependencyRoot(root.Path) {
+			return fmt.Errorf("dependency root must be child-local, got global path %s", root.Path)
+		}
+		if len(bases) > 0 && !pathWithinAnyBase(root.Path, bases) {
+			return fmt.Errorf("dependency root %s must live under child-local runtime roots", root.Path)
+		}
 	}
 	return nil
 }
@@ -504,6 +567,27 @@ func ValidateWorkAgreement(agreement WorkAgreement) error {
 	if agreement.Principals.AuthorityPrincipal == "" {
 		return fmt.Errorf("work agreement requires authority_principal")
 	}
+	if agreement.Principals.ReviewPrincipal == "" {
+		return fmt.Errorf("work agreement requires review_principal")
+	}
+	if agreement.RuntimeKind == "" {
+		return fmt.Errorf("work agreement requires runtime_kind")
+	}
+	if agreement.PolicyCeilingRef == "" {
+		return fmt.Errorf("work agreement requires policy_ceiling_ref")
+	}
+	if agreement.Schedule.Kind == "" || agreement.Schedule.Expression == "" {
+		return fmt.Errorf("work agreement requires schedule kind and expression")
+	}
+	if agreement.ReviewPolicy.DefaultOutbound == "" || agreement.ReviewPolicy.SendRequires == "" {
+		return fmt.Errorf("work agreement requires review policy default_outbound and send_requires")
+	}
+	if len(agreement.ConditionalGrantIDs) == 0 {
+		return fmt.Errorf("work agreement requires conditional_grant_ids")
+	}
+	if !agreement.Revocation.StopFutureLeases {
+		return fmt.Errorf("work agreement revocation must stop future leases")
+	}
 	return nil
 }
 
@@ -539,14 +623,31 @@ func ValidateConditionalGrant(grant ConditionalGrant) error {
 	if len(grant.Actions) == 0 {
 		return fmt.Errorf("conditional grant requires at least one action")
 	}
+	if len(grant.Conditions.Triggers) == 0 && grant.Conditions.Schedule.Kind == "" {
+		return fmt.Errorf("conditional grant requires trigger or schedule conditions")
+	}
 	if grant.Status != "" && grant.Status != "active" {
 		return fmt.Errorf("conditional grant status %q cannot materialize leases", grant.Status)
 	}
 	if grant.Materializes.LeaseKind == "" {
 		return fmt.Errorf("conditional grant requires materialized lease kind")
 	}
+	if grant.Materializes.ReviewRoute == "" {
+		return fmt.Errorf("conditional grant requires materialized review_route")
+	}
 	if grant.Materializes.TTLSeconds <= 0 {
 		return fmt.Errorf("conditional grant requires positive ttl_seconds")
+	}
+	if !grant.Materializes.SingleUse {
+		return fmt.Errorf("conditional grant requires single_use materialization")
+	}
+	if grant.Materializes.LeaseKind == ExternalRuntimeLeaseKindToolInvocation {
+		if grant.Tool == "" {
+			return fmt.Errorf("tool invocation grant requires tool")
+		}
+		if grant.CredentialScope == "" {
+			return fmt.Errorf("tool invocation grant requires credential_scope")
+		}
 	}
 	return validateExternalRuntimeRawMap("conditional grant constraints", grant.Constraints)
 }
@@ -682,8 +783,8 @@ func ValidateLeaseMaterialization(materialization LeaseMaterialization) error {
 		if lease.LeaseID == "" || lease.ConditionalGrantID == "" || lease.Capability == "" || lease.LeaseKind == "" {
 			return fmt.Errorf("lease materialization contains incomplete lease")
 		}
-		if lease.ConditionalGrantVersion <= 0 {
-			return fmt.Errorf("lease materialization lease requires conditional grant version")
+		if lease.ConditionalGrantAgreementVersion <= 0 {
+			return fmt.Errorf("lease materialization lease requires conditional grant agreement version")
 		}
 	}
 	return nil
@@ -889,7 +990,11 @@ func EffectRequestFromDialogue(turn DialogueTurn, input EffectRequestInput) (Eff
 	}, nil
 }
 
-func MaterializeWorkAgreementLeases(agreement WorkAgreement, grants []ConditionalGrant, trigger string, runtimeSpecHash string, now time.Time) (LeaseMaterialization, error) {
+// BuildCandidateWorkAgreementLeases emits deterministic candidate leases for a
+// matching agreement/trigger. Runtime readiness, credential readiness, replay
+// dedupe, and execution admission are enforced by the caller before any lease is
+// treated as executable authority.
+func BuildCandidateWorkAgreementLeases(agreement WorkAgreement, grants []ConditionalGrant, trigger string, runtimeSpecHash string, now time.Time) (LeaseMaterialization, error) {
 	agreement = NormalizeWorkAgreement(agreement)
 	if err := ValidateWorkAgreement(agreement); err != nil {
 		return LeaseMaterialization{}, err
@@ -926,14 +1031,14 @@ func MaterializeWorkAgreementLeases(agreement WorkAgreement, grants []Conditiona
 		}
 		leaseSeed := externalRuntimeID("lease_seed", agreement.ID, fmt.Sprint(agreement.Version), grant.ID, trigger, now.UTC().Format(time.RFC3339Nano))
 		issued = append(issued, MaterializedLease{
-			LeaseID:                 "lease_" + strings.TrimPrefix(leaseSeed, "lease_seed-"),
-			ConditionalGrantID:      grant.ID,
-			ConditionalGrantVersion: grant.WorkAgreementVersion,
-			Capability:              grant.Capability,
-			LeaseKind:               grant.Materializes.LeaseKind,
-			ReviewRoute:             grant.Materializes.ReviewRoute,
-			SingleUse:               grant.Materializes.SingleUse,
-			ExpiresAt:               now.UTC().Add(time.Duration(grant.Materializes.TTLSeconds) * time.Second),
+			LeaseID:                          "lease_" + strings.TrimPrefix(leaseSeed, "lease_seed-"),
+			ConditionalGrantID:               grant.ID,
+			ConditionalGrantAgreementVersion: grant.WorkAgreementVersion,
+			Capability:                       grant.Capability,
+			LeaseKind:                        grant.Materializes.LeaseKind,
+			ReviewRoute:                      grant.Materializes.ReviewRoute,
+			SingleUse:                        grant.Materializes.SingleUse,
+			ExpiresAt:                        now.UTC().Add(time.Duration(grant.Materializes.TTLSeconds) * time.Second),
 		})
 	}
 	if len(issued) == 0 {
@@ -1258,7 +1363,9 @@ func ValidateChildRuntimeAdapterOperation(op ChildRuntimeAdapterOperation) error
 		return fmt.Errorf("child runtime adapter operation requires agent_id, runtime_kind, runtime_mode, and spec_hash")
 	}
 	switch op.RuntimeMode {
-	case ExternalRuntimeModeOneshot, ExternalRuntimeModeGatewayPresence, ExternalRuntimeModeRemoteService:
+	case ExternalRuntimeModeOneshot, ExternalRuntimeModeGatewayPresence:
+	case ExternalRuntimeModeRemoteService:
+		return fmt.Errorf("child runtime adapter operation mode %q is reserved and not activatable", op.RuntimeMode)
 	default:
 		return fmt.Errorf("child runtime adapter operation has unsupported runtime_mode %q", op.RuntimeMode)
 	}
@@ -1357,6 +1464,63 @@ func normalizeExternalRuntimeTokens(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func normalizeRuntimeEntrypointCommand(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, strings.TrimSpace(value))
+	}
+	return out
+}
+
+func normalizeDependencyBaseRoots(spec DurableExternalRuntimeSpec) []string {
+	var roots []string
+	for _, root := range []string{spec.InstallRoot, spec.StateRoot, spec.WorkspaceRoot} {
+		root = strings.TrimSpace(root)
+		if root == "" || !filepath.IsAbs(root) {
+			continue
+		}
+		roots = append(roots, filepath.Clean(root))
+	}
+	return normalizeUniqueStrings(roots)
+}
+
+func pathWithinAnyBase(path string, bases []string) bool {
+	path = filepath.Clean(strings.TrimSpace(path))
+	for _, base := range bases {
+		base = filepath.Clean(strings.TrimSpace(base))
+		if base == "" {
+			continue
+		}
+		rel, err := filepath.Rel(base, path)
+		if err != nil {
+			continue
+		}
+		if rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isGlobalDependencyRoot(path string) bool {
+	path = filepath.Clean(strings.TrimSpace(path))
+	for _, disallowed := range []string{
+		"/etc",
+		"/home",
+		"/opt",
+		"/root",
+		"/tmp",
+		"/usr",
+		"/var/cache",
+		"/var/tmp",
+	} {
+		if path == disallowed || strings.HasPrefix(path, disallowed+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeDependencyRoots(values []DependencyRoot) []DependencyRoot {

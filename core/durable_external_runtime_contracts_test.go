@@ -19,9 +19,10 @@ func TestDurableExternalRuntimeSpecValidationAndHashStable(t *testing.T) {
 		StateRoot:     "/var/lib/aphelion/children/a/state",
 		WorkspaceRoot: "/var/lib/aphelion/children/a/work",
 		DependencyRoots: []DependencyRoot{
-			{Kind: "node_modules", Path: "/var/lib/aphelion/children/a/deps/node_modules", Writable: true},
-			{Kind: "binary_dir", Path: "/var/lib/aphelion/children/a/deps/bin", Writable: true},
+			{Kind: "node_modules", Path: "/var/lib/aphelion/children/a/state/deps/node_modules", Writable: true},
+			{Kind: "binary_dir", Path: "/var/lib/aphelion/children/a/state/deps/bin", Writable: true},
 		},
+		Entrypoint:        RuntimeEntrypoint{Kind: "stdio", Command: []string{"node", "--flag", "--flag", "openclaw.mjs"}},
 		SharedCachePolicy: SharedCachePolicy{Mode: ExternalRuntimeSharedCacheReadonlyCAS, FingerprintRequired: true},
 		Source: RuntimeSourceRef{
 			Kind: "git",
@@ -74,6 +75,34 @@ func TestDurableExternalRuntimeSpecValidationAndHashStable(t *testing.T) {
 	incompleteRoot.DependencyRoots = []DependencyRoot{{Kind: "node_modules"}}
 	if err := ValidateDurableExternalRuntimeSpec(incompleteRoot); err == nil || !strings.Contains(err.Error(), "kind and path") {
 		t.Fatalf("ValidateDurableExternalRuntimeSpec(incomplete root) err = %v, want incomplete dependency root rejection", err)
+	}
+	globalRoot := left
+	globalRoot.DependencyRoots = []DependencyRoot{{Kind: "node_modules", Path: "/usr/lib/node_modules"}}
+	if err := ValidateDurableExternalRuntimeSpec(globalRoot); err == nil || !strings.Contains(err.Error(), "global path") {
+		t.Fatalf("ValidateDurableExternalRuntimeSpec(global root) err = %v, want global path rejection", err)
+	}
+	parentEnv := left
+	parentEnv.Env = map[string]string{"OPENAI_API_KEY": "child-secret-ref"}
+	if err := ValidateDurableExternalRuntimeSpec(parentEnv); err == nil || !strings.Contains(err.Error(), "parent-sensitive") {
+		t.Fatalf("ValidateDurableExternalRuntimeSpec(parent env) err = %v, want parent-sensitive env rejection", err)
+	}
+	remoteService := left
+	remoteService.Mode = ExternalRuntimeModeRemoteService
+	if err := ValidateDurableExternalRuntimeSpec(remoteService); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("ValidateDurableExternalRuntimeSpec(remote service) err = %v, want reserved mode rejection", err)
+	}
+	missingEntrypoint := left
+	missingEntrypoint.Entrypoint = RuntimeEntrypoint{}
+	if err := ValidateDurableExternalRuntimeSpec(missingEntrypoint); err == nil || !strings.Contains(err.Error(), "entrypoint kind") {
+		t.Fatalf("ValidateDurableExternalRuntimeSpec(missing entrypoint) err = %v, want entrypoint rejection", err)
+	}
+	if got := left.Entrypoint.Command; len(got) != 4 || got[1] != "--flag" || got[2] != "--flag" {
+		t.Fatalf("entrypoint command = %#v, want order and duplicate argv preserved", got)
+	}
+	emptyArg := left
+	emptyArg.Entrypoint.Command = []string{"node", " "}
+	if err := ValidateDurableExternalRuntimeSpec(emptyArg); err == nil || !strings.Contains(err.Error(), "empty argv") {
+		t.Fatalf("ValidateDurableExternalRuntimeSpec(empty argv) err = %v, want empty argv rejection", err)
 	}
 }
 
@@ -195,27 +224,34 @@ func TestEffectRequestCompilesToDiscoveredEffectContract(t *testing.T) {
 	}
 }
 
-func TestMaterializeWorkAgreementLeasesOnlyMatchingGrants(t *testing.T) {
+func TestBuildCandidateWorkAgreementLeasesOnlyMatchingGrants(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 7, 7, 17, 0, 0, 0, time.UTC)
-	materialization, err := MaterializeWorkAgreementLeases(WorkAgreement{
+	materialization, err := BuildCandidateWorkAgreementLeases(WorkAgreement{
 		ID:                  "wa_daily_audience_update",
 		Version:             3,
 		AgentID:             "audience-child",
 		Status:              "active",
+		RuntimeKind:         "openclaw",
+		PolicyCeilingRef:    "policy:audience-child",
 		ConditionalGrantIDs: []string{"grant_gmail_read", "grant_whatsapp_draft"},
 		Principals: WorkAgreementPrincipals{
 			AuthorityPrincipal: "aphelion_admin:ops",
 			ReviewPrincipal:    "customer:acme:comms-owner",
 		},
+		Schedule:     ScheduleSpec{Kind: "cron", Expression: "0 13 * * *", Timezone: "America/New_York"},
+		ReviewPolicy: ReviewPolicy{DefaultOutbound: "draft_only", SendRequires: "review_principal"},
+		Revocation:   RevocationPolicy{StopFutureLeases: true},
 	}, []ConditionalGrant{
 		{
 			ID:                   "grant_gmail_read",
 			WorkAgreementID:      "wa_daily_audience_update",
 			WorkAgreementVersion: 3,
 			Capability:           "gmail_read",
+			Tool:                 "gog",
 			Actions:              []string{"gmail.search", "gmail.read"},
+			CredentialScope:      "gmail:audience-child",
 			Conditions:           ConditionalGrantConditions{Triggers: []string{"schedule:wa_daily_audience_update"}},
 			Materializes:         GrantMaterialization{LeaseKind: ExternalRuntimeLeaseKindToolInvocation, TTLSeconds: 900, ReviewRoute: "resource_owner_principal", SingleUse: true},
 			Status:               "active",
@@ -227,12 +263,12 @@ func TestMaterializeWorkAgreementLeasesOnlyMatchingGrants(t *testing.T) {
 			Capability:           "channel_draft",
 			Actions:              []string{"channel.draft"},
 			Conditions:           ConditionalGrantConditions{Triggers: []string{"schedule:wa_daily_audience_update"}},
-			Materializes:         GrantMaterialization{LeaseKind: ExternalRuntimeLeaseKindRuntimeTask, TTLSeconds: 900, ReviewRoute: "review_principal"},
+			Materializes:         GrantMaterialization{LeaseKind: ExternalRuntimeLeaseKindRuntimeTask, TTLSeconds: 900, ReviewRoute: "review_principal", SingleUse: true},
 			Status:               "active",
 		},
 	}, "schedule:wa_daily_audience_update", "sha256:runtime", now)
 	if err != nil {
-		t.Fatalf("MaterializeWorkAgreementLeases() err = %v", err)
+		t.Fatalf("BuildCandidateWorkAgreementLeases() err = %v", err)
 	}
 	if len(materialization.IssuedLeases) != 1 {
 		t.Fatalf("issued leases = %#v, want only matching work agreement version", materialization.IssuedLeases)
@@ -240,6 +276,78 @@ func TestMaterializeWorkAgreementLeasesOnlyMatchingGrants(t *testing.T) {
 	lease := materialization.IssuedLeases[0]
 	if lease.ConditionalGrantID != "grant_gmail_read" || !lease.SingleUse || !lease.ExpiresAt.Equal(now.Add(15*time.Minute)) {
 		t.Fatalf("lease = %#v, want gmail_read single-use 15m lease", lease)
+	}
+}
+
+func TestWorkAgreementValidationRequiresContractBoundaryFields(t *testing.T) {
+	t.Parallel()
+
+	valid := WorkAgreement{
+		ID:               "wa_daily_audience_update",
+		Version:          3,
+		AgentID:          "audience-child",
+		RuntimeKind:      "openclaw",
+		PolicyCeilingRef: "policy:audience-child",
+		Principals: WorkAgreementPrincipals{
+			AuthorityPrincipal: "aphelion_admin:ops",
+			ReviewPrincipal:    "customer:acme:comms-owner",
+		},
+		Schedule:            ScheduleSpec{Kind: "cron", Expression: "0 13 * * *", Timezone: "America/New_York"},
+		ReviewPolicy:        ReviewPolicy{DefaultOutbound: "draft_only", SendRequires: "review_principal"},
+		ConditionalGrantIDs: []string{"grant_gmail_read"},
+		Revocation:          RevocationPolicy{StopFutureLeases: true},
+	}
+	if err := ValidateWorkAgreement(valid); err != nil {
+		t.Fatalf("ValidateWorkAgreement(valid) err = %v", err)
+	}
+	missingPolicy := valid
+	missingPolicy.PolicyCeilingRef = ""
+	if err := ValidateWorkAgreement(missingPolicy); err == nil || !strings.Contains(err.Error(), "policy_ceiling_ref") {
+		t.Fatalf("ValidateWorkAgreement(missing policy) err = %v, want policy ceiling rejection", err)
+	}
+	missingReview := valid
+	missingReview.ReviewPolicy.SendRequires = ""
+	if err := ValidateWorkAgreement(missingReview); err == nil || !strings.Contains(err.Error(), "review policy") {
+		t.Fatalf("ValidateWorkAgreement(missing review) err = %v, want review policy rejection", err)
+	}
+	missingSchedule := valid
+	missingSchedule.Schedule.Expression = ""
+	if err := ValidateWorkAgreement(missingSchedule); err == nil || !strings.Contains(err.Error(), "schedule") {
+		t.Fatalf("ValidateWorkAgreement(missing schedule) err = %v, want schedule rejection", err)
+	}
+}
+
+func TestConditionalGrantValidationRequiresLeaseBoundaryFields(t *testing.T) {
+	t.Parallel()
+
+	valid := ConditionalGrant{
+		ID:                   "grant_gmail_read",
+		WorkAgreementID:      "wa_daily_audience_update",
+		WorkAgreementVersion: 3,
+		Capability:           "gmail_read",
+		Tool:                 "gog",
+		Actions:              []string{"gmail.search", "gmail.read"},
+		CredentialScope:      "gmail:audience-child",
+		Conditions:           ConditionalGrantConditions{Triggers: []string{"schedule:wa_daily_audience_update"}},
+		Materializes:         GrantMaterialization{LeaseKind: ExternalRuntimeLeaseKindToolInvocation, TTLSeconds: 900, ReviewRoute: "resource_owner_principal", SingleUse: true},
+	}
+	if err := ValidateConditionalGrant(valid); err != nil {
+		t.Fatalf("ValidateConditionalGrant(valid) err = %v", err)
+	}
+	missingCondition := valid
+	missingCondition.Conditions.Triggers = nil
+	if err := ValidateConditionalGrant(missingCondition); err == nil || !strings.Contains(err.Error(), "trigger or schedule") {
+		t.Fatalf("ValidateConditionalGrant(missing condition) err = %v, want condition rejection", err)
+	}
+	missingReview := valid
+	missingReview.Materializes.ReviewRoute = ""
+	if err := ValidateConditionalGrant(missingReview); err == nil || !strings.Contains(err.Error(), "review_route") {
+		t.Fatalf("ValidateConditionalGrant(missing review) err = %v, want review route rejection", err)
+	}
+	missingCredential := valid
+	missingCredential.CredentialScope = ""
+	if err := ValidateConditionalGrant(missingCredential); err == nil || !strings.Contains(err.Error(), "credential_scope") {
+		t.Fatalf("ValidateConditionalGrant(missing credential) err = %v, want credential scope rejection", err)
 	}
 }
 
@@ -286,13 +394,13 @@ func TestExternalRuntimeTaskPacketPayloadAndParentMemoryAdmissionValidate(t *tes
 		WorkAgreementVersion: 3,
 		RuntimeSpecHash:      "sha256:runtime",
 		IssuedLeases: []MaterializedLease{{
-			LeaseID:                 "lease_01J",
-			ConditionalGrantID:      "grant_gmail_read",
-			ConditionalGrantVersion: 3,
-			Capability:              "gmail_read",
-			LeaseKind:               ExternalRuntimeLeaseKindToolInvocation,
-			SingleUse:               true,
-			ExpiresAt:               now.Add(15 * time.Minute),
+			LeaseID:                          "lease_01J",
+			ConditionalGrantID:               "grant_gmail_read",
+			ConditionalGrantAgreementVersion: 3,
+			Capability:                       "gmail_read",
+			LeaseKind:                        ExternalRuntimeLeaseKindToolInvocation,
+			SingleUse:                        true,
+			ExpiresAt:                        now.Add(15 * time.Minute),
 		}},
 		CreatedAt: now,
 	}
@@ -377,6 +485,7 @@ func TestChildRuntimeAdapterWakeOperationFromTaskPacketBindsRuntimeSpec(t *testi
 			Repo: "https://github.com/openclaw/openclaw",
 			Ref:  "c7295e417d5daec76c18fb452d117f7b8eadc4d6",
 		},
+		Entrypoint: RuntimeEntrypoint{Kind: "stdio", Command: []string{"openclaw-acp"}},
 	})
 	specHash, err := StableExternalRuntimeContractHash(spec)
 	if err != nil {
@@ -401,13 +510,13 @@ func TestChildRuntimeAdapterWakeOperationFromTaskPacketBindsRuntimeSpec(t *testi
 		WorkAgreementVersion: 3,
 		RuntimeSpecHash:      specHash,
 		IssuedLeases: []MaterializedLease{{
-			LeaseID:                 "lease_01J",
-			ConditionalGrantID:      "grant_gmail_read",
-			ConditionalGrantVersion: 3,
-			Capability:              "gmail_read",
-			LeaseKind:               ExternalRuntimeLeaseKindToolInvocation,
-			SingleUse:               true,
-			ExpiresAt:               now.Add(15 * time.Minute),
+			LeaseID:                          "lease_01J",
+			ConditionalGrantID:               "grant_gmail_read",
+			ConditionalGrantAgreementVersion: 3,
+			Capability:                       "gmail_read",
+			LeaseKind:                        ExternalRuntimeLeaseKindToolInvocation,
+			SingleUse:                        true,
+			ExpiresAt:                        now.Add(15 * time.Minute),
 		}},
 		CreatedAt: now,
 	})

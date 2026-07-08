@@ -631,7 +631,8 @@ and continuation recovery contracts.
 Required fields:
 
 - `kind`: `aphelion`, `hermes`, `openclaw`, or future adapter ID.
-- `mode`: `oneshot`, `gateway_presence`, or `remote_service`.
+- `mode`: `oneshot` or `gateway_presence`. `remote_service` is reserved and
+  must fail closed until its control-plane contract is implemented.
 - `source`: immutable or operator-owned runtime source reference.
 - `state_root`: child-owned persistent state root.
 - `workspace_root`: child-owned workspace root when the runtime can perform
@@ -829,14 +830,14 @@ leases.
       {
         "lease_id": "lease_gmail_read_01J...",
         "conditional_grant_id": "grant_gmail_read",
-        "conditional_grant_version": 3,
+        "conditional_grant_agreement_version": 3,
         "capability": "gmail_read",
         "expires_at": "2026-07-07T17:15:00Z"
       },
       {
         "lease_id": "lease_whatsapp_draft_01J...",
         "conditional_grant_id": "grant_whatsapp_draft",
-        "conditional_grant_version": 3,
+        "conditional_grant_agreement_version": 3,
         "capability": "channel_draft",
         "expires_at": "2026-07-07T17:15:00Z"
       }
@@ -961,13 +962,13 @@ Minimum operations:
       {
         "lease_id": "lease_gmail_read_01J...",
         "conditional_grant_id": "grant_gmail_read",
-        "conditional_grant_version": 3,
+        "conditional_grant_agreement_version": 3,
         "capability": "gmail_read"
       },
       {
         "lease_id": "lease_whatsapp_draft_01J...",
         "conditional_grant_id": "grant_whatsapp_draft",
-        "conditional_grant_version": 3,
+        "conditional_grant_agreement_version": 3,
         "capability": "channel_draft"
       }
     ],
